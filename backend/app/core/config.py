@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -16,6 +17,8 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
     database_url: str = "postgresql+psycopg://knowledge:knowledge@localhost:5432/knowledge"
     embedding_dimensions: int = Field(default=1536, ge=1536, le=1536)
+    upload_directory: Path = Path("uploads")
+    max_upload_bytes: int = 20 * 1024 * 1024
 
 
 @lru_cache
