@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>C# 开发者的 RAG 后端地图</title><link rel="stylesheet" href="../assets/lesson.css"></head>
+<body><article><h1>C# 开发者的 RAG 后端地图</h1><p>目标：用十分钟说清当前项目从文件到答案的完整路径。</p>
+<pre>文件 → ParsedSection → Chunk → Embedding → pgvector
+问题 → Embedding → Top K Chunk → Chat Model → 答案与引用</pre>
+<h2>你已经完成的部分</h2><p>1A 建好了 API、错误协议、数据库和向量字段；1B 建好了知识库、安全上传和多格式解析。</p>
+<h2>C# 心智模型</h2><p>FastAPI Router ≈ Controller，Pydantic Model ≈ DTO，AsyncSession ≈ DbContext，Protocol ≈ Interface，Alembic ≈ EF Core Migration。</p>
+<div class="callout"><strong>关键边界：</strong>解析器只理解文件格式；应用服务管理状态与事务；Embedding Provider 只连接向量模型。</div>
+<h2>马上回忆</h2><ol><li>为什么文档解析和数据库写入要分开？</li><li>为什么向量维度必须固定？</li><li>为什么检索必须带 knowledge_base_id？</li></ol>
+<p>主资料：<a href="https://fastapi.tiangolo.com/tutorial/">FastAPI 官方教程</a>、<a href="https://docs.sqlalchemy.org/en/20/">SQLAlchemy 2.0 文档</a>。不清楚的地方继续问 Codex。</p></article></body></html>

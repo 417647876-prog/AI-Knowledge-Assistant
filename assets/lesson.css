@@ -1,0 +1,6 @@
+body { max-width: 860px; margin: 40px auto; padding: 0 24px; color: #172033; background: #f7f9fc; font: 17px/1.75 system-ui, sans-serif; }
+article { background: white; padding: 36px 44px; border-radius: 16px; box-shadow: 0 12px 36px #19315318; }
+h1, h2 { line-height: 1.25; color: #153d70; }
+code, pre { background: #eef3f8; border-radius: 6px; }
+pre { padding: 16px; overflow: auto; }
+.callout { border-left: 4px solid #2d78c7; padding: 8px 16px; background: #edf6ff; }
