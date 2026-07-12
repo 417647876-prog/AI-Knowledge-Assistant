@@ -1432,7 +1432,7 @@ Expected: migration succeeds；1 integration test passes；全部单元测试继
 Run terminal A from `backend`:
 
 ```powershell
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_loop:new_event_loop
 ```
 
 Run terminal B:
