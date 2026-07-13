@@ -1,0 +1,6 @@
+:root { font-family: Inter, "Microsoft YaHei", sans-serif; color: #18212f; background: #f4f6f8; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+.app-header { padding: 20px 28px; color: #fff; background: #17324d; }
+.app-header h1 { margin: 0; font-size: 22px; }
+.workspace-empty { padding: 64px; text-align: center; color: #667085; }
