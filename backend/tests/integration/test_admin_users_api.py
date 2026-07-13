@@ -90,9 +90,7 @@ async def admin_api() -> AsyncIterator[AdminApiContext]:
         async with session_factory() as session:
             fallback_ids = list(
                 await session.scalars(
-                    select(User.id).where(
-                        User.username.in_(context.created_usernames)
-                    )
+                    select(User.id).where(User.username.in_(context.created_usernames))
                 )
             )
         user_ids = [admin.id, user.id, *context.created_user_ids, *fallback_ids]
@@ -113,9 +111,7 @@ async def test_admin_can_list_and_create_users_but_regular_user_cannot(
     assert listed.status_code == 200
     assert forbidden.status_code == 403
     assert forbidden.json()["error"]["code"] == "PERMISSION_DENIED"
-    listed_admin = next(
-        item for item in listed.json() if item["id"] == str(admin_api.admin.id)
-    )
+    listed_admin = next(item for item in listed.json() if item["id"] == str(admin_api.admin.id))
     assert listed_admin["created_at"]
     assert listed_admin["updated_at"]
 
@@ -265,9 +261,7 @@ async def _assert_all_sessions_revoked(user_id: UUID) -> None:
     async with session_factory() as session:
         revoked_values = list(
             await session.scalars(
-                select(RefreshSession.revoked_at).where(
-                    RefreshSession.user_id == user_id
-                )
+                select(RefreshSession.revoked_at).where(RefreshSession.user_id == user_id)
             )
         )
     assert len(revoked_values) == 2
@@ -360,11 +354,7 @@ async def test_revoke_failure_rolls_back_user_and_all_refresh_sessions(
                 json={"password": "replacement pass 123"},
             )
         else:
-            payload = (
-                {"is_active": False}
-                if operation == "deactivate"
-                else {"role": "user"}
-            )
+            payload = {"is_active": False} if operation == "deactivate" else {"role": "user"}
             await admin_api.admin_client.patch(
                 f"/api/v1/admin/users/{target.id}",
                 json=payload,
@@ -375,9 +365,7 @@ async def test_revoke_failure_rolls_back_user_and_all_refresh_sessions(
         assert stored is not None
         revoked_values = list(
             await session.scalars(
-                select(RefreshSession.revoked_at).where(
-                    RefreshSession.user_id == target.id
-                )
+                select(RefreshSession.revoked_at).where(RefreshSession.user_id == target.id)
             )
         )
     assert stored.role == target.role

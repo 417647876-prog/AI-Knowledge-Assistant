@@ -47,9 +47,7 @@ async def test_login_issues_access_and_persisted_refresh_session() -> None:
     )
     session = make_session(user)
 
-    issued = await make_service(session, now).login(
-        " Admin ", "correct horse battery"
-    )
+    issued = await make_service(session, now).login(" Admin ", "correct horse battery")
 
     assert issued.user is user
     assert issued.expires_in == 15 * 60
@@ -92,9 +90,7 @@ async def test_wrong_password_and_inactive_user_share_invalid_credentials(
     password = "wrong password" if is_active else "correct password"
 
     with pytest.raises(AppError) as error:
-        await make_service(make_session(user), datetime.now(UTC)).login(
-            user.username, password
-        )
+        await make_service(make_session(user), datetime.now(UTC)).login(user.username, password)
 
     assert error.value.code == "INVALID_CREDENTIALS"
 
@@ -160,9 +156,7 @@ async def test_refresh_rejects_wrong_secret_and_expired_session(
         token_hash=hash_refresh_secret(token.secret),
         expires_at=now + expires_at,
     )
-    attempted_token = (
-        f"{token.session_id}.{raw_token}" if raw_token is not None else token.raw
-    )
+    attempted_token = f"{token.session_id}.{raw_token}" if raw_token is not None else token.raw
     session = make_session(stored)
 
     with pytest.raises(AppError) as error:
@@ -204,9 +198,7 @@ async def test_revoke_all_in_transaction_leaves_commit_to_caller() -> None:
     user_id = uuid4()
     session = make_session()
 
-    await make_service(session, datetime.now(UTC)).revoke_all_for_user_in_transaction(
-        user_id
-    )
+    await make_service(session, datetime.now(UTC)).revoke_all_for_user_in_transaction(user_id)
 
     session.begin.assert_not_called()
     session.execute.assert_awaited_once()

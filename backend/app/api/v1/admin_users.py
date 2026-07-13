@@ -74,9 +74,7 @@ async def create_user(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AdminUserResponse:
     normalized_username = payload.username.strip().lower()
-    existing = await session.scalar(
-        select(User.id).where(User.username == normalized_username)
-    )
+    existing = await session.scalar(select(User.id).where(User.username == normalized_username))
     if existing is not None:
         raise _username_exists()
 
@@ -113,20 +111,17 @@ async def update_user(
 
     locked_admins = list(
         await session.scalars(
-            select(User)
-            .where(User.role == ADMIN_ROLE)
-            .order_by(User.id)
-            .with_for_update()
+            select(User).where(User.role == ADMIN_ROLE).order_by(User.id).with_for_update()
         )
     )
-    target = await session.scalar(
-        select(User).where(User.id == user_id).with_for_update()
-    )
+    target = await session.scalar(select(User).where(User.id == user_id).with_for_update())
     if target is None:
         raise _user_not_found()
 
-    loses_admin_access = target.role == ADMIN_ROLE and target.is_active and (
-        payload.role == "user" or payload.is_active is False
+    loses_admin_access = (
+        target.role == ADMIN_ROLE
+        and target.is_active
+        and (payload.role == "user" or payload.is_active is False)
     )
     active_admin_count = sum(user.is_active for user in locked_admins)
     if loses_admin_access and active_admin_count <= 1:
@@ -165,9 +160,7 @@ async def reset_password(
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> AdminUserResponse:
-    target = await session.scalar(
-        select(User).where(User.id == user_id).with_for_update()
-    )
+    target = await session.scalar(select(User).where(User.id == user_id).with_for_update())
     if target is None:
         raise _user_not_found()
     target.password_hash = hash_password(payload.password)

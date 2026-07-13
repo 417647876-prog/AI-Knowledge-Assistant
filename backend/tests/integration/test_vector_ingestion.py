@@ -42,9 +42,7 @@ async def knowledge_base_owner() -> AsyncIterator[User]:
         yield user
     finally:
         async with session_factory.begin() as session:
-            await session.execute(
-                delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id)
-            )
+            await session.execute(delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id))
             await session.execute(delete(User).where(User.id == user.id))
 
 
@@ -56,9 +54,7 @@ async def test_process_stores_vectors_and_is_safe_to_retry(
     (tmp_path / stored_name).write_text("第一段制度内容。第二段制度内容。", encoding="utf-8")
 
     async with session_factory() as session:
-        knowledge_base = KnowledgeBase(
-            name="1C 向量入库测试", owner_id=knowledge_base_owner.id
-        )
+        knowledge_base = KnowledgeBase(name="1C 向量入库测试", owner_id=knowledge_base_owner.id)
         session.add(knowledge_base)
         await session.flush()
         document = Document(

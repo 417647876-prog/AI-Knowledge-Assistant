@@ -15,9 +15,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None, Depends(bearer_scheme)
-    ],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> User:
@@ -42,9 +40,7 @@ async def require_admin(
     user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     if user.role != ADMIN_ROLE:
-        raise AppError(
-            code="PERMISSION_DENIED", message="需要管理员权限。", status_code=403
-        )
+        raise AppError(code="PERMISSION_DENIED", message="需要管理员权限。", status_code=403)
     return user
 
 

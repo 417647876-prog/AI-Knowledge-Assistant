@@ -46,9 +46,7 @@ async def auth_user() -> AsyncIterator[User]:
         yield user
     finally:
         async with session_factory.begin() as session:
-            await session.execute(
-                delete(RefreshSession).where(RefreshSession.user_id == user.id)
-            )
+            await session.execute(delete(RefreshSession).where(RefreshSession.user_id == user.id))
             await session.execute(delete(User).where(User.id == user.id))
 
 
@@ -149,10 +147,7 @@ async def test_login_refresh_logout_me_and_inactive_user(auth_user: User) -> Non
 
         missing_bearer_me = await client.get("/api/v1/auth/me")
         assert missing_bearer_me.status_code == 401
-        assert (
-            missing_bearer_me.json()["error"]["code"]
-            == "AUTHENTICATION_REQUIRED"
-        )
+        assert missing_bearer_me.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
 
 
 @pytest.mark.asyncio

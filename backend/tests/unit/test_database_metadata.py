@@ -47,10 +47,7 @@ def test_auth_models_enforce_unique_identity_and_ownership() -> None:
         for constraint in User.__table__.constraints
         if isinstance(constraint, CheckConstraint)
     ]
-    assert any(
-        "role IN ('admin', 'user')" in str(constraint.sqltext)
-        for constraint in role_checks
-    )
+    assert any("role IN ('admin', 'user')" in str(constraint.sqltext) for constraint in role_checks)
 
 
 def test_user_normalizes_username_and_exports_roles() -> None:

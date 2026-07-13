@@ -30,9 +30,7 @@ def temporary_database_url() -> Iterator[str]:
     with admin_engine.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{database_name}"'))
     try:
-        yield configured_url.set(database=database_name).render_as_string(
-            hide_password=False
-        )
+        yield configured_url.set(database=database_name).render_as_string(hide_password=False)
     finally:
         with admin_engine.connect() as connection:
             connection.execute(
@@ -89,9 +87,7 @@ def test_auth_migration_preserves_null_owner_data_on_failed_upgrade(
         command.upgrade(alembic_config, "20260713_03")
 
         with engine.connect() as connection:
-            final_version = connection.scalar(
-                text("SELECT version_num FROM alembic_version")
-            )
+            final_version = connection.scalar(text("SELECT version_num FROM alembic_version"))
             auth_columns = {
                 (row.table_name, row.column_name): (
                     row.data_type,

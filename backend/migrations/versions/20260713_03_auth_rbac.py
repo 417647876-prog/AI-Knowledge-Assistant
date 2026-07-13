@@ -37,9 +37,7 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.CheckConstraint(
-            "role IN ('admin', 'user')", name=op.f("ck_users_role_values")
-        ),
+        sa.CheckConstraint("role IN ('admin', 'user')", name=op.f("ck_users_role_values")),
         sa.PrimaryKeyConstraint("id", name="pk_users"),
         sa.UniqueConstraint("username", name="uq_users_username"),
     )
@@ -77,12 +75,8 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_refresh_sessions"),
         sa.UniqueConstraint("token_hash", name="uq_refresh_sessions_token_hash"),
     )
-    op.create_index(
-        "ix_refresh_sessions_user_id", "refresh_sessions", ["user_id"]
-    )
-    op.create_index(
-        "ix_refresh_sessions_expires_at", "refresh_sessions", ["expires_at"]
-    )
+    op.create_index("ix_refresh_sessions_user_id", "refresh_sessions", ["user_id"])
+    op.create_index("ix_refresh_sessions_expires_at", "refresh_sessions", ["expires_at"])
 
     null_owner_count = op.get_bind().scalar(
         sa.text("SELECT count(*) FROM knowledge_bases WHERE owner_id IS NULL")
@@ -117,9 +111,7 @@ def downgrade() -> None:
         nullable=True,
     )
     op.drop_index("ix_knowledge_bases_owner_id", table_name="knowledge_bases")
-    op.drop_constraint(
-        "fk_knowledge_bases_owner_id_users", "knowledge_bases", type_="foreignkey"
-    )
+    op.drop_constraint("fk_knowledge_bases_owner_id_users", "knowledge_bases", type_="foreignkey")
     op.drop_index("ix_refresh_sessions_expires_at", table_name="refresh_sessions")
     op.drop_index("ix_refresh_sessions_user_id", table_name="refresh_sessions")
     op.drop_table("refresh_sessions")

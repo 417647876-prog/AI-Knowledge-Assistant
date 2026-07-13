@@ -37,9 +37,7 @@ async def knowledge_base_owner() -> AsyncIterator[User]:
         yield user
     finally:
         async with session_factory.begin() as session:
-            await session.execute(
-                delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id)
-            )
+            await session.execute(delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id))
             await session.execute(delete(User).where(User.id == user.id))
 
 
@@ -68,12 +66,8 @@ async def test_search_orders_filters_limits_and_isolates_knowledge_base(
     knowledge_base_owner: User,
 ) -> None:
     async with session_factory() as session:
-        target = KnowledgeBase(
-            name=f"目标知识库-{uuid4()}", owner_id=knowledge_base_owner.id
-        )
-        other = KnowledgeBase(
-            name=f"其他知识库-{uuid4()}", owner_id=knowledge_base_owner.id
-        )
+        target = KnowledgeBase(name=f"目标知识库-{uuid4()}", owner_id=knowledge_base_owner.id)
+        other = KnowledgeBase(name=f"其他知识库-{uuid4()}", owner_id=knowledge_base_owner.id)
         session.add_all([target, other])
         await session.flush()
         target_document = await _add_document(session, target.id, "员工手册.txt")

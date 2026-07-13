@@ -44,9 +44,7 @@ async def create_admin_in_session(
         normalized_username
     ):
         raise RuntimeError("用户名格式无效。")
-    existing = await session.scalar(
-        select(User.id).where(User.username == normalized_username)
-    )
+    existing = await session.scalar(select(User.id).where(User.username == normalized_username))
     if existing is not None:
         raise RuntimeError("用户名已存在，拒绝覆盖。")
 

@@ -16,10 +16,7 @@ def test_reset_guard_only_accepts_confirmed_local_development() -> None:
 
 
 def test_reset_guard_rejects_query_host_override() -> None:
-    database_url = (
-        "postgresql+psycopg://u:p@localhost:5432/db"
-        "?host=db.example.com&port=5433"
-    )
+    database_url = "postgresql+psycopg://u:p@localhost:5432/db?host=db.example.com&port=5433"
 
     with pytest.raises(RuntimeError, match="禁止通过查询参数覆盖数据库目标"):
         validate_database_url(database_url)
@@ -68,10 +65,7 @@ def test_reset_guard_requires_explicit_database_name() -> None:
 def test_reset_guard_rejects_case_insensitive_target_overrides(
     override_key: str,
 ) -> None:
-    database_url = (
-        "postgresql+psycopg://u:p@localhost:5432/db"
-        f"?{override_key}=attacker-controlled"
-    )
+    database_url = f"postgresql+psycopg://u:p@localhost:5432/db?{override_key}=attacker-controlled"
 
     with pytest.raises(RuntimeError, match="禁止通过查询参数覆盖数据库目标"):
         validate_database_url(database_url)

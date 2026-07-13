@@ -91,9 +91,7 @@ def _require_trusted_origin(request: Request, settings: Settings) -> None:
         )
 
 
-def _set_refresh_cookie(
-    response: Response, issued: IssuedSession, settings: Settings
-) -> None:
+def _set_refresh_cookie(response: Response, issued: IssuedSession, settings: Settings) -> None:
     response.set_cookie(
         key=REFRESH_COOKIE_NAME,
         value=issued.refresh_token,

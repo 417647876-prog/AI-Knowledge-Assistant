@@ -97,9 +97,7 @@ async def permission_context() -> AsyncIterator[KnowledgeBasePermissionContext]:
             await client.aclose()
         user_ids = [user.id for user in users]
         async with session_factory.begin() as session:
-            await session.execute(
-                delete(KnowledgeBase).where(KnowledgeBase.owner_id.in_(user_ids))
-            )
+            await session.execute(delete(KnowledgeBase).where(KnowledgeBase.owner_id.in_(user_ids)))
             await session.execute(
                 delete(RefreshSession).where(RefreshSession.user_id.in_(user_ids))
             )
@@ -176,9 +174,7 @@ async def test_accessible_knowledge_base_hides_other_users_resources(
                 session, permission_context.bob, knowledge_base_id
             )
         with pytest.raises(AppError) as missing:
-            await service.get_accessible_knowledge_base(
-                session, permission_context.bob, uuid4()
-            )
+            await service.get_accessible_knowledge_base(session, permission_context.bob, uuid4())
         admin_result = await service.get_accessible_knowledge_base(
             session,
             permission_context.admin,

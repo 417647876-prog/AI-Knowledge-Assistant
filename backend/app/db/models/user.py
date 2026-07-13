@@ -14,9 +14,7 @@ UserRole = Literal["admin", "user"]
 
 class User(TimestampMixin, Base):
     __tablename__ = "users"
-    __table_args__ = (
-        CheckConstraint("role IN ('admin', 'user')", name="role_values"),
-    )
+    __table_args__ = (CheckConstraint("role IN ('admin', 'user')", name="role_values"),)
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     username: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)

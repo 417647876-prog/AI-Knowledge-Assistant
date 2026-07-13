@@ -58,9 +58,7 @@ class AuthService:
         now = self._now()
         async with self._session.begin():
             stored = await self._session.scalar(
-                select(RefreshSession)
-                .where(RefreshSession.id == session_id)
-                .with_for_update()
+                select(RefreshSession).where(RefreshSession.id == session_id).with_for_update()
             )
             if stored is None or not secrets.compare_digest(
                 stored.token_hash, hash_refresh_secret(secret)
@@ -98,16 +96,12 @@ class AuthService:
 
         async with self._session.begin():
             stored = await self._session.scalar(
-                select(RefreshSession)
-                .where(RefreshSession.id == session_id)
-                .with_for_update()
+                select(RefreshSession).where(RefreshSession.id == session_id).with_for_update()
             )
             if (
                 stored is not None
                 and stored.revoked_at is None
-                and secrets.compare_digest(
-                    stored.token_hash, hash_refresh_secret(secret)
-                )
+                and secrets.compare_digest(stored.token_hash, hash_refresh_secret(secret))
             ):
                 stored.revoked_at = self._now()
 
@@ -152,9 +146,7 @@ class AuthService:
             expires_at=now + timedelta(days=self._settings.refresh_token_expire_days),
         )
 
-    def _issued_result(
-        self, user: User, raw_refresh_token: str, now: datetime
-    ) -> IssuedSession:
+    def _issued_result(self, user: User, raw_refresh_token: str, now: datetime) -> IssuedSession:
         return IssuedSession(
             access_token=create_access_token(
                 user_id=user.id,
