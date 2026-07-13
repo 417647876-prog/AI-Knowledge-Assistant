@@ -22,9 +22,15 @@ def _safe_http_error(response: httpx.Response, step: str) -> str:
     code = "UNKNOWN_ERROR"
     request_id = response.headers.get("x-request-id", "未知")
     try:
-        error = response.json().get("error", {})
-        code = error.get("code") or code
-        request_id = error.get("request_id") or request_id
+        payload = response.json()
+        error = payload.get("error", {}) if isinstance(payload, Mapping) else {}
+        if isinstance(error, Mapping):
+            error_code = error.get("code")
+            error_request_id = error.get("request_id")
+            if isinstance(error_code, str) and error_code:
+                code = error_code
+            if isinstance(error_request_id, str) and error_request_id:
+                request_id = error_request_id
     except (TypeError, ValueError):
         pass
     return f"{step}失败：HTTP {response.status_code}，错误码 {code}，request ID {request_id}。"
@@ -47,11 +53,12 @@ async def _best_effort_logout(
             f"{base_url}/api/v1/auth/logout",
             headers={"Origin": origin},
         )
+        if response.is_success:
+            return
+        warning = f"退出清理警告：{_safe_http_error(response, '退出')}"
     except Exception as error:
-        print(f"退出清理警告：请求异常 {type(error).__name__}。", file=sys.stderr)
-        return
-    if not response.is_success:
-        print(f"退出清理警告：{_safe_http_error(response, '退出')}", file=sys.stderr)
+        warning = f"退出清理警告：清理异常 {type(error).__name__}。"
+    print(warning, file=sys.stderr)
 
 
 async def wait_for_document_ready(
@@ -81,9 +88,10 @@ async def wait_for_document_ready(
         if status == "failed":
             message = payload.get("error_message") or "文档处理失败。"
             raise SmokeTestError(message)
-        if asyncio.get_running_loop().time() >= deadline:
+        remaining_seconds = deadline - asyncio.get_running_loop().time()
+        if remaining_seconds <= 0:
             raise SmokeTestError(f"等待文档处理超时，最后状态为 {status}。")
-        await asyncio.sleep(poll_interval_seconds)
+        await asyncio.sleep(min(poll_interval_seconds, remaining_seconds))
 
 
 async def run_smoke_test(
