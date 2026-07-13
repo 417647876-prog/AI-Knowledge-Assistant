@@ -398,6 +398,36 @@ async def test_upload_guard_never_sends_second_start_if_limit_is_exceeded_late()
 
 
 @pytest.mark.asyncio
+async def test_upload_guard_propagates_late_limit_when_downstream_returns_silently() -> None:
+    settings = Settings(_env_file=None, max_upload_bytes=4, upload_multipart_overhead_bytes=8)
+    token = create_access_token(user_id=uuid4(), role="user", settings=settings)
+    sent: list[dict[str, object]] = []
+
+    async def invalid_downstream(_scope, receive, send) -> None:
+        await send({"type": "http.response.start", "status": 202, "headers": []})
+        try:
+            while True:
+                await receive()
+        except Exception:
+            return
+
+    with pytest.raises(RuntimeError, match="响应开始后请求体才超过限制"):
+        await invoke_asgi(
+            UploadGuardMiddleware(invalid_downstream, settings=settings),
+            path=upload_path(),
+            headers=[(b"authorization", f"Bearer {token}".encode())],
+            messages=[
+                {"type": "http.request", "body": b"x" * 8, "more_body": True},
+                {"type": "http.request", "body": b"x" * 5, "more_body": False},
+            ],
+            sent_messages=sent,
+        )
+
+    assert [message["type"] for message in sent] == ["http.response.start"]
+    assert response_status(sent) == 202
+
+
+@pytest.mark.asyncio
 async def test_upload_guard_does_not_swallow_unrelated_downstream_exception() -> None:
     settings = Settings(_env_file=None)
     token = create_access_token(user_id=uuid4(), role="user", settings=settings)

@@ -118,6 +118,8 @@ class UploadGuardMiddleware:
         if protocol_violation:
             raise _BodyLimitExceededAfterResponseStarted("上传响应开始后请求体才超过限制")
         if limited_receive.exceeded and not replacement_sent:
+            if response_started:
+                raise _BodyLimitExceededAfterResponseStarted("上传响应开始后请求体才超过限制")
             await self._send_too_large(scope, send)
 
     @staticmethod
