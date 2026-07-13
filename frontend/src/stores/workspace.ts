@@ -31,6 +31,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const created = await createRequest(input)
     knowledgeBases.value.push(created)
     activeKnowledgeBaseId.value = created.id
+    answer.value = null
     return created
   }
 
@@ -51,11 +52,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   async function submitQuestion(question: string) {
-    if (!activeKnowledgeBaseId.value) throw new Error('请先选择知识库。')
+    const knowledgeBaseId = activeKnowledgeBaseId.value
+    if (!knowledgeBaseId) throw new Error('请先选择知识库。')
     asking.value = true
     try {
-      answer.value = await askQuestion(activeKnowledgeBaseId.value, question.trim(), 5)
-      return answer.value
+      const result = await askQuestion(knowledgeBaseId, question.trim(), 5)
+      if (activeKnowledgeBaseId.value === knowledgeBaseId) answer.value = result
+      return result
     } finally { asking.value = false }
   }
 

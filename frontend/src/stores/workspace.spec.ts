@@ -36,6 +36,22 @@ describe('workspace knowledge bases', () => {
     expect(store.activeKnowledgeBaseId).toBe('kb-2')
   })
 
+  it('新建并切换知识库时清空旧答案', async () => {
+    vi.mocked(createKnowledgeBase).mockResolvedValue({
+      id: 'kb-2', name: '研发规范', description: null,
+    })
+    const store = useWorkspaceStore()
+    store.answer = {
+      answer: '旧知识库答案', citations: [],
+      retrieved_chunk_count: 1, request_id: 'req-old',
+    }
+
+    await store.createKnowledgeBase({ name: '研发规范', description: null })
+
+    expect(store.activeKnowledgeBaseId).toBe('kb-2')
+    expect(store.answer).toBeNull()
+  })
+
   it('tracks an uploaded document until ready', async () => {
     const pending = {
       document_id: 'doc-1', job_id: 'job-1', status: 'pending' as const,
@@ -77,5 +93,27 @@ describe('workspace knowledge bases', () => {
     await expect(store.submitQuestion('问题')).rejects.toThrow('服务异常')
 
     expect(store.asking).toBe(false)
+  })
+
+  it('切换知识库后忽略旧知识库尚未返回的问答结果', async () => {
+    let resolveQuestion!: (result: {
+      answer: string; citations: []; retrieved_chunk_count: number; request_id: string
+    }) => void
+    vi.mocked(askQuestion).mockReturnValue(new Promise((resolve) => {
+      resolveQuestion = resolve
+    }))
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-a'
+
+    const pending = store.submitQuestion('A 库问题')
+    store.selectKnowledgeBase('kb-b')
+    resolveQuestion({
+      answer: 'A 库答案', citations: [],
+      retrieved_chunk_count: 1, request_id: 'req-a',
+    })
+    await pending
+
+    expect(store.activeKnowledgeBaseId).toBe('kb-b')
+    expect(store.answer).toBeNull()
   })
 })
