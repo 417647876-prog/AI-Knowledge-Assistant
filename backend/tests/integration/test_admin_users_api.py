@@ -1,3 +1,4 @@
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -6,10 +7,17 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
+from app.api.v1.admin_users import AdminUserResponse, AdminUserUpdate, update_user
+from app.auth.service import AuthService
 from app.core.config import get_settings
-from app.core.security import create_access_token, hash_password
+from app.core.exceptions import AppError
+from app.core.security import (
+    create_access_token,
+    hash_password,
+    verify_password,
+)
 from app.db.models import ADMIN_ROLE, USER_ROLE, RefreshSession, User
 from app.db.session import session_factory
 from app.main import create_app
@@ -30,6 +38,7 @@ class AdminApiContext:
     admin_client: httpx.AsyncClient
     user_client: httpx.AsyncClient
     created_user_ids: list[UUID] = field(default_factory=list)
+    created_usernames: list[str] = field(default_factory=list)
 
 
 def _access_token(user: User) -> str:
@@ -78,7 +87,15 @@ async def admin_api() -> AsyncIterator[AdminApiContext]:
     finally:
         await admin_client.aclose()
         await user_client.aclose()
-        user_ids = [admin.id, user.id, *context.created_user_ids]
+        async with session_factory() as session:
+            fallback_ids = list(
+                await session.scalars(
+                    select(User.id).where(
+                        User.username.in_(context.created_usernames)
+                    )
+                )
+            )
+        user_ids = [admin.id, user.id, *context.created_user_ids, *fallback_ids]
         async with session_factory.begin() as session:
             await session.execute(
                 delete(RefreshSession).where(RefreshSession.user_id.in_(user_ids))
@@ -103,6 +120,7 @@ async def test_admin_can_list_and_create_users_but_regular_user_cannot(
     assert listed_admin["updated_at"]
 
     username = f" Alice_{uuid4().hex} "
+    admin_api.created_usernames.append(username.strip().lower())
     created = await admin_api.admin_client.post(
         "/api/v1/admin/users",
         json={
@@ -174,7 +192,57 @@ async def test_last_active_admin_cannot_be_demoted(admin_api: AdminApiContext) -
     )
 
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "LAST_ACTIVE_ADMIN_REQUIRED"
+    assert response.json()["error"]["code"] == "LAST_ADMIN_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_admin_removal_keeps_exactly_one_active_admin(
+    admin_api: AdminApiContext,
+) -> None:
+    async with session_factory.begin() as session:
+        target = await session.get(User, admin_api.user.id)
+        assert target is not None
+        target.role = ADMIN_ROLE
+    admin_api.user.role = ADMIN_ROLE
+
+    async with (
+        session_factory() as first_session,
+        session_factory() as second_session,
+    ):
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                update_user(
+                    admin_api.admin.id,
+                    AdminUserUpdate(role="user"),
+                    admin_api.user,
+                    first_session,
+                    get_settings(),
+                ),
+                update_user(
+                    admin_api.user.id,
+                    AdminUserUpdate(is_active=False),
+                    admin_api.admin,
+                    second_session,
+                    get_settings(),
+                ),
+                return_exceptions=True,
+            ),
+            timeout=10,
+        )
+
+    successes = [result for result in results if isinstance(result, AdminUserResponse)]
+    errors = [result for result in results if isinstance(result, AppError)]
+    assert len(successes) == 1
+    assert len(errors) == 1
+    assert errors[0].code == "LAST_ADMIN_REQUIRED"
+
+    async with session_factory() as session:
+        admins = list(
+            await session.scalars(
+                select(User).where(User.id.in_([admin_api.admin.id, admin_api.user.id]))
+            )
+        )
+    assert sum(user.role == ADMIN_ROLE and user.is_active for user in admins) == 1
 
 
 async def _add_refresh_sessions(user_id: UUID, count: int = 2) -> None:
@@ -235,3 +303,84 @@ async def test_security_sensitive_changes_revoke_all_target_refresh_sessions(
 
     assert response.status_code == 200
     await _assert_all_sessions_revoked(target.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "failure_kind"),
+    [
+        ("deactivate", "runtime"),
+        ("demote", "runtime"),
+        ("reset-password", "runtime"),
+        ("deactivate", "cancel"),
+    ],
+)
+async def test_revoke_failure_rolls_back_user_and_all_refresh_sessions(
+    admin_api: AdminApiContext,
+    operation: str,
+    failure_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = admin_api.user
+    if operation == "demote":
+        async with session_factory.begin() as session:
+            stored = await session.get(User, target.id)
+            assert stored is not None
+            stored.role = ADMIN_ROLE
+        target.role = ADMIN_ROLE
+    await _add_refresh_sessions(target.id)
+
+    async def partially_revoke_then_fail(
+        service: AuthService,
+        user_id: UUID,
+    ) -> None:
+        await service._session.execute(  # noqa: SLF001 - 故意注入事务中途失败
+            update(RefreshSession)
+            .where(RefreshSession.user_id == user_id)
+            .values(revoked_at=datetime.now(UTC))
+        )
+        if failure_kind == "cancel":
+            raise asyncio.CancelledError
+        raise RuntimeError("injected revoke failure")
+
+    monkeypatch.setattr(
+        AuthService,
+        "revoke_all_for_user_in_transaction",
+        partially_revoke_then_fail,
+        raising=False,
+    )
+
+    expected_message = (
+        "No response returned" if failure_kind == "cancel" else "injected revoke failure"
+    )
+    with pytest.raises(RuntimeError, match=expected_message):
+        if operation == "reset-password":
+            await admin_api.admin_client.post(
+                f"/api/v1/admin/users/{target.id}/reset-password",
+                json={"password": "replacement pass 123"},
+            )
+        else:
+            payload = (
+                {"is_active": False}
+                if operation == "deactivate"
+                else {"role": "user"}
+            )
+            await admin_api.admin_client.patch(
+                f"/api/v1/admin/users/{target.id}",
+                json=payload,
+            )
+
+    async with session_factory() as session:
+        stored = await session.get(User, target.id)
+        assert stored is not None
+        revoked_values = list(
+            await session.scalars(
+                select(RefreshSession.revoked_at).where(
+                    RefreshSession.user_id == target.id
+                )
+            )
+        )
+    assert stored.role == target.role
+    assert stored.is_active is True
+    assert verify_password("correct horse battery", stored.password_hash)
+    assert revoked_values == [None, None]

@@ -131,7 +131,7 @@ async def update_user(
     active_admin_count = sum(user.is_active for user in locked_admins)
     if loses_admin_access and active_admin_count <= 1:
         raise AppError(
-            code="LAST_ACTIVE_ADMIN_REQUIRED",
+            code="LAST_ADMIN_REQUIRED",
             message="系统必须保留至少一个启用的管理员。",
             status_code=409,
         )
@@ -146,10 +146,13 @@ async def update_user(
         target.role = payload.role
     if payload.is_active is not None:
         target.is_active = payload.is_active
-    await session.commit()
 
     if should_revoke:
-        await AuthService(session=session, settings=settings).revoke_all_for_user(target.id)
+        await AuthService(
+            session=session,
+            settings=settings,
+        ).revoke_all_for_user_in_transaction(target.id)
+    await session.commit()
     await session.refresh(target)
     return AdminUserResponse.model_validate(target)
 
@@ -168,8 +171,11 @@ async def reset_password(
     if target is None:
         raise _user_not_found()
     target.password_hash = hash_password(payload.password)
+    await AuthService(
+        session=session,
+        settings=settings,
+    ).revoke_all_for_user_in_transaction(target.id)
     await session.commit()
-    await AuthService(session=session, settings=settings).revoke_all_for_user(target.id)
     await session.refresh(target)
     return AdminUserResponse.model_validate(target)
 

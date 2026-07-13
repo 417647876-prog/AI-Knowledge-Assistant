@@ -112,16 +112,18 @@ class AuthService:
                 stored.revoked_at = self._now()
 
     async def revoke_all_for_user(self, user_id: UUID) -> None:
-        now = self._now()
         async with self._session.begin():
-            await self._session.execute(
-                update(RefreshSession)
-                .where(
-                    RefreshSession.user_id == user_id,
-                    RefreshSession.revoked_at.is_(None),
-                )
-                .values(revoked_at=now)
+            await self.revoke_all_for_user_in_transaction(user_id)
+
+    async def revoke_all_for_user_in_transaction(self, user_id: UUID) -> None:
+        await self._session.execute(
+            update(RefreshSession)
+            .where(
+                RefreshSession.user_id == user_id,
+                RefreshSession.revoked_at.is_(None),
             )
+            .values(revoked_at=self._now())
+        )
 
     def _issue_session(self, user: User, now: datetime) -> IssuedSession:
         refresh_token = create_refresh_token()

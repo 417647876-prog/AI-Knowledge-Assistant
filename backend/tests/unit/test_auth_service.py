@@ -195,6 +195,20 @@ async def test_revoke_all_updates_active_sessions_for_user() -> None:
 
     await make_service(session, datetime.now(UTC)).revoke_all_for_user(user_id)
 
+    session.begin.assert_called_once_with()
+    session.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_in_transaction_leaves_commit_to_caller() -> None:
+    user_id = uuid4()
+    session = make_session()
+
+    await make_service(session, datetime.now(UTC)).revoke_all_for_user_in_transaction(
+        user_id
+    )
+
+    session.begin.assert_not_called()
     session.execute.assert_awaited_once()
 
 
