@@ -9,6 +9,7 @@
 终端 1 启动 PostgreSQL、迁移、初始化管理员并启动后端：
 
 ```powershell
+Set-Location (git rev-parse --show-toplevel)
 docker compose -f deploy/docker-compose.yml up -d
 Set-Location backend
 $env:APP_ENV = "development"
@@ -23,6 +24,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_l
 终端 2 安装依赖并启动前端：
 
 ```powershell
+Set-Location (git rev-parse --show-toplevel)
 Set-Location frontend
 npm.cmd install
 npm.cmd run dev -- --host 127.0.0.1 --port 5173
@@ -48,6 +50,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 ## 前端验证
 
 ```powershell
+Set-Location (git rev-parse --show-toplevel)
 Set-Location frontend
 npm.cmd run test -- --run
 npm.cmd run type-check

@@ -17,6 +17,7 @@
 ## 本地启动
 
 ```powershell
+Set-Location (git rev-parse --show-toplevel)
 docker compose -f deploy/docker-compose.yml up -d
 Set-Location backend
 uv sync --dev
@@ -31,6 +32,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_l
 另开一个 PowerShell 终端启动前端：
 
 ```powershell
+Set-Location (git rev-parse --show-toplevel)
 Set-Location frontend
 npm.cmd install
 npm.cmd run dev -- --host 127.0.0.1 --port 5173
@@ -51,6 +53,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 从仓库根目录打开两个 PowerShell 窗口。终端 1 启动数据库和 FastAPI：
 
 ```powershell
+Set-Location (git rev-parse --show-toplevel)
 docker compose -f deploy/docker-compose.yml up -d
 Set-Location backend
 uv run alembic upgrade head
@@ -61,6 +64,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_l
 终端 2 安装依赖并启动前端：
 
 ```powershell
+Set-Location (git rev-parse --show-toplevel)
 Set-Location frontend
 npm.cmd install
 npm.cmd run dev -- --host 127.0.0.1 --port 5173
@@ -76,6 +80,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 为避免下载模型或调用付费模型，请另开一个 PowerShell 窗口，使用 Fake Provider 启动服务：
 
 ```powershell
+Set-Location (git rev-parse --show-toplevel)
 Set-Location backend
 $env:EMBEDDING_PROVIDER = "fake"
 $env:CHAT_PROVIDER = "fake"
@@ -86,6 +91,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_l
 待服务启动后，在第二个窗口执行：
 
 ```powershell
+Set-Location (git rev-parse --show-toplevel)
 Set-Location backend
 $env:SMOKE_USERNAME = "admin"
 $securePassword = Read-Host "冒烟测试账号密码" -AsSecureString
@@ -138,6 +144,7 @@ POST /api/v1/documents/{document_id}/reprocess
 ## 验证
 
 ```powershell
+Set-Location (git rev-parse --show-toplevel)
 Set-Location backend
 uv run pytest -v
 uv run ruff check app tests migrations scripts
@@ -147,6 +154,7 @@ uv run ruff format --check app tests migrations scripts
 数据库集成测试需要先启动 Docker PostgreSQL：
 
 ```powershell
+Set-Location (git rev-parse --show-toplevel)
 docker compose -f deploy/docker-compose.yml up -d
 Set-Location backend
 uv run alembic upgrade head

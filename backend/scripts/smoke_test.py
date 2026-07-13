@@ -6,6 +6,7 @@
 import argparse
 import asyncio
 import os
+import sys
 from collections.abc import Mapping
 from typing import Any
 
@@ -16,10 +17,8 @@ class SmokeTestError(RuntimeError):
     """冒烟测试的业务断言失败。"""
 
 
-def _raise_for_status(response: httpx.Response, step: str) -> None:
-    """用脱敏后的结构化信息报告 HTTP 失败。"""
-    if response.is_success:
-        return
+def _safe_http_error(response: httpx.Response, step: str) -> str:
+    """生成不包含请求体、凭据或令牌的 HTTP 失败信息。"""
     code = "UNKNOWN_ERROR"
     request_id = response.headers.get("x-request-id", "未知")
     try:
@@ -28,9 +27,31 @@ def _raise_for_status(response: httpx.Response, step: str) -> None:
         request_id = error.get("request_id") or request_id
     except (TypeError, ValueError):
         pass
-    raise SmokeTestError(
-        f"{step}失败：HTTP {response.status_code}，错误码 {code}，request ID {request_id}。"
-    )
+    return f"{step}失败：HTTP {response.status_code}，错误码 {code}，request ID {request_id}。"
+
+
+def _raise_for_status(response: httpx.Response, step: str) -> None:
+    """用脱敏后的结构化信息报告 HTTP 失败。"""
+    if not response.is_success:
+        raise SmokeTestError(_safe_http_error(response, step))
+
+
+async def _best_effort_logout(
+    client: httpx.AsyncClient,
+    base_url: str,
+    origin: str,
+) -> None:
+    """失败清理不遮蔽原错误，也不输出响应正文或敏感请求信息。"""
+    try:
+        response = await client.post(
+            f"{base_url}/api/v1/auth/logout",
+            headers={"Origin": origin},
+        )
+    except Exception as error:
+        print(f"退出清理警告：请求异常 {type(error).__name__}。", file=sys.stderr)
+        return
+    if not response.is_success:
+        print(f"退出清理警告：{_safe_http_error(response, '退出')}", file=sys.stderr)
 
 
 async def wait_for_document_ready(
@@ -44,7 +65,14 @@ async def wait_for_document_ready(
     """轮询文档状态，直到处理成功或明确失败。"""
     deadline = asyncio.get_running_loop().time() + timeout_seconds
     while True:
-        response = await client.get(f"{base_url}/api/v1/documents/{document_id}")
+        remaining_seconds = deadline - asyncio.get_running_loop().time()
+        if remaining_seconds <= 0:
+            raise SmokeTestError("等待文档处理超时。")
+        try:
+            async with asyncio.timeout(remaining_seconds):
+                response = await client.get(f"{base_url}/api/v1/documents/{document_id}")
+        except TimeoutError:
+            raise SmokeTestError("等待文档处理超时。") from None
         _raise_for_status(response, "查询文档状态")
         payload = response.json()
         status = payload["status"]
@@ -92,47 +120,54 @@ async def run_smoke_test(
         client.headers["Authorization"] = f"Bearer {access_token}"
         print("[3/9] 登录通过，认证信息已保存在当前进程内存中。")
 
-        me_response = await client.get(f"{base_url}/api/v1/auth/me")
-        _raise_for_status(me_response, "当前用户检查")
-        if me_response.json().get("username") != username.strip().lower():
-            raise SmokeTestError("当前用户与 SMOKE_USERNAME 不一致。")
-        print("[4/9] 当前用户检查通过。")
+        try:
+            me_response = await client.get(f"{base_url}/api/v1/auth/me")
+            _raise_for_status(me_response, "当前用户检查")
+            if me_response.json().get("username") != username.strip().lower():
+                raise SmokeTestError("当前用户与 SMOKE_USERNAME 不一致。")
+            print("[4/9] 当前用户检查通过。")
 
-        knowledge_base_response = await client.post(
-            f"{base_url}/api/v1/knowledge-bases",
-            json={"name": "阶段 2B 冒烟测试知识库", "description": "可安全重复创建的临时数据"},
-        )
-        _raise_for_status(knowledge_base_response, "创建知识库")
-        knowledge_base_id = knowledge_base_response.json()["id"]
-        print("[5/9] 知识库创建通过。")
+            knowledge_base_response = await client.post(
+                f"{base_url}/api/v1/knowledge-bases",
+                json={
+                    "name": "阶段 2B 冒烟测试知识库",
+                    "description": "可安全重复创建的临时数据",
+                },
+            )
+            _raise_for_status(knowledge_base_response, "创建知识库")
+            knowledge_base_id = knowledge_base_response.json()["id"]
+            print("[5/9] 知识库创建通过。")
 
-        upload_response = await client.post(
-            f"{base_url}/api/v1/knowledge-bases/{knowledge_base_id}/documents",
-            files={"file": ("annual-leave.txt", policy_text.encode("utf-8"), "text/plain")},
-        )
-        _raise_for_status(upload_response, "上传文档")
-        document_id = upload_response.json()["document_id"]
-        print("[6/9] 文档上传通过。")
-        await wait_for_document_ready(
-            client,
-            base_url,
-            document_id,
-            timeout_seconds=timeout_seconds,
-            poll_interval_seconds=1,
-        )
-        print("[7/9] 文档处理完成。")
+            upload_response = await client.post(
+                f"{base_url}/api/v1/knowledge-bases/{knowledge_base_id}/documents",
+                files={"file": ("annual-leave.txt", policy_text.encode("utf-8"), "text/plain")},
+            )
+            _raise_for_status(upload_response, "上传文档")
+            document_id = upload_response.json()["document_id"]
+            print("[6/9] 文档上传通过。")
+            await wait_for_document_ready(
+                client,
+                base_url,
+                document_id,
+                timeout_seconds=timeout_seconds,
+                poll_interval_seconds=1,
+            )
+            print("[7/9] 文档处理完成。")
 
-        question_response = await client.post(
-            f"{base_url}/api/v1/knowledge-bases/{knowledge_base_id}/questions",
-            json={"question": policy_text, "top_k": 1},
-        )
-        _raise_for_status(question_response, "知识库问答")
-        answer = question_response.json()
-        if not answer["citations"]:
-            raise SmokeTestError("问答响应未返回引用。")
-        if answer["citations"][0]["file_name"] != "annual-leave.txt":
-            raise SmokeTestError("引用未指向上传的测试文档。")
-        print("[8/9] 问答与引用检查通过。")
+            question_response = await client.post(
+                f"{base_url}/api/v1/knowledge-bases/{knowledge_base_id}/questions",
+                json={"question": policy_text, "top_k": 1},
+            )
+            _raise_for_status(question_response, "知识库问答")
+            answer = question_response.json()
+            if not answer["citations"]:
+                raise SmokeTestError("问答响应未返回引用。")
+            if answer["citations"][0]["file_name"] != "annual-leave.txt":
+                raise SmokeTestError("引用未指向上传的测试文档。")
+            print("[8/9] 问答与引用检查通过。")
+        except BaseException:
+            await _best_effort_logout(client, base_url, origin)
+            raise
 
         logout_response = await client.post(
             f"{base_url}/api/v1/auth/logout",
