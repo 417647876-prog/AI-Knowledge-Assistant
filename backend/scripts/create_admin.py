@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.event_loop import new_event_loop
 from app.core.security import hash_password
 from app.db.models import ADMIN_ROLE, User
 from app.db.session import session_factory
@@ -73,12 +74,18 @@ async def create_initial_admin(*, username: str, password: str) -> User:
             )
 
 
+def run_create_initial_admin(*, username: str, password: str) -> User:
+    """使用 psycopg 在 Windows 支持的 SelectorEventLoop 执行命令。"""
+    with asyncio.Runner(loop_factory=new_event_loop) as runner:
+        return runner.run(create_initial_admin(username=username, password=password))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="创建首个管理员用户")
     parser.add_argument("--username", required=True, help="管理员用户名")
     args = parser.parse_args()
     password = read_initial_password()
-    user = asyncio.run(create_initial_admin(username=args.username, password=password))
+    user = run_create_initial_admin(username=args.username, password=password)
     print(f"管理员已创建：id={user.id}, username={user.username}")
 
 

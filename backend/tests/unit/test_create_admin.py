@@ -1,10 +1,15 @@
+import asyncio
 from uuid import uuid4
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models import ADMIN_ROLE, User
-from scripts.create_admin import create_admin_in_session, read_initial_password
+from scripts.create_admin import (
+    create_admin_in_session,
+    read_initial_password,
+    run_create_initial_admin,
+)
 
 
 def test_environment_password_takes_priority_without_prompting() -> None:
@@ -24,6 +29,27 @@ def test_interactive_password_requires_two_matching_entries() -> None:
 
     with pytest.raises(RuntimeError, match="两次输入的密码不一致"):
         read_initial_password(environ={}, password_prompt=lambda _prompt: next(answers))
+
+
+def test_create_admin_command_uses_selector_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed_loop: asyncio.AbstractEventLoop | None = None
+
+    async def fake_create_initial_admin(*, username: str, password: str) -> User:
+        nonlocal observed_loop
+        observed_loop = asyncio.get_running_loop()
+        return User(
+            id=uuid4(),
+            username=username,
+            password_hash="stored hash",
+            role=ADMIN_ROLE,
+        )
+
+    monkeypatch.setattr("scripts.create_admin.create_initial_admin", fake_create_initial_admin)
+
+    user = run_create_initial_admin(username="admin", password="temporary pass 123")
+
+    assert user.username == "admin"
+    assert isinstance(observed_loop, asyncio.SelectorEventLoop)
 
 
 class ExistingUserSession:

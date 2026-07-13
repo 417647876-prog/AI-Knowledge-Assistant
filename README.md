@@ -9,8 +9,10 @@
 - 阶段 1C：文本清洗、中文递归切片、事务性向量入库。
 - 阶段 1D：本地 BGE Small、pgvector 余弦检索、DeepSeek 问答与结构化引用。
 - 阶段 1E：自动化测试、Docker 冒烟脚本、中文使用文档与演示材料。
+- 阶段 2A：Vue 3 单页工作台、上传与问答界面。
+- 阶段 2B：管理员账号、JWT 登录、可撤销刷新会话、角色权限和知识库隔离。
 
-第一阶段的 RAG 后端闭环已经完成：创建知识库 → 上传文档 → 解析和向量入库 → 检索问答 → 返回可追溯引用。
+当前闭环为：管理员初始化账号 → 用户登录 → 创建自己的知识库 → 上传文档 → 解析和向量入库 → 检索问答 → 返回可追溯引用。系统不提供公开注册，普通用户只能访问自己的资源，管理员可以查看和操作全部知识库。
 
 ## 本地启动
 
@@ -18,11 +20,23 @@
 docker compose -f deploy/docker-compose.yml up -d
 Set-Location backend
 uv sync --dev
+$env:APP_ENV = "development"
 uv run alembic upgrade head
+uv run python -m scripts.create_admin --username admin
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_loop:new_event_loop
 ```
 
-首次使用本地 Embedding 时会自动下载 `BAAI/bge-small-zh-v1.5`。DeepSeek Key 只填写在本地 `backend/.env`，不要提交到 Git。
+`create_admin` 会在终端中安全提示两次输入密码；也可仅在当前 PowerShell 进程设置 `INITIAL_ADMIN_PASSWORD`，执行后立即删除该环境变量。密码和 DeepSeek Key 只放在本地环境中，不要写入仓库、命令示例或验收报告。
+
+另开一个 PowerShell 终端启动前端：
+
+```powershell
+Set-Location frontend
+npm.cmd install
+npm.cmd run dev -- --host 127.0.0.1 --port 5173
+```
+
+首次使用本地 Embedding 时会自动下载 `BAAI/bge-small-zh-v1.5`。如只做离线验收，可按下文使用 Fake Provider。
 
 启动后访问：
 
@@ -30,9 +44,9 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_l
 - 健康检查：<http://127.0.0.1:8000/health>
 - 就绪检查：<http://127.0.0.1:8000/ready>
 
-## 阶段 2A 前端
+## 阶段 2B 前端与认证
 
-阶段 2A 增加了基于 Vue 3、TypeScript、Vite、Pinia 和 Element Plus 的单页工作台，并使用 Vitest 进行前端测试。
+前端基于 Vue 3、TypeScript、Vite、Pinia、Vue Router 和 Element Plus。Access Token 只保存在页面内存中；长期 Refresh Token 只由浏览器通过 HttpOnly Cookie 发送。刷新页面时前端使用 Cookie 恢复会话，退出、账号停用或密码重置会撤销长期会话。
 
 从仓库根目录打开两个 PowerShell 窗口。终端 1 启动数据库和 FastAPI：
 
@@ -40,6 +54,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_l
 docker compose -f deploy/docker-compose.yml up -d
 Set-Location backend
 uv run alembic upgrade head
+uv run python -m scripts.create_admin --username admin
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_loop:new_event_loop
 ```
 
@@ -48,12 +63,12 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_l
 ```powershell
 Set-Location frontend
 npm.cmd install
-npm.cmd run dev
+npm.cmd run dev -- --host 127.0.0.1 --port 5173
 ```
 
-打开 <http://127.0.0.1:5173> 后，可以创建和切换知识库，上传 TXT、Markdown、PDF、DOCX 或 XLSX 文档并观察处理状态，以及提问并查看引用来源。当前文档列表只保存在本次浏览器会话中；刷新页面后不会重新加载此前上传的文档。
+打开 <http://127.0.0.1:5173> 后先登录。管理员可在“用户管理”中创建、启停账号、切换角色和重置密码；普通用户只能看到自己的知识库。当前文档列表只保存在本次浏览器会话中；刷新页面后不会重新加载此前上传的文档。
 
-更完整的环境要求、访问地址和验证命令见 [阶段 2A 前端使用说明](frontend/README.md)。
+更完整的初始化、安全重置、权限验收和验证命令见 [阶段 2B 验证与演示](docs/阶段2B验证与演示.md) 和 [前端使用说明](frontend/README.md)。
 
 ## 离线冒烟验证
 
@@ -72,10 +87,21 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_l
 
 ```powershell
 Set-Location backend
+$env:SMOKE_USERNAME = "admin"
+$securePassword = Read-Host "冒烟测试账号密码" -AsSecureString
+$env:SMOKE_PASSWORD = [System.Net.NetworkCredential]::new("", $securePassword).Password
 uv run python -m scripts.smoke_test
+Remove-Item Env:SMOKE_PASSWORD
+Remove-Variable securePassword
 ```
 
-脚本只在本地 Docker 数据库中创建一条临时知识库和测试文档；它不读取 DeepSeek Key。
+脚本先验证公开健康接口，再登录并验证 `/auth/me`，随后创建临时知识库、上传、轮询、问答，最后退出。账号密码只从当前进程环境读取；脚本不会输出密码、Access Token 或 Refresh Token。失败时返回非零退出码并显示脱敏的状态码、错误码和 request ID。
+
+## 部署与手机访问边界
+
+本阶段只验证本机开发运行，不代表已经具备公网生产安全。生产部署必须使用随机高强度 `JWT_SECRET_KEY`、`REFRESH_COOKIE_SECURE=true`，由同一 HTTPS 域名提供前端和 `/api` 反向代理，并严格配置 `TRUSTED_ORIGINS`。PostgreSQL、Vite 和 Uvicorn 内部端口不能直接暴露公网。
+
+手机在同一局域网访问也需要额外绑定非回环地址、防火墙规则和可信 Origin；这些操作会扩大网络暴露面，不属于本阶段默认启动步骤。不要把开发命令直接用于公网。
 
 ## 学习资料
 
@@ -105,35 +131,17 @@ Content-Type: application/json
 POST /api/v1/documents/{document_id}/reprocess
 ```
 
-## API 调用示例
+## API 调用说明
 
-下面以 PowerShell 为例，变量分别保存接口返回的知识库和文档 ID。上传后需要等待文档状态变为 `ready`，再发起提问。
-
-```powershell
-$knowledgeBase = Invoke-RestMethod -Method Post `
-  -Uri "http://127.0.0.1:8000/api/v1/knowledge-bases" `
-  -ContentType "application/json" `
-  -Body '{"name":"人事制度","description":"演示知识库"}'
-
-$upload = curl.exe -s -X POST `
-  -F "file=@./annual-leave.txt;type=text/plain" `
-  "http://127.0.0.1:8000/api/v1/knowledge-bases/$($knowledgeBase.id)/documents" | ConvertFrom-Json
-
-Invoke-RestMethod "http://127.0.0.1:8000/api/v1/documents/$($upload.document_id)"
-
-Invoke-RestMethod -Method Post `
-  -Uri "http://127.0.0.1:8000/api/v1/knowledge-bases/$($knowledgeBase.id)/questions" `
-  -ContentType "application/json" `
-  -Body '{"question":"员工入职满一年后有多少天年假？","top_k":5}'
-```
+除 `/health`、`/ready`、OpenAPI 和认证入口外，业务 API 都需要 `Authorization: Bearer <Access Token>`。普通用户直接访问他人的知识库、文档或问答资源返回 404；管理员接口要求管理员角色。完整且不在终端输出令牌的调用方式请使用前端或认证版 smoke 脚本。
 
 ## 验证
 
 ```powershell
 Set-Location backend
 uv run pytest -v
-uv run ruff check app tests migrations
-uv run ruff format --check app tests migrations
+uv run ruff check app tests migrations scripts
+uv run ruff format --check app tests migrations scripts
 ```
 
 数据库集成测试需要先启动 Docker PostgreSQL：
@@ -142,6 +150,5 @@ uv run ruff format --check app tests migrations
 docker compose -f deploy/docker-compose.yml up -d
 Set-Location backend
 uv run alembic upgrade head
-$env:RUN_DATABASE_TESTS = "1"
-uv run pytest -v
+$env:RUN_DATABASE_TESTS = "1"; uv run pytest tests/integration -q; Remove-Item Env:RUN_DATABASE_TESTS
 ```
