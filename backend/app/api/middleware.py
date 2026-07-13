@@ -20,6 +20,10 @@ class _RequestBodyTooLarge(Exception):
     pass
 
 
+class _BodyLimitExceededAfterResponseStarted(RuntimeError):
+    pass
+
+
 class _LimitedReceive:
     def __init__(self, receive: Receive, limit: int) -> None:
         self._receive = receive
@@ -69,21 +73,52 @@ class UploadGuardMiddleware:
                 return
 
         limited_receive = _LimitedReceive(receive, request_limit)
-        buffered_response: list[Message] = []
+        response_started = False
+        replacement_sent = False
+        suppress_downstream = False
+        protocol_violation = False
 
-        async def buffer_send(message: Message) -> None:
-            buffered_response.append(message)
+        async def guarded_send(message: Message) -> None:
+            nonlocal response_started
+            nonlocal replacement_sent
+            nonlocal suppress_downstream
+            nonlocal protocol_violation
+            if suppress_downstream:
+                return
+            if limited_receive.exceeded:
+                if response_started:
+                    # UploadFile 会在端点执行前完整解析；若这里已开始响应，说明下游违反了
+                    # 此守卫依赖的协议不变量。抑制剩余消息并在调用结束后传播异常。
+                    protocol_violation = True
+                    suppress_downstream = True
+                    return
+                response_started = True
+                replacement_sent = True
+                suppress_downstream = True
+                await self._send_too_large(scope, send)
+                return
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
 
         try:
-            await self.app(scope, limited_receive, buffer_send)
-        except _RequestBodyTooLarge:
-            limited_receive.exceeded = True
+            await self.app(scope, limited_receive, guarded_send)
+        except _RequestBodyTooLarge as exc:
+            if replacement_sent:
+                pass
+            elif response_started:
+                raise _BodyLimitExceededAfterResponseStarted(
+                    "上传响应开始后请求体才超过限制"
+                ) from exc
+            else:
+                response_started = True
+                replacement_sent = True
+                await self._send_too_large(scope, send)
 
-        if limited_receive.exceeded:
+        if protocol_violation:
+            raise _BodyLimitExceededAfterResponseStarted("上传响应开始后请求体才超过限制")
+        if limited_receive.exceeded and not replacement_sent:
             await self._send_too_large(scope, send)
-            return
-        for message in buffered_response:
-            await send(message)
 
     @staticmethod
     def _matches_upload(scope: Scope) -> bool:

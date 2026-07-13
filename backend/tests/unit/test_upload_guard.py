@@ -1,10 +1,11 @@
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from typing import Annotated
 from uuid import uuid4
 
 import pytest
-from fastapi import Depends, FastAPI, File, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, UploadFile
 
 from app.api.middleware import UploadGuardMiddleware
 from app.core.config import Settings
@@ -20,8 +21,9 @@ async def invoke_asgi(
     path: str,
     headers: list[tuple[bytes, bytes]],
     messages: list[dict[str, object]],
+    sent_messages: list[dict[str, object]] | None = None,
 ) -> tuple[list[dict[str, object]], int]:
-    sent: list[dict[str, object]] = []
+    sent = sent_messages if sent_messages is not None else []
     receive_calls = 0
 
     async def receive() -> dict[str, object]:
@@ -67,6 +69,83 @@ def response_json(messages: list[dict[str, object]]) -> dict[str, object]:
 
 def upload_path() -> str:
     return f"/api/v1/knowledge-bases/{uuid4()}/documents"
+
+
+@pytest.mark.asyncio
+async def test_upload_guard_sends_202_before_running_fastapi_background_tasks() -> None:
+    settings = Settings(_env_file=None, max_upload_bytes=1024, upload_multipart_overhead_bytes=1024)
+    token = create_access_token(user_id=uuid4(), role="user", settings=settings)
+    background_started = asyncio.Event()
+    allow_background_finish = asyncio.Event()
+    response_started = asyncio.Event()
+    app = FastAPI()
+
+    async def background_work() -> None:
+        background_started.set()
+        await allow_background_finish.wait()
+
+    @app.post("/api/v1/knowledge-bases/{knowledge_base_id}/documents", status_code=202)
+    async def upload(
+        knowledge_base_id: str,
+        background_tasks: BackgroundTasks,
+        file: Annotated[UploadFile, File()],
+    ) -> dict[str, str]:
+        del knowledge_base_id, file
+        background_tasks.add_task(background_work)
+        return {"status": "pending"}
+
+    boundary = "background-boundary"
+    body = (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+        'filename="a.txt"\r\n\r\ndata\r\n'
+        f"--{boundary}--\r\n"
+    ).encode()
+    sent: list[dict[str, object]] = []
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+        if message["type"] == "http.response.start":
+            response_started.set()
+
+    messages = [{"type": "http.request", "body": body, "more_body": False}]
+
+    async def receive() -> dict[str, object]:
+        return messages.pop(0)
+
+    path = upload_path()
+    task = asyncio.create_task(
+        UploadGuardMiddleware(app, settings=settings)(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": path,
+                "raw_path": path.encode(),
+                "query_string": b"",
+                "headers": [
+                    (b"authorization", f"Bearer {token}".encode()),
+                    (b"content-type", f"multipart/form-data; boundary={boundary}".encode()),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+                "client": ("127.0.0.1", 1234),
+                "server": ("test", 80),
+                "state": {"request_id": "background-order-001"},
+            },
+            receive,
+            send,
+        )
+    )
+    try:
+        await background_started.wait()
+        assert response_started.is_set() is True
+        assert any(message["type"] == "http.response.body" for message in sent)
+    finally:
+        allow_background_finish.set()
+        await task
+
+    assert response_status(sent) == 202
 
 
 @pytest.mark.asyncio
@@ -202,6 +281,137 @@ async def test_upload_guard_rejects_authenticated_stream_as_soon_as_limit_is_exc
     assert response_status(messages) == 413
     assert sum(message["type"] == "http.response.start" for message in messages) == 1
     assert receive_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_upload_guard_sends_single_413_when_body_limit_exception_bubbles() -> None:
+    settings = Settings(_env_file=None, max_upload_bytes=4, upload_multipart_overhead_bytes=8)
+    token = create_access_token(user_id=uuid4(), role="user", settings=settings)
+
+    async def downstream(_scope, receive, _send) -> None:
+        while True:
+            message = await receive()
+            if not message.get("more_body", False):
+                return
+
+    messages, receive_calls = await invoke_asgi(
+        UploadGuardMiddleware(downstream, settings=settings),
+        path=upload_path(),
+        headers=[(b"authorization", f"Bearer {token}".encode())],
+        messages=[
+            {"type": "http.request", "body": b"x" * 8, "more_body": True},
+            {"type": "http.request", "body": b"x" * 5, "more_body": True},
+            {"type": "http.request", "body": b"never-read", "more_body": False},
+        ],
+    )
+
+    assert response_status(messages) == 413
+    assert sum(message["type"] == "http.response.start" for message in messages) == 1
+    assert receive_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_upload_guard_sends_413_when_downstream_swallows_receive_exception() -> None:
+    settings = Settings(_env_file=None, max_upload_bytes=4, upload_multipart_overhead_bytes=8)
+    token = create_access_token(user_id=uuid4(), role="user", settings=settings)
+
+    async def downstream(_scope, receive, _send) -> None:
+        try:
+            while True:
+                await receive()
+        except Exception:
+            return
+
+    messages, receive_calls = await invoke_asgi(
+        UploadGuardMiddleware(downstream, settings=settings),
+        path=upload_path(),
+        headers=[(b"authorization", f"Bearer {token}".encode())],
+        messages=[
+            {"type": "http.request", "body": b"x" * 8, "more_body": True},
+            {"type": "http.request", "body": b"x" * 5, "more_body": False},
+        ],
+    )
+
+    assert response_status(messages) == 413
+    assert receive_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_upload_guard_keeps_single_413_when_downstream_responds_then_reraises() -> None:
+    settings = Settings(_env_file=None, max_upload_bytes=4, upload_multipart_overhead_bytes=8)
+    token = create_access_token(user_id=uuid4(), role="user", settings=settings)
+
+    async def downstream(_scope, receive, send) -> None:
+        try:
+            while True:
+                await receive()
+        except Exception:
+            await send({"type": "http.response.start", "status": 400, "headers": []})
+            await send({"type": "http.response.body", "body": b"framework response"})
+            raise
+
+    messages, receive_calls = await invoke_asgi(
+        UploadGuardMiddleware(downstream, settings=settings),
+        path=upload_path(),
+        headers=[(b"authorization", f"Bearer {token}".encode())],
+        messages=[
+            {"type": "http.request", "body": b"x" * 8, "more_body": True},
+            {"type": "http.request", "body": b"x" * 5, "more_body": False},
+        ],
+    )
+
+    assert response_status(messages) == 413
+    assert sum(message["type"] == "http.response.start" for message in messages) == 1
+    assert receive_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_upload_guard_never_sends_second_start_if_limit_is_exceeded_late() -> None:
+    settings = Settings(_env_file=None, max_upload_bytes=4, upload_multipart_overhead_bytes=8)
+    token = create_access_token(user_id=uuid4(), role="user", settings=settings)
+    sent: list[dict[str, object]] = []
+
+    async def invalid_downstream(_scope, receive, send) -> None:
+        await send({"type": "http.response.start", "status": 202, "headers": []})
+        try:
+            while True:
+                message = await receive()
+                if not message.get("more_body", False):
+                    break
+        except Exception:
+            await send({"type": "http.response.body", "body": b"must-be-suppressed"})
+
+    with pytest.raises(RuntimeError, match="响应开始后请求体才超过限制"):
+        await invoke_asgi(
+            UploadGuardMiddleware(invalid_downstream, settings=settings),
+            path=upload_path(),
+            headers=[(b"authorization", f"Bearer {token}".encode())],
+            messages=[
+                {"type": "http.request", "body": b"x" * 8, "more_body": True},
+                {"type": "http.request", "body": b"x" * 5, "more_body": False},
+            ],
+            sent_messages=sent,
+        )
+
+    assert [message["type"] for message in sent] == ["http.response.start"]
+    assert response_status(sent) == 202
+
+
+@pytest.mark.asyncio
+async def test_upload_guard_does_not_swallow_unrelated_downstream_exception() -> None:
+    settings = Settings(_env_file=None)
+    token = create_access_token(user_id=uuid4(), role="user", settings=settings)
+
+    async def downstream(_scope, _receive, _send) -> None:
+        raise ValueError("unrelated downstream failure")
+
+    with pytest.raises(ValueError, match="unrelated downstream failure"):
+        await invoke_asgi(
+            UploadGuardMiddleware(downstream, settings=settings),
+            path=upload_path(),
+            headers=[(b"authorization", f"Bearer {token}".encode())],
+            messages=[{"type": "http.disconnect"}],
+        )
 
 
 @pytest.mark.asyncio
