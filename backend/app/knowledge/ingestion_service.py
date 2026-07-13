@@ -50,9 +50,7 @@ class IngestionService:
                     code="DOCUMENT_CONTENT_EMPTY", message="文档没有可入库的内容。", status_code=422
                 )
 
-            await self._update_stage(
-                document, job, document_status="embedding", job_stage="embed"
-            )
+            await self._update_stage(document, job, document_status="embedding", job_stage="embed")
             embeddings = await self._embedding_provider.embed_documents(
                 [chunk.content for chunk in chunks]
             )
@@ -114,9 +112,7 @@ class IngestionService:
             job.started_at = datetime.now(UTC)
         await self._session.commit()
 
-    def _validate_embeddings(
-        self, *, chunks_count: int, embeddings: list[list[float]]
-    ) -> None:
+    def _validate_embeddings(self, *, chunks_count: int, embeddings: list[list[float]]) -> None:
         if len(embeddings) != chunks_count or any(
             len(embedding) != self._embedding_dimensions for embedding in embeddings
         ):
