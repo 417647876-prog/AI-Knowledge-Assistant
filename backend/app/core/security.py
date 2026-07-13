@@ -76,9 +76,23 @@ def decode_access_token(
             algorithms=[settings.jwt_algorithm],
             issuer=settings.jwt_issuer,
             audience=settings.jwt_audience,
-            options={"require": ["sub", "role", "jti", "exp"], "verify_exp": False},
+            options={
+                "require": ["sub", "role", "jti", "iat", "exp"],
+                "verify_exp": False,
+                "verify_iat": False,
+            },
         )
+        if (
+            not isinstance(payload["iat"], int)
+            or isinstance(payload["iat"], bool)
+            or not isinstance(payload["exp"], int)
+            or isinstance(payload["exp"], bool)
+        ):
+            raise TokenValidationError("TOKEN_INVALID")
+        issued_at = datetime.fromtimestamp(payload["iat"], tz=UTC)
         expires_at = datetime.fromtimestamp(payload["exp"], tz=UTC)
+        if issued_at > current_time or issued_at >= expires_at:
+            raise TokenValidationError("TOKEN_INVALID")
         if current_time >= expires_at:
             raise TokenValidationError("TOKEN_EXPIRED")
         return AccessTokenClaims(
@@ -89,7 +103,7 @@ def decode_access_token(
         )
     except TokenValidationError:
         raise
-    except (InvalidTokenError, KeyError, TypeError, ValueError) as exc:
+    except (InvalidTokenError, KeyError, TypeError, ValueError, OverflowError, OSError) as exc:
         raise TokenValidationError("TOKEN_INVALID") from exc
 
 
