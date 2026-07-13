@@ -281,16 +281,28 @@ describe('AdminUsersView', () => {
   it('重置密码过短时显示清晰提示且不发请求', async () => {
     const { wrapper, store } = mountView()
     await wrapper.get('[data-test="reset-mobile-u-1"]').trigger('click')
-    await wrapper.get('[data-test="reset-password"]').setValue('too-short')
+    await wrapper.get('[data-test="reset-password"]').setValue('12345')
 
     await wrapper.get('[data-test="submit-reset"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.get('[data-test="reset-password-error"]').text()).toContain(
-      '密码长度需为 12–128 个字符。',
+      '密码长度需为 6–128 个字符。',
     )
     expect(elementMocks.confirm).not.toHaveBeenCalled()
     expect(store.resetPassword).not.toHaveBeenCalled()
+  })
+
+  it('重置密码允许六位密码', async () => {
+    const { wrapper, store } = mountView()
+    await wrapper.get('[data-test="reset-mobile-u-1"]').trigger('click')
+    await wrapper.get('[data-test="reset-password"]').setValue('123456')
+
+    await wrapper.get('[data-test="submit-reset"]').trigger('click')
+    await flushPromises()
+
+    expect(elementMocks.confirm).toHaveBeenCalled()
+    expect(store.resetPassword).toHaveBeenCalledWith('u-1', '123456')
   })
 
   it('重置密码失败时在弹窗显示后端错误', async () => {

@@ -472,7 +472,7 @@ Expected: FAIL，原因是管理员路由和初始化命令不存在。
 ```python
 class AdminUserCreate(BaseModel):
     username: Annotated[str, StringConstraints(min_length=3, max_length=50, pattern=r"^[A-Za-z0-9._-]+$")]
-    password: Annotated[str, StringConstraints(min_length=12, max_length=128)]
+    password: Annotated[str, StringConstraints(min_length=6, max_length=128)]
     role: Literal["admin", "user"]
 
 
@@ -482,7 +482,7 @@ class AdminUserUpdate(BaseModel):
 
 
 class AdminPasswordReset(BaseModel):
-    password: Annotated[str, StringConstraints(min_length=12, max_length=128)]
+    password: Annotated[str, StringConstraints(min_length=6, max_length=128)]
 ```
 
 管理员列表响应固定增加审计时间：

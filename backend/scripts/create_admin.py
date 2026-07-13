@@ -29,8 +29,8 @@ def read_initial_password(
         confirmation = password_prompt("再次输入管理员密码：")
         if password != confirmation:
             raise RuntimeError("两次输入的密码不一致。")
-    if not 12 <= len(password) <= 128:
-        raise RuntimeError("密码长度必须在 12 到 128 个字符之间。")
+    if not 6 <= len(password) <= 128:
+        raise RuntimeError("密码长度必须在 6 到 128 个字符之间。")
     return password
 
 

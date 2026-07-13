@@ -206,7 +206,7 @@ async def test_admin_password_hashing_does_not_block_event_loop(
             {"username": "invalid name", "password": "temporary pass 123", "role": "user"},
             "username",
         ),
-        ({"username": "valid-name", "password": "too-short", "role": "user"}, "password"),
+        ({"username": "valid-name", "password": "12345", "role": "user"}, "password"),
         (
             {"username": "valid-name", "password": "temporary pass 123", "role": "owner"},
             "role",

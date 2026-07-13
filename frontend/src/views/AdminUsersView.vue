@@ -33,8 +33,8 @@ function validateUsername(username: string): string | null {
 }
 
 function validatePassword(password: string): string | null {
-  return password.length < 12 || password.length > 128
-    ? '密码长度需为 12–128 个字符。'
+  return password.length < 6 || password.length > 128
+    ? '密码长度需为 6–128 个字符。'
     : null
 }
 

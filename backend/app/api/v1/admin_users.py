@@ -30,7 +30,7 @@ class AdminUserCreate(BaseModel):
             pattern=r"^[A-Za-z0-9._-]+$",
         ),
     ]
-    password: Annotated[str, StringConstraints(min_length=12, max_length=128)]
+    password: Annotated[str, StringConstraints(min_length=6, max_length=128)]
     role: Literal["admin", "user"]
 
     @field_validator("username", mode="before")
@@ -47,7 +47,7 @@ class AdminUserUpdate(BaseModel):
 
 
 class AdminPasswordReset(BaseModel):
-    password: Annotated[str, StringConstraints(min_length=12, max_length=128)]
+    password: Annotated[str, StringConstraints(min_length=6, max_length=128)]
 
 
 class AdminUserResponse(CurrentUserResponse):

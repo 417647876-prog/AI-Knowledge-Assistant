@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from app.api.v1.admin_users import AdminPasswordReset, AdminUserCreate
 from app.db.models import ADMIN_ROLE, User
 from scripts.create_admin import (
     create_admin_in_session,
@@ -22,6 +23,18 @@ def test_environment_password_takes_priority_without_prompting() -> None:
     )
 
     assert password == "environment secret 123"
+
+
+def test_initial_admin_accepts_a_six_character_password() -> None:
+    assert read_initial_password(environ={"INITIAL_ADMIN_PASSWORD": "123456"}) == "123456"
+
+
+def test_admin_user_password_models_accept_a_six_character_password() -> None:
+    created = AdminUserCreate(username="reader", password="123456", role="user")
+    reset = AdminPasswordReset(password="123456")
+
+    assert created.password == "123456"
+    assert reset.password == "123456"
 
 
 def test_interactive_password_requires_two_matching_entries() -> None:
