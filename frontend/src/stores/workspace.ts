@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { pollDocumentStatus, uploadDocument } from '../api/documents'
 import { createKnowledgeBase as createRequest, listKnowledgeBases } from '../api/knowledgeBases'
+import { askQuestion } from '../api/questions'
 import type { CreateKnowledgeBaseInput } from '../api/knowledgeBases'
 import type { DocumentTask, KnowledgeBase, QuestionResponse } from '../types/api'
 
@@ -10,6 +11,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const activeKnowledgeBaseId = ref<string | null>(null)
   const documents = ref<Record<string, DocumentTask[]>>({})
   const answer = ref<QuestionResponse | null>(null)
+  const asking = ref(false)
   const loadingKnowledgeBases = ref(false)
   const activeKnowledgeBase = computed(() =>
     knowledgeBases.value.find((item) => item.id === activeKnowledgeBaseId.value) ?? null)
@@ -48,9 +50,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return finished
   }
 
+  async function submitQuestion(question: string) {
+    if (!activeKnowledgeBaseId.value) throw new Error('请先选择知识库。')
+    asking.value = true
+    try {
+      answer.value = await askQuestion(activeKnowledgeBaseId.value, question.trim(), 5)
+      return answer.value
+    } finally { asking.value = false }
+  }
+
   return {
-    knowledgeBases, activeKnowledgeBaseId, documents, answer, loadingKnowledgeBases,
+    knowledgeBases, activeKnowledgeBaseId, documents, answer, asking, loadingKnowledgeBases,
     activeKnowledgeBase, activeDocuments, loadKnowledgeBases, createKnowledgeBase,
-    selectKnowledgeBase, uploadAndTrackDocument,
+    selectKnowledgeBase, uploadAndTrackDocument, submitQuestion,
   }
 })

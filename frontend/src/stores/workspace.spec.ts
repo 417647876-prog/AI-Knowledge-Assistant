@@ -7,9 +7,11 @@ vi.mock('../api/knowledgeBases', () => ({
 vi.mock('../api/documents', () => ({
   uploadDocument: vi.fn(), pollDocumentStatus: vi.fn(),
 }))
+vi.mock('../api/questions', () => ({ askQuestion: vi.fn() }))
 
 import { createKnowledgeBase, listKnowledgeBases } from '../api/knowledgeBases'
 import { pollDocumentStatus, uploadDocument } from '../api/documents'
+import { askQuestion } from '../api/questions'
 import { useWorkspaceStore } from './workspace'
 
 describe('workspace knowledge bases', () => {
@@ -49,5 +51,31 @@ describe('workspace knowledge bases', () => {
     expect(store.activeDocuments[0]).toMatchObject({
       status: 'ready', file_name: '制度.txt',
     })
+  })
+
+  it('保存问答结果并在完成后清除加载状态', async () => {
+    const result = {
+      answer: '员工有 5 天年假。[1]', citations: [],
+      retrieved_chunk_count: 1, request_id: 'req-1',
+    }
+    vi.mocked(askQuestion).mockResolvedValue(result)
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+
+    await store.submitQuestion('  有多少天年假？  ')
+
+    expect(askQuestion).toHaveBeenCalledWith('kb-1', '有多少天年假？', 5)
+    expect(store.answer).toEqual(result)
+    expect(store.asking).toBe(false)
+  })
+
+  it('问答失败时也会清除加载状态', async () => {
+    vi.mocked(askQuestion).mockRejectedValue(new Error('服务异常'))
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+
+    await expect(store.submitQuestion('问题')).rejects.toThrow('服务异常')
+
+    expect(store.asking).toBe(false)
   })
 })
