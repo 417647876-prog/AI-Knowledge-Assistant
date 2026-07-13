@@ -1,0 +1,227 @@
+# 阶段 1C：文本切片与向量入库实施计划
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 将阶段 1B 保存的文档自动处理为带来源信息和 1536 维向量的 `DocumentChunk`。
+
+**Architecture:** `IngestionService` 编排解析、清洗、切片、Embedding 和事务写入；各组件通过小接口隔离。上传 API 只负责落盘和排队，后台任务使用独立数据库会话执行服务。
+
+**Tech Stack:** Python 3.12、FastAPI BackgroundTasks、SQLAlchemy 2 AsyncSession、PostgreSQL 16、pgvector、httpx、pytest。
+
+## Global Constraints
+
+- 默认 `chunk_size=800`、`chunk_overlap=120`，且 `0 <= overlap < size`。
+- 分隔符优先级：段落、换行、中文句号/问号/叹号/分号/逗号/顿号、空格、字符兜底。
+- 默认使用确定性 Fake Provider；只有 `EMBEDDING_PROVIDER=openai` 时访问真实接口。
+- 向量数量必须等于切片数量，每个向量必须为 1536 维。
+- 不同 `ParsedSection` 之间不重叠；来源元数据不得丢失。
+- 全部切片在一个事务中写入；失败不得留下部分数据。
+- 本阶段不实现检索、Chat、Prompt 或问答 API。
+
+---
+
+### Task 1：强类型配置与文本清洗
+
+**Files:**
+- Modify: `backend/app/core/config.py`
+- Modify: `backend/.env.example`
+- Create: `backend/app/knowledge/cleaning.py`
+- Test: `backend/tests/unit/test_text_cleaning.py`
+- Test: `backend/tests/unit/test_config.py`
+
+**Interfaces:**
+- Produces: `clean_text(text: str) -> str`。
+- Produces: `Settings.chunk_size`、`chunk_overlap`、`embedding_provider`、`embedding_base_url`、`embedding_api_key`、`embedding_model`、`embedding_batch_size`。
+
+- [ ] **Step 1: 写失败测试**
+
+```python
+def test_clean_text_normalizes_lines_without_changing_meaning() -> None:
+    assert clean_text("  第一行\r\n\r\n\r\n 第二行  ") == "第一行\n\n第二行"
+
+def test_settings_reject_overlap_not_smaller_than_chunk_size() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, chunk_size=100, chunk_overlap=100)
+```
+
+- [ ] **Step 2: 验证 RED**
+
+Run: `uv run pytest tests/unit/test_text_cleaning.py tests/unit/test_config.py -v`
+Expected: 因 `clean_text` 或新配置缺失失败。
+
+- [ ] **Step 3: 最小实现**
+
+`clean_text` 统一换行、逐行 `strip()`、将三个及以上连续换行压为两个，并对整体 `strip()`。使用 Pydantic `model_validator(mode="after")` 校验重叠参数。
+
+- [ ] **Step 4: 验证 GREEN 并提交**
+
+Run: `uv run pytest tests/unit/test_text_cleaning.py tests/unit/test_config.py -v`
+
+Commit: `feat: 添加文本清洗与入库配置`
+
+### Task 2：中文递归字符切片
+
+**Files:**
+- Create: `backend/app/knowledge/chunking.py`
+- Test: `backend/tests/unit/test_chunking.py`
+
+**Interfaces:**
+- Consumes: `ParsedSection`、`clean_text()`、`chunk_size`、`chunk_overlap`。
+- Produces: `TextChunk(content, chunk_index, content_hash, start_index, source fields)`。
+- Produces: `RecursiveTextChunker.split(sections: list[ParsedSection]) -> list[TextChunk]`。
+
+- [ ] **Step 1: 写失败测试**
+
+```python
+def test_chunker_preserves_source_and_limits_length() -> None:
+    section = ParsedSection(text="第一句。第二句。第三句。", page_number=3)
+    chunks = RecursiveTextChunker(chunk_size=8, chunk_overlap=2).split([section])
+    assert all(len(chunk.content) <= 8 for chunk in chunks)
+    assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
+    assert all(chunk.page_number == 3 for chunk in chunks)
+```
+
+增加测试覆盖重叠、空段落过滤、不同 section 不重叠、哈希与 `start_index`。
+
+- [ ] **Step 2: 验证 RED**
+
+Run: `uv run pytest tests/unit/test_chunking.py -v`
+Expected: 因 `app.knowledge.chunking` 缺失失败。
+
+- [ ] **Step 3: 最小实现**
+
+实现不可变 `TextChunk` 与 `RecursiveTextChunker`。先按优先级寻找 `chunk_size` 内最靠后的分隔符；无分隔符时硬切。下一块从 `end - chunk_overlap` 开始，并保证游标始终前进。
+
+- [ ] **Step 4: 验证 GREEN 并提交**
+
+Run: `uv run pytest tests/unit/test_chunking.py -v`
+
+Commit: `feat: 添加中文递归文本切片`
+
+### Task 3：EmbeddingProvider 与实现
+
+**Files:**
+- Create: `backend/app/ai/__init__.py`
+- Create: `backend/app/ai/contracts.py`
+- Create: `backend/app/ai/embeddings.py`
+- Test: `backend/tests/unit/test_embedding_providers.py`
+
+**Interfaces:**
+- Produces: `EmbeddingProvider.embed_documents(texts) -> list[list[float]]`。
+- Produces: `FakeEmbeddingProvider(dimensions=1536)`。
+- Produces: `OpenAICompatibleEmbeddingProvider(client, model, dimensions, batch_size)`。
+- Produces: `validate_embeddings(texts, embeddings, dimensions)`。
+
+- [ ] **Step 1: 写失败测试**
+
+```python
+@pytest.mark.asyncio
+async def test_fake_embeddings_are_deterministic_and_1536_dimensions() -> None:
+    provider = FakeEmbeddingProvider(dimensions=1536)
+    first = await provider.embed_documents(["同一段文字"])
+    second = await provider.embed_documents(["同一段文字"])
+    assert first == second
+    assert len(first[0]) == 1536
+```
+
+增加数量不匹配、维度不匹配以及用 `httpx.MockTransport` 验证 OpenAI 请求/响应的测试。
+
+- [ ] **Step 2: 验证 RED**
+
+Run: `uv run pytest tests/unit/test_embedding_providers.py -v`
+Expected: 因 `app.ai` 缺失失败。
+
+- [ ] **Step 3: 最小实现**
+
+Fake Provider 使用 SHA-256 字节循环生成稳定浮点数。真实 Provider 按批调用 `{base_url}/embeddings`，发送 `input`、`model`、`dimensions`，按响应 `index` 排序并统一校验；网络和协议异常转换为 `AppError(code="EMBEDDING_PROVIDER_ERROR", status_code=502)`。
+
+- [ ] **Step 4: 验证 GREEN 并提交**
+
+Run: `uv run pytest tests/unit/test_embedding_providers.py -v`
+
+Commit: `feat: 添加 Embedding Provider`
+
+### Task 4：文档入库服务与事务状态
+
+**Files:**
+- Create: `backend/app/knowledge/ingestion_service.py`
+- Create: `backend/app/knowledge/parser_factory.py`
+- Test: `backend/tests/unit/test_ingestion_service.py`
+- Test: `backend/tests/integration/test_vector_ingestion.py`
+
+**Interfaces:**
+- Consumes: `AsyncSession`、`ParserRegistry`、`RecursiveTextChunker`、`EmbeddingProvider`。
+- Produces: `IngestionService.process(document_id: UUID) -> None`。
+
+- [ ] **Step 1: 写失败测试**
+
+单元测试使用临时 TXT、Fake Provider 和测试会话，验证解析器选择、状态顺序、Embedding 数量/维度异常映射。集成测试创建知识库、文档和任务，调用 `process()` 后断言：
+
+```python
+assert document.status == "ready"
+assert job.status == "succeeded"
+assert job.chunk_count == len(saved_chunks)
+assert all(len(chunk.embedding) == 1536 for chunk in saved_chunks)
+```
+
+- [ ] **Step 2: 验证 RED**
+
+Run: `uv run pytest tests/unit/test_ingestion_service.py -v`
+Expected: 因 `IngestionService` 缺失失败。
+
+- [ ] **Step 3: 最小实现**
+
+按设计状态流执行；解析/Embedding 在最终写入前完成。最终事务先删除旧切片，再写全部 `DocumentChunk` 并更新文档/任务。异常时先回滚，再在独立事务将文档和任务标记为 `failed`。
+
+- [ ] **Step 4: 验证 GREEN 并提交**
+
+Run: `uv run pytest tests/unit/test_ingestion_service.py -v`
+
+Run: `$env:RUN_DATABASE_TESTS='1'; uv run pytest tests/integration/test_vector_ingestion.py -v`
+
+Commit: `feat: 添加事务性向量入库服务`
+
+### Task 5：上传后台任务与阶段验收
+
+**Files:**
+- Modify: `backend/app/api/v1/documents.py`
+- Modify: `backend/app/api/dependencies.py`
+- Test: `backend/tests/integration/test_document_ingestion_api.py`
+- Modify: `README.md`
+- Modify: `docs/学习笔记.md`
+
+**Interfaces:**
+- Produces: 上传成功后排队执行 `run_ingestion(document_id)`。
+- Produces: 文档状态从 `pending` 最终变为 `ready` 或 `failed`。
+
+- [ ] **Step 1: 写失败 API 测试**
+
+上传 TXT 后轮询 `GET /api/v1/documents/{id}`，断言最终 `ready`；查询数据库断言至少一个切片、向量维度 1536。上传空白 TXT 后断言最终 `failed` 且无切片。
+
+- [ ] **Step 2: 验证 RED**
+
+Run: `$env:RUN_DATABASE_TESTS='1'; uv run pytest tests/integration/test_document_ingestion_api.py -v`
+Expected: 文档停留在 `pending`。
+
+- [ ] **Step 3: 最小实现**
+
+上传端点注入 `BackgroundTasks`，提交文档后调用 `background_tasks.add_task(run_ingestion, document.id)`。`run_ingestion` 使用 `session_factory()` 创建独立会话、根据 Settings 构造组件并调用服务。
+
+- [ ] **Step 4: 全量验收**
+
+Run:
+
+```powershell
+$env:DATABASE_URL='postgresql+psycopg://knowledge:knowledge@localhost:5432/knowledge'
+$env:RUN_DATABASE_TESTS='1'
+uv run pytest -v
+uv run ruff check app tests migrations
+uv run ruff format --check app tests migrations
+uv run alembic check
+```
+
+Expected: 全部测试通过、静态检查通过、Alembic 无结构漂移。
+
+- [ ] **Step 5: 提交**
+
+Commit: `feat: 完成文档后台向量入库`
