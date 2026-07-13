@@ -36,6 +36,25 @@ describe('admin users store', () => {
     expect(store.error).toBeNull()
   })
 
+  it('列表加载失败后保留原列表并恢复 loading、记录错误', async () => {
+    const failure = new Error('load failed')
+    let rejectLoad!: (error: Error) => void
+    vi.mocked(listAdminUsers).mockReturnValue(new Promise((_resolve, reject) => {
+      rejectLoad = reject
+    }))
+    const store = useAdminUsersStore()
+    store.users = [alice]
+
+    const loading = store.loadUsers()
+    expect(store.loading).toBe(true)
+    rejectLoad(failure)
+    await expect(loading).rejects.toBe(failure)
+
+    expect(store.users).toEqual([alice])
+    expect(store.loading).toBe(false)
+    expect(store.error).toBe(failure)
+  })
+
   it('创建成功后把新用户加入当前列表且不重复拉取', async () => {
     const bob = { ...alice, id: 'u-2', username: 'bob' }
     vi.mocked(createAdminUser).mockResolvedValue(bob)
@@ -57,6 +76,19 @@ describe('admin users store', () => {
     await store.createUser({ username: 'aaron', password: 'temporary pass 123', role: 'user' })
 
     expect(store.users.map((user) => user.username)).toEqual(['aaron', 'alice'])
+  })
+
+  it('mutation API 拒绝后列表保持不变', async () => {
+    const failure = new Error('create failed')
+    vi.mocked(createAdminUser).mockRejectedValue(failure)
+    const store = useAdminUsersStore()
+    store.users = [alice]
+
+    await expect(store.createUser({
+      username: 'bob', password: 'temporary pass 123', role: 'user',
+    })).rejects.toBe(failure)
+
+    expect(store.users).toEqual([alice])
   })
 
   it('修改成功后只替换目标用户且保留列表其他项', async () => {

@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElDialog } from 'element-plus'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type { AdminUser } from '../types/api'
@@ -29,12 +29,14 @@ const alice: AdminUser = {
 
 const mountedWrappers: ReturnType<typeof mount>[] = []
 
-function mountView() {
+function mountView(loadUsers?: (store: ReturnType<typeof useAdminUsersStore>) => Promise<void>) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const store = useAdminUsersStore()
   store.users = [alice]
-  vi.spyOn(store, 'loadUsers').mockResolvedValue()
+  const loadSpy = vi.spyOn(store, 'loadUsers')
+  if (loadUsers) loadSpy.mockImplementation(() => loadUsers(store))
+  else loadSpy.mockResolvedValue()
   vi.spyOn(store, 'createUser').mockResolvedValue(alice)
   vi.spyOn(store, 'updateUser').mockResolvedValue(alice)
   vi.spyOn(store, 'resetPassword').mockResolvedValue(alice)
@@ -78,7 +80,7 @@ describe('AdminUsersView', () => {
     expect(store.createUser).toHaveBeenCalledWith({
       username: 'bob', password: 'temporary pass 123', role: 'user',
     })
-    expect(document.body.textContent).not.toContain('temporary pass 123')
+    expect((wrapper.get('[data-test="password"]').element as HTMLInputElement).value).toBe('')
     expect(elementMocks.success).toHaveBeenCalledWith('用户创建成功。')
   })
 
@@ -104,6 +106,43 @@ describe('AdminUsersView', () => {
     expect(store.createUser).toHaveBeenCalledOnce()
   })
 
+  it('初始加载完成前禁用所有 mutation，完成后创建结果不会被旧列表覆盖', async () => {
+    let resolveLoad!: () => void
+    const { wrapper, store } = mountView((currentStore) => {
+      currentStore.loading = true
+      return new Promise<void>((resolve) => {
+        resolveLoad = () => {
+          currentStore.loading = false
+          resolve()
+        }
+      })
+    })
+    vi.mocked(store.createUser).mockImplementation(async () => {
+      const bob = { ...alice, id: 'u-2', username: 'bob' }
+      store.users.push(bob)
+      return bob
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="create-user"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="role-mobile-u-1"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="status-mobile-u-1"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="reset-mobile-u-1"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="create-user"]').trigger('click')
+    expect(wrapper.find('[data-test="username"]').exists()).toBe(false)
+
+    resolveLoad()
+    await flushPromises()
+    await wrapper.get('[data-test="create-user"]').trigger('click')
+    await wrapper.get('[data-test="username"]').setValue('bob')
+    await wrapper.get('[data-test="password"]').setValue('temporary pass 123')
+    await wrapper.get('[data-test="submit-user"]').trigger('click')
+    await flushPromises()
+
+    expect(store.createUser).toHaveBeenCalledOnce()
+    expect(wrapper.text()).toContain('bob')
+  })
+
   it('创建输入不符合后端边界时显示清晰提示且不发请求', async () => {
     const { wrapper, store } = mountView()
     await wrapper.get('[data-test="create-user"]').trigger('click')
@@ -118,6 +157,64 @@ describe('AdminUsersView', () => {
     )
     expect(elementMocks.confirm).not.toHaveBeenCalled()
     expect(store.createUser).not.toHaveBeenCalled()
+  })
+
+  it('创建失败时在弹窗显示后端错误', async () => {
+    const { wrapper, store } = mountView()
+    vi.mocked(store.createUser).mockRejectedValue(new ApiError(
+      409, 'USERNAME_ALREADY_EXISTS', '用户名已存在。', 'req-create-1',
+    ))
+    await wrapper.get('[data-test="create-user"]').trigger('click')
+    await wrapper.get('[data-test="username"]').setValue('alice')
+    await wrapper.get('[data-test="password"]').setValue('temporary pass 123')
+
+    await wrapper.get('[data-test="submit-user"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="create-user-error"]').text()).toContain(
+      '用户名已存在。 [USERNAME_ALREADY_EXISTS] 请求标识：req-create-1',
+    )
+  })
+
+  it('创建确认取消时不调用 API', async () => {
+    const { wrapper, store } = mountView()
+    elementMocks.confirm.mockRejectedValueOnce('cancel')
+    await wrapper.get('[data-test="create-user"]').trigger('click')
+    await wrapper.get('[data-test="username"]').setValue('bob')
+    await wrapper.get('[data-test="password"]').setValue('temporary pass 123')
+
+    await wrapper.get('[data-test="submit-user"]').trigger('click')
+    await flushPromises()
+
+    expect(store.createUser).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="create-user-error"]').exists()).toBe(false)
+  })
+
+  it('创建弹窗关闭后统一清空表单，重新打开不恢复密码', async () => {
+    const { wrapper } = mountView()
+    await wrapper.get('[data-test="create-user"]').trigger('click')
+    const password = wrapper.get('[data-test="password"]')
+    await wrapper.get('[data-test="username"]').setValue('bob')
+    await password.setValue('temporary pass 123')
+
+    await wrapper.get('[data-test="cancel-create"]').trigger('click')
+    await flushPromises()
+    expect((password.element as HTMLInputElement).value).toBe('')
+
+    await wrapper.get('[data-test="create-user"]').trigger('click')
+    expect((wrapper.get('[data-test="password"]').element as HTMLInputElement).value).toBe('')
+  })
+
+  it('通过弹窗 X 关闭创建表单时也清空密码', async () => {
+    const { wrapper } = mountView()
+    await wrapper.get('[data-test="create-user"]').trigger('click')
+    const password = wrapper.get('[data-test="password"]')
+    await password.setValue('temporary pass 123')
+
+    wrapper.findAllComponents(ElDialog)[0]!.vm.$emit('update:modelValue', false)
+    await flushPromises()
+
+    expect((password.element as HTMLInputElement).value).toBe('')
   })
 
   it('确认后切换角色和停用用户', async () => {
@@ -143,7 +240,7 @@ describe('AdminUsersView', () => {
     await flushPromises()
 
     expect(store.resetPassword).toHaveBeenCalledWith('u-1', 'replacement pass 123')
-    expect(document.body.textContent).not.toContain('replacement pass 123')
+    expect((password.element as HTMLInputElement).value).toBe('')
     expect(elementMocks.success).toHaveBeenCalledWith('密码重置成功。')
   })
 
@@ -160,6 +257,36 @@ describe('AdminUsersView', () => {
     )
     expect(elementMocks.confirm).not.toHaveBeenCalled()
     expect(store.resetPassword).not.toHaveBeenCalled()
+  })
+
+  it('重置密码失败时在弹窗显示后端错误', async () => {
+    const { wrapper, store } = mountView()
+    vi.mocked(store.resetPassword).mockRejectedValue(new ApiError(
+      404, 'USER_NOT_FOUND', '用户不存在。', 'req-reset-1',
+    ))
+    await wrapper.get('[data-test="reset-mobile-u-1"]').trigger('click')
+    await wrapper.get('[data-test="reset-password"]').setValue('replacement pass 123')
+
+    await wrapper.get('[data-test="submit-reset"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="reset-password-error"]').text()).toContain(
+      '用户不存在。 [USER_NOT_FOUND] 请求标识：req-reset-1',
+    )
+  })
+
+  it('重置密码弹窗关闭后清空密码，重新打开不恢复', async () => {
+    const { wrapper } = mountView()
+    await wrapper.get('[data-test="reset-mobile-u-1"]').trigger('click')
+    const password = wrapper.get('[data-test="reset-password"]')
+    await password.setValue('replacement pass 123')
+
+    await wrapper.get('[data-test="cancel-reset"]').trigger('click')
+    await flushPromises()
+    expect((password.element as HTMLInputElement).value).toBe('')
+
+    await wrapper.get('[data-test="reset-mobile-u-1"]').trigger('click')
+    expect((wrapper.get('[data-test="reset-password"]').element as HTMLInputElement).value).toBe('')
   })
 
   it.each([

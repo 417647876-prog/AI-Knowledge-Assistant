@@ -69,10 +69,29 @@ describe('admin users API', () => {
       role: 'admin', is_active: true,
     })
     expect(fetchMock.mock.calls[1]![0]).toBe('/api/v1/admin/users/u-1/reset-password')
+    expect(fetchMock.mock.calls[1]![1]).toMatchObject({ method: 'POST' })
     expect(JSON.parse(fetchMock.mock.calls[1]![1].body as string)).toEqual({
       password: 'replacement pass 123',
     })
     expect(updated).not.toHaveProperty('password')
     expect(reset).not.toHaveProperty('password')
+  })
+
+  it.each([403, 404, 409])('原样传递 %i 错误信封', async (status) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: {
+        code: `ADMIN_ERROR_${status}`,
+        message: `管理员请求失败 ${status}。`,
+        request_id: `req-${status}`,
+      },
+    }), { status, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(listAdminUsers()).rejects.toMatchObject({
+      status,
+      code: `ADMIN_ERROR_${status}`,
+      message: `管理员请求失败 ${status}。`,
+      requestId: `req-${status}`,
+    })
   })
 })

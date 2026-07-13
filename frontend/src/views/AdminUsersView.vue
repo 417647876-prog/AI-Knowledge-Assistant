@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatApiError } from '../api/client'
 import { useAdminUsersStore } from '../stores/adminUsers'
@@ -39,8 +39,16 @@ function validatePassword(password: string): string | null {
 }
 
 function openCreate(): void {
+  if (store.loading) return
   pageError.value = null
   createVisible.value = true
+}
+
+function resetCreateForm(): void {
+  createForm.username = ''
+  createForm.password = ''
+  createForm.role = 'user'
+  pageError.value = null
 }
 
 async function submitCreate(): Promise<void> {
@@ -60,9 +68,6 @@ async function submitCreate(): Promise<void> {
       { confirmButtonText: '确认创建', cancelButtonText: '取消', type: 'warning' },
     )
     await store.createUser({ ...createForm, username: createForm.username.trim() })
-    createForm.username = ''
-    createForm.password = ''
-    createForm.role = 'user'
     createVisible.value = false
     ElMessage.success('用户创建成功。')
   } catch (error) {
@@ -73,7 +78,7 @@ async function submitCreate(): Promise<void> {
 }
 
 async function updateUser(user: AdminUser, input: { role?: UserRole; is_active?: boolean }) {
-  if (pendingUserIds.value.has(user.id)) return
+  if (store.loading || pendingUserIds.value.has(user.id)) return
   const description = input.role
     ? `确认将“${user.username}”设为${input.role === 'admin' ? '管理员' : '普通用户'}吗？`
     : `确认${input.is_active ? '启用' : '停用'}用户“${user.username}”吗？`
@@ -93,12 +98,28 @@ async function updateUser(user: AdminUser, input: { role?: UserRole; is_active?:
 }
 
 function openReset(user: AdminUser): void {
+  if (store.loading) return
   pageError.value = null
   resetForm.userId = user.id
   resetForm.username = user.username
   resetForm.password = ''
   resetVisible.value = true
 }
+
+function resetPasswordForm(): void {
+  resetForm.userId = ''
+  resetForm.username = ''
+  resetForm.password = ''
+  pageError.value = null
+}
+
+watch(createVisible, (visible) => {
+  if (!visible) resetCreateForm()
+}, { flush: 'sync' })
+
+watch(resetVisible, (visible) => {
+  if (!visible) resetPasswordForm()
+}, { flush: 'sync' })
 
 async function submitReset(): Promise<void> {
   if (submittingReset.value) return
@@ -116,7 +137,6 @@ async function submitReset(): Promise<void> {
       { confirmButtonText: '确认重置', cancelButtonText: '取消', type: 'warning' },
     )
     await store.resetPassword(resetForm.userId, resetForm.password)
-    resetForm.password = ''
     resetVisible.value = false
     ElMessage.success('密码重置成功。')
   } catch (error) {
@@ -139,7 +159,12 @@ onMounted(async () => {
           <h2>用户管理</h2>
           <p>创建账号、调整角色和状态，或重置用户密码。</p>
         </div>
-        <el-button data-test="create-user" type="primary" @click="openCreate">
+        <el-button
+          data-test="create-user"
+          type="primary"
+          :disabled="store.loading"
+          @click="openCreate"
+        >
           创建用户
         </el-button>
       </div>
@@ -175,6 +200,7 @@ onMounted(async () => {
               <div class="admin-user-actions">
                 <el-button
                   :data-test="`role-${row.id}`"
+                  :disabled="store.loading"
                   :loading="pendingUserIds.has(row.id)"
                   @click="updateUser(row, { role: row.role === 'admin' ? 'user' : 'admin' })"
                 >
@@ -182,12 +208,17 @@ onMounted(async () => {
                 </el-button>
                 <el-button
                   :data-test="`status-${row.id}`"
+                  :disabled="store.loading"
                   :loading="pendingUserIds.has(row.id)"
                   @click="updateUser(row, { is_active: !row.is_active })"
                 >
                   {{ row.is_active ? '停用' : '启用' }}
                 </el-button>
-                <el-button :data-test="`reset-${row.id}`" @click="openReset(row)">
+                <el-button
+                  :data-test="`reset-${row.id}`"
+                  :disabled="store.loading"
+                  @click="openReset(row)"
+                >
                   重置密码
                 </el-button>
               </div>
@@ -211,15 +242,21 @@ onMounted(async () => {
           <div class="admin-user-actions">
             <el-button
               :data-test="`role-mobile-${user.id}`"
+              :disabled="store.loading"
               :loading="pendingUserIds.has(user.id)"
               @click="updateUser(user, { role: user.role === 'admin' ? 'user' : 'admin' })"
             >切换角色</el-button>
             <el-button
               :data-test="`status-mobile-${user.id}`"
+              :disabled="store.loading"
               :loading="pendingUserIds.has(user.id)"
               @click="updateUser(user, { is_active: !user.is_active })"
             >{{ user.is_active ? '停用' : '启用' }}</el-button>
-            <el-button :data-test="`reset-mobile-${user.id}`" @click="openReset(user)">
+            <el-button
+              :data-test="`reset-mobile-${user.id}`"
+              :disabled="store.loading"
+              @click="openReset(user)"
+            >
               重置密码
             </el-button>
           </div>
@@ -227,7 +264,12 @@ onMounted(async () => {
       </div>
     </section>
 
-    <el-dialog v-model="createVisible" title="创建用户" width="min(92vw, 520px)">
+    <el-dialog
+      v-model="createVisible"
+      title="创建用户"
+      width="min(92vw, 520px)"
+      @close="resetCreateForm"
+    >
       <p v-if="pageError" data-test="create-user-error" class="admin-users-error">
         {{ pageError }}
       </p>
@@ -257,10 +299,20 @@ onMounted(async () => {
           type="primary"
           :loading="submittingCreate"
         >确认创建</el-button>
+        <el-button
+          data-test="cancel-create"
+          :disabled="submittingCreate"
+          @click="createVisible = false"
+        >取消</el-button>
       </el-form>
     </el-dialog>
 
-    <el-dialog v-model="resetVisible" title="重置密码" width="min(92vw, 520px)">
+    <el-dialog
+      v-model="resetVisible"
+      title="重置密码"
+      width="min(92vw, 520px)"
+      @close="resetPasswordForm"
+    >
       <p>为用户“{{ resetForm.username }}”设置新密码。</p>
       <p v-if="pageError" data-test="reset-password-error" class="admin-users-error">
         {{ pageError }}
@@ -282,6 +334,11 @@ onMounted(async () => {
           type="primary"
           :loading="submittingReset"
         >确认重置</el-button>
+        <el-button
+          data-test="cancel-reset"
+          :disabled="submittingReset"
+          @click="resetVisible = false"
+        >取消</el-button>
       </el-form>
     </el-dialog>
   </main>
