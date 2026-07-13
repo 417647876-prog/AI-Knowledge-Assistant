@@ -1,4 +1,7 @@
+import asyncio
 import hashlib
+from collections.abc import Callable
+from typing import Any
 
 import httpx
 
@@ -26,6 +29,9 @@ class FakeEmbeddingProvider:
         embeddings = [self._embed(text) for text in texts]
         validate_embeddings(texts, embeddings, dimensions=self._dimensions)
         return embeddings
+
+    async def embed_query(self, text: str) -> list[float]:
+        return (await self.embed_documents([text]))[0]
 
     def _embed(self, text: str) -> list[float]:
         digest = hashlib.sha256(text.encode("utf-8")).digest()
@@ -69,3 +75,70 @@ class OpenAICompatibleEmbeddingProvider:
             raise _provider_error("Embedding 服务暂不可用。") from error
         validate_embeddings(texts, embeddings, dimensions=self._dimensions)
         return embeddings
+
+    async def embed_query(self, text: str) -> list[float]:
+        return (await self.embed_documents([text]))[0]
+
+
+def _load_sentence_transformer(model_name: str, device: str) -> Any:
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(model_name, device=device)
+
+
+def _resolve_device(device: str) -> str:
+    if device != "auto":
+        return device
+    import torch
+
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+class LocalEmbeddingProvider:
+    def __init__(
+        self,
+        *,
+        model_name: str,
+        dimensions: int,
+        batch_size: int,
+        device: str,
+        model_factory: Callable[[str, str], Any] | None = None,
+    ) -> None:
+        self._model_name = model_name
+        self._dimensions = dimensions
+        self._batch_size = batch_size
+        self._device = device
+        self._model_factory = model_factory or _load_sentence_transformer
+        self._model: Any | None = None
+        self._model_lock = asyncio.Lock()
+
+    async def _get_model(self) -> Any:
+        if self._model is not None:
+            return self._model
+        async with self._model_lock:
+            if self._model is None:
+                device = await asyncio.to_thread(_resolve_device, self._device)
+                self._model = await asyncio.to_thread(
+                    self._model_factory, self._model_name, device
+                )
+        return self._model
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        model = await self._get_model()
+        result = await asyncio.to_thread(
+            model.encode,
+            texts,
+            batch_size=self._batch_size,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+        raw_embeddings = result.tolist() if hasattr(result, "tolist") else result
+        embeddings = [[float(value) for value in row] for row in raw_embeddings]
+        validate_embeddings(texts, embeddings, dimensions=self._dimensions)
+        return embeddings
+
+    async def embed_query(self, text: str) -> list[float]:
+        return (await self.embed_documents([text]))[0]

@@ -1,10 +1,15 @@
 import logging
+from functools import lru_cache
 from uuid import UUID
 
 import httpx
 
 from app.ai.contracts import EmbeddingProvider
-from app.ai.embeddings import FakeEmbeddingProvider, OpenAICompatibleEmbeddingProvider
+from app.ai.embeddings import (
+    FakeEmbeddingProvider,
+    LocalEmbeddingProvider,
+    OpenAICompatibleEmbeddingProvider,
+)
 from app.core.config import Settings, get_settings
 from app.db.session import session_factory
 from app.knowledge.chunking import RecursiveTextChunker
@@ -12,6 +17,18 @@ from app.knowledge.ingestion_service import IngestionService
 from app.knowledge.parser_factory import create_parser_registry
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=4)
+def _get_local_embedding_provider(
+    model_name: str, dimensions: int, batch_size: int, device: str
+) -> LocalEmbeddingProvider:
+    return LocalEmbeddingProvider(
+        model_name=model_name,
+        dimensions=dimensions,
+        batch_size=batch_size,
+        device=device,
+    )
 
 
 async def _process_with_provider(
@@ -38,6 +55,16 @@ async def run_ingestion(document_id: UUID) -> None:
         if settings.embedding_provider == "fake":
             provider: EmbeddingProvider = FakeEmbeddingProvider(
                 dimensions=settings.embedding_dimensions
+            )
+            await _process_with_provider(document_id, settings, provider)
+            return
+
+        if settings.embedding_provider == "local":
+            provider = _get_local_embedding_provider(
+                settings.embedding_model,
+                settings.embedding_dimensions,
+                settings.embedding_batch_size,
+                settings.embedding_device,
             )
             await _process_with_provider(document_id, settings, provider)
             return
