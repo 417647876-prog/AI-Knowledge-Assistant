@@ -7,11 +7,15 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth_dependencies import get_current_user
+from app.authorization.service import (
+    get_accessible_document,
+    get_accessible_knowledge_base,
+)
 from app.core.config import get_settings
 from app.core.exceptions import AppError
-from app.db.models.document import Document
+from app.db.models import Document, User
 from app.db.models.ingestion_job import IngestionJob
-from app.db.models.knowledge_base import KnowledgeBase
 from app.db.session import get_session
 from app.knowledge.background import run_ingestion
 
@@ -35,7 +39,9 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     file: Annotated[UploadFile, File()],
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> dict[str, str | None]:
+    await get_accessible_knowledge_base(session, current_user, knowledge_base_id)
     extension = Path(file.filename or "").suffix.lower()
     if extension not in _allowed_extensions:
         raise AppError(
@@ -47,8 +53,6 @@ async def upload_document(
         raise AppError(code="DOCUMENT_CONTENT_EMPTY", message="文档内容为空。", status_code=422)
     if len(content) > settings.max_upload_bytes:
         raise AppError(code="FILE_TOO_LARGE", message="文件超过 20 MB 限制。", status_code=413)
-    if await session.get(KnowledgeBase, knowledge_base_id) is None:
-        raise AppError(code="KNOWLEDGE_BASE_NOT_FOUND", message="知识库不存在。", status_code=404)
     file_hash = hashlib.sha256(content).hexdigest()
     duplicate = await session.scalar(
         select(Document.id).where(
@@ -82,11 +86,11 @@ async def upload_document(
 
 @router.get("/api/v1/documents/{document_id}")
 async def get_document(
-    document_id: UUID, session: Annotated[AsyncSession, Depends(get_session)]
+    document_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> dict[str, str | None]:
-    document = await session.get(Document, document_id)
-    if document is None:
-        raise AppError(code="DOCUMENT_NOT_FOUND", message="文档不存在。", status_code=404)
+    document = await get_accessible_document(session, current_user, document_id)
     job = await session.scalar(
         select(IngestionJob)
         .where(IngestionJob.document_id == document_id)
@@ -102,12 +106,9 @@ async def reprocess_document(
     document_id: UUID,
     background_tasks: BackgroundTasks,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> dict[str, str | None]:
-    document = await session.scalar(
-        select(Document).where(Document.id == document_id).with_for_update()
-    )
-    if document is None:
-        raise AppError(code="DOCUMENT_NOT_FOUND", message="文档不存在。", status_code=404)
+    document = await get_accessible_document(session, current_user, document_id, for_update=True)
     active_job = await session.scalar(
         select(IngestionJob.id).where(
             IngestionJob.document_id == document_id,

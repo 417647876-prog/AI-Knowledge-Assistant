@@ -1,11 +1,15 @@
 import os
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from uuid import uuid4
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.core.config import get_settings
+from app.core.security import create_access_token, hash_password
+from app.db.models import USER_ROLE, RefreshSession, User
 from app.db.models.document import Document
 from app.db.models.ingestion_job import IngestionJob
 from app.db.models.knowledge_base import KnowledgeBase
@@ -21,11 +25,48 @@ pytestmark = [
 ]
 
 
-async def _create_document(tmp_path, *, job_status: str) -> tuple[Document, IngestionJob]:
+@dataclass
+class ReprocessContext:
+    user: User
+    client: httpx.AsyncClient
+
+
+@pytest.fixture
+async def reprocess_context() -> AsyncIterator[ReprocessContext]:
+    user = User(
+        id=uuid4(),
+        username=f"reprocess_{uuid4().hex}",
+        password_hash=hash_password("correct horse battery"),
+        role=USER_ROLE,
+        is_active=True,
+    )
+    async with session_factory.begin() as session:
+        session.add(user)
+    token = create_access_token(user_id=user.id, role=user.role, settings=get_settings())
+    transport = httpx.ASGITransport(app=create_app())
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as client:
+        try:
+            yield ReprocessContext(user, client)
+        finally:
+            async with session_factory.begin() as session:
+                await session.execute(
+                    delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id)
+                )
+                await session.execute(
+                    delete(RefreshSession).where(RefreshSession.user_id == user.id)
+                )
+                await session.execute(delete(User).where(User.id == user.id))
+
+
+async def _create_document(tmp_path, owner_id, *, job_status: str) -> tuple[Document, IngestionJob]:
     stored_file_name = f"{uuid4()}.txt"
     (tmp_path / stored_file_name).write_text("员工入职满一年享受五天年假。", encoding="utf-8")
     async with session_factory() as session:
-        knowledge_base = KnowledgeBase(name=f"重处理测试-{uuid4()}")
+        knowledge_base = KnowledgeBase(name=f"重处理测试-{uuid4()}", owner_id=owner_id)
         session.add(knowledge_base)
         await session.flush()
         document = Document(
@@ -53,17 +94,19 @@ async def _create_document(tmp_path, *, job_status: str) -> tuple[Document, Inge
 
 
 @pytest.mark.asyncio
-async def test_reprocess_creates_new_job_and_reuses_ingestion_pipeline(tmp_path) -> None:
-    document, old_job = await _create_document(tmp_path, job_status="succeeded")
+async def test_reprocess_creates_new_job_and_reuses_ingestion_pipeline(
+    tmp_path, reprocess_context: ReprocessContext
+) -> None:
+    document, old_job = await _create_document(
+        tmp_path, reprocess_context.user.id, job_status="succeeded"
+    )
     settings = get_settings()
     previous_directory = settings.upload_directory
     previous_provider = settings.embedding_provider
     settings.upload_directory = tmp_path
     settings.embedding_provider = "fake"
     try:
-        transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            response = await client.post(f"/api/v1/documents/{document.id}/reprocess")
+        response = await reprocess_context.client.post(f"/api/v1/documents/{document.id}/reprocess")
     finally:
         settings.upload_directory = previous_directory
         settings.embedding_provider = previous_provider
@@ -85,12 +128,11 @@ async def test_reprocess_creates_new_job_and_reuses_ingestion_pipeline(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_reprocess_rejects_document_with_active_job(tmp_path) -> None:
-    document, _ = await _create_document(tmp_path, job_status="running")
-    transport = httpx.ASGITransport(app=create_app())
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post(f"/api/v1/documents/{document.id}/reprocess")
+async def test_reprocess_rejects_document_with_active_job(
+    tmp_path, reprocess_context: ReprocessContext
+) -> None:
+    document, _ = await _create_document(tmp_path, reprocess_context.user.id, job_status="running")
+    response = await reprocess_context.client.post(f"/api/v1/documents/{document.id}/reprocess")
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "DOCUMENT_PROCESSING"

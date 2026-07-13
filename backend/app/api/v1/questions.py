@@ -14,7 +14,10 @@ from app.ai.embeddings import (
     OpenAICompatibleEmbeddingProvider,
     get_local_embedding_provider,
 )
+from app.api.auth_dependencies import get_current_user
+from app.authorization.service import get_accessible_knowledge_base
 from app.core.config import Settings, get_settings
+from app.db.models import User
 from app.db.session import get_session
 from app.rag.retriever import VectorRetriever
 from app.rag.service import RagService
@@ -116,9 +119,12 @@ async def ask_question(
     knowledge_base_id: UUID,
     payload: QuestionRequest,
     request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
     service: Annotated[RagService, Depends(get_rag_service)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> QuestionResponse:
+    await get_accessible_knowledge_base(session, current_user, knowledge_base_id)
     top_k = payload.top_k or settings.rag_top_k_default
     result = await service.answer(knowledge_base_id, payload.question, top_k)
     return QuestionResponse(

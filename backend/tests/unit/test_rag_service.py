@@ -96,10 +96,11 @@ async def test_answer_refuses_without_chunks_and_does_not_call_chat() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_rejects_missing_knowledge_base() -> None:
+    retriever = StubRetriever([])
     service = RagService(
         session=FakeSession(None),
         embedding_provider=FakeEmbeddingProvider(dimensions=512),
-        retriever=StubRetriever([]),
+        retriever=retriever,
         chat_provider=CountingChatProvider("unused"),
         score_threshold=0.55,
     )
@@ -108,3 +109,4 @@ async def test_answer_rejects_missing_knowledge_base() -> None:
         await service.answer(uuid4(), "问题", 5)
 
     assert error.value.code == "KNOWLEDGE_BASE_NOT_FOUND"
+    assert retriever.calls == []
