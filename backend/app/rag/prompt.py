@@ -19,9 +19,7 @@ def _source(chunk: RetrievedChunk) -> str:
     return "；".join(parts)
 
 
-def build_rag_prompt(
-    question: str, chunks: list[RetrievedChunk]
-) -> tuple[str, str]:
+def build_rag_prompt(question: str, chunks: list[RetrievedChunk]) -> tuple[str, str]:
     contexts = [
         f"[{index}] {_source(chunk)}\n{chunk.content}"
         for index, chunk in enumerate(chunks, start=1)

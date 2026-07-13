@@ -98,9 +98,7 @@ async def get_question_chat_provider(
 
 async def get_rag_service(
     session: Annotated[AsyncSession, Depends(get_session)],
-    embedding_provider: Annotated[
-        EmbeddingProvider, Depends(get_question_embedding_provider)
-    ],
+    embedding_provider: Annotated[EmbeddingProvider, Depends(get_question_embedding_provider)],
     chat_provider: Annotated[ChatProvider, Depends(get_question_chat_provider)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> RagService:

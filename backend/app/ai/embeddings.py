@@ -8,6 +8,8 @@ import httpx
 
 from app.core.exceptions import AppError
 
+BGE_ZH_QUERY_INSTRUCTION = "为这个句子生成表示以用于检索相关文章："
+
 
 def _provider_error(message: str) -> AppError:
     return AppError(code="EMBEDDING_PROVIDER_ERROR", message=message, status_code=502)
@@ -119,9 +121,7 @@ class LocalEmbeddingProvider:
         async with self._model_lock:
             if self._model is None:
                 device = await asyncio.to_thread(_resolve_device, self._device)
-                self._model = await asyncio.to_thread(
-                    self._model_factory, self._model_name, device
-                )
+                self._model = await asyncio.to_thread(self._model_factory, self._model_name, device)
         return self._model
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
@@ -142,7 +142,8 @@ class LocalEmbeddingProvider:
         return embeddings
 
     async def embed_query(self, text: str) -> list[float]:
-        return (await self.embed_documents([text]))[0]
+        instructed_query = f"{BGE_ZH_QUERY_INSTRUCTION}{text}"
+        return (await self.embed_documents([instructed_query]))[0]
 
 
 @lru_cache(maxsize=4)

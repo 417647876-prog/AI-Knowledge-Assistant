@@ -17,9 +17,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.execute("DELETE FROM document_chunks")
-    op.execute(
-        "UPDATE documents SET status = 'pending', error_code = NULL, error_message = NULL"
-    )
+    op.execute("UPDATE documents SET status = 'pending', error_code = NULL, error_message = NULL")
     op.execute("ALTER TABLE document_chunks ALTER COLUMN embedding TYPE vector(512)")
 
 

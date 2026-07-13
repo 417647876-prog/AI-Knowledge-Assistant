@@ -29,9 +29,7 @@ class RagService:
         self._chat_provider = chat_provider
         self._score_threshold = score_threshold
 
-    async def answer(
-        self, knowledge_base_id: UUID, question: str, top_k: int
-    ) -> QuestionAnswer:
+    async def answer(self, knowledge_base_id: UUID, question: str, top_k: int) -> QuestionAnswer:
         if await self._session.get(KnowledgeBase, knowledge_base_id) is None:
             raise AppError(
                 code="KNOWLEDGE_BASE_NOT_FOUND",

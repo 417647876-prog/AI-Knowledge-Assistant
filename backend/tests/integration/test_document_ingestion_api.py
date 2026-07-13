@@ -20,7 +20,9 @@ pytestmark = [
 async def test_upload_runs_fake_embedding_ingestion_to_ready(tmp_path) -> None:
     settings = get_settings()
     previous_upload_directory = settings.upload_directory
+    previous_embedding_provider = settings.embedding_provider
     settings.upload_directory = tmp_path
+    settings.embedding_provider = "fake"
     try:
         transport = httpx.ASGITransport(app=create_app())
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -40,6 +42,7 @@ async def test_upload_runs_fake_embedding_ingestion_to_ready(tmp_path) -> None:
 
     finally:
         settings.upload_directory = previous_upload_directory
+        settings.embedding_provider = previous_embedding_provider
 
     assert state.status_code == 200
     assert state.json()["status"] == "ready"
@@ -49,7 +52,9 @@ async def test_upload_runs_fake_embedding_ingestion_to_ready(tmp_path) -> None:
 async def test_whitespace_document_finishes_failed_with_safe_error(tmp_path) -> None:
     settings = get_settings()
     previous_upload_directory = settings.upload_directory
+    previous_embedding_provider = settings.embedding_provider
     settings.upload_directory = tmp_path
+    settings.embedding_provider = "fake"
     try:
         transport = httpx.ASGITransport(app=create_app())
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -66,6 +71,7 @@ async def test_whitespace_document_finishes_failed_with_safe_error(tmp_path) -> 
             state = await client.get(f"/api/v1/documents/{response.json()['document_id']}")
     finally:
         settings.upload_directory = previous_upload_directory
+        settings.embedding_provider = previous_embedding_provider
 
     assert response.status_code == 202
     assert state.json()["status"] == "failed"

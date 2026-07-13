@@ -65,6 +65,8 @@ async def test_local_provider_loads_once_and_normalizes_documents_and_query() ->
     assert len(query) == 512
     assert all(call[1]["normalize_embeddings"] is True for call in model.calls)
     assert all(call[1]["show_progress_bar"] is False for call in model.calls)
+    assert model.calls[0][0] == ["甲", "乙"]
+    assert model.calls[1][0] == ["为这个句子生成表示以用于检索相关文章：问题"]
 
 
 @pytest.mark.asyncio
