@@ -5,6 +5,7 @@ from app.api.middleware import RequestIdMiddleware
 from app.api.v1.documents import router as document_router
 from app.api.v1.health import router as health_router
 from app.api.v1.knowledge_bases import router as knowledge_base_router
+from app.api.v1.questions import router as question_router
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 
@@ -17,6 +18,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(knowledge_base_router)
     app.include_router(document_router)
+    app.include_router(question_router)
     return app
 
 

@@ -26,3 +26,10 @@ class Citation:
     sheet_name: str | None = None
     row_start: int | None = None
     section_title: str | None = None
+
+
+@dataclass(frozen=True)
+class QuestionAnswer:
+    answer: str
+    citations: list[Citation]
+    retrieved_chunk_count: int

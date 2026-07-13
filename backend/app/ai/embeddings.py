@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 from collections.abc import Callable
+from functools import lru_cache
 from typing import Any
 
 import httpx
@@ -142,3 +143,15 @@ class LocalEmbeddingProvider:
 
     async def embed_query(self, text: str) -> list[float]:
         return (await self.embed_documents([text]))[0]
+
+
+@lru_cache(maxsize=4)
+def get_local_embedding_provider(
+    model_name: str, dimensions: int, batch_size: int, device: str
+) -> LocalEmbeddingProvider:
+    return LocalEmbeddingProvider(
+        model_name=model_name,
+        dimensions=dimensions,
+        batch_size=batch_size,
+        device=device,
+    )
