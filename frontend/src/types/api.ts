@@ -1,5 +1,28 @@
 export type DocumentStatus = 'pending' | 'running' | 'ready' | 'failed'
-export interface KnowledgeBase { id: string; name: string; description: string | null }
+export type UserRole = 'admin' | 'user'
+export interface CurrentUser {
+  id: string
+  username: string
+  role: UserRole
+  is_active: boolean
+}
+export interface AuthSession {
+  access_token: string
+  token_type: 'bearer'
+  expires_in: number
+  user: CurrentUser
+}
+export interface AdminUser extends CurrentUser {
+  created_at: string
+  updated_at: string
+}
+export interface KnowledgeBase {
+  id: string
+  name: string
+  description: string | null
+  owner_id: string
+  owner_username: string
+}
 export interface DocumentTask {
   document_id: string; job_id: string; status: DocumentStatus
   error_code: string | null; error_message: string | null; file_name?: string

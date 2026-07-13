@@ -15,7 +15,10 @@ describe('App', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const store = useWorkspaceStore()
-    store.knowledgeBases = [{ id: 'kb-1', name: '研发规范', description: null }]
+    store.knowledgeBases = [{
+      id: 'kb-1', name: '研发规范', description: null,
+      owner_id: 'u-1', owner_username: 'alice',
+    }]
     store.activeKnowledgeBaseId = 'kb-1'
     const loadKnowledgeBases = vi.spyOn(store, 'loadKnowledgeBases').mockResolvedValue()
 

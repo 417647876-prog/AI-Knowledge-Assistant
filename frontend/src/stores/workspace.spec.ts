@@ -18,9 +18,58 @@ import { useWorkspaceStore } from './workspace'
 describe('workspace knowledge bases', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
+  it('resets authentication-scoped workspace state', () => {
+    const store = useWorkspaceStore()
+    store.knowledgeBases = [{
+      id: 'kb-1', name: '人事制度', description: null,
+      owner_id: 'u-1', owner_username: 'alice',
+    }]
+    store.activeKnowledgeBaseId = 'kb-1'
+    store.documents = { 'kb-1': [{
+      document_id: 'doc-1', job_id: 'job-1', status: 'ready',
+      error_code: null, error_message: null,
+    }] }
+    store.answer = {
+      answer: '答案', citations: [], retrieved_chunk_count: 1, request_id: 'req-1',
+    }
+    store.asking = true
+
+    store.reset()
+
+    expect(store.knowledgeBases).toEqual([])
+    expect(store.activeKnowledgeBaseId).toBeNull()
+    expect(store.documents).toEqual({})
+    expect(store.answer).toBeNull()
+    expect(store.asking).toBe(false)
+  })
+
+  it('ignores an old-session knowledge base response after reset', async () => {
+    let resolveKnowledgeBases!: (items: Array<{
+      id: string; name: string; description: null; owner_id: string; owner_username: string
+    }>) => void
+    vi.mocked(listKnowledgeBases).mockReturnValue(new Promise((resolve) => {
+      resolveKnowledgeBases = resolve
+    }))
+    const store = useWorkspaceStore()
+
+    const loading = store.loadKnowledgeBases()
+    store.reset()
+    resolveKnowledgeBases([{
+      id: 'old-kb', name: '旧用户数据', description: null,
+      owner_id: 'old-user', owner_username: 'old-user',
+    }])
+    await loading
+
+    expect(store.knowledgeBases).toEqual([])
+    expect(store.activeKnowledgeBaseId).toBeNull()
+  })
+
   it('loads and selects the first knowledge base', async () => {
     vi.mocked(listKnowledgeBases).mockResolvedValue([
-      { id: 'kb-1', name: '人事制度', description: null },
+      {
+        id: 'kb-1', name: '人事制度', description: null,
+        owner_id: 'u-1', owner_username: 'alice',
+      },
     ])
     const store = useWorkspaceStore()
     await store.loadKnowledgeBases()
@@ -30,6 +79,7 @@ describe('workspace knowledge bases', () => {
   it('adds and selects a newly created knowledge base', async () => {
     vi.mocked(createKnowledgeBase).mockResolvedValue({
       id: 'kb-2', name: '研发规范', description: '研发资料',
+      owner_id: 'u-1', owner_username: 'alice',
     })
     const store = useWorkspaceStore()
     await store.createKnowledgeBase({ name: '研发规范', description: '研发资料' })
@@ -40,6 +90,7 @@ describe('workspace knowledge bases', () => {
   it('新建并切换知识库时清空旧答案', async () => {
     vi.mocked(createKnowledgeBase).mockResolvedValue({
       id: 'kb-2', name: '研发规范', description: null,
+      owner_id: 'u-1', owner_username: 'alice',
     })
     const store = useWorkspaceStore()
     store.answer = {

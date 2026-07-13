@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, apiRequest, formatApiError } from './client'
+import { ApiError, apiRequest, configureAuthentication, formatApiError } from './client'
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  configureAuthentication({
+    getAccessToken: () => null,
+    refreshAccessToken: async () => null,
+    onAuthenticationFailed: () => undefined,
+  })
+})
 
 describe('apiRequest', () => {
   it('returns JSON on success', async () => {
@@ -9,6 +16,172 @@ describe('apiRequest', () => {
       status: 200, headers: { 'Content-Type': 'application/json' },
     })))
     await expect(apiRequest('/ready')).resolves.toEqual({ status: 'ready' })
+  })
+
+  it('adds the in-memory access token to authenticated requests', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{"status":"ready"}', {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    configureAuthentication({
+      getAccessToken: () => 'access-token',
+      refreshAccessToken: vi.fn(),
+      onAuthenticationFailed: vi.fn(),
+    })
+
+    await apiRequest('/ready')
+
+    expect(fetchMock).toHaveBeenCalledWith('/ready', expect.objectContaining({
+      headers: expect.any(Headers),
+    }))
+    const headers = fetchMock.mock.calls[0]![1]!.headers as Headers
+    expect(headers.get('Authorization')).toBe('Bearer access-token')
+  })
+
+  it('shares one refresh when concurrent requests receive 401 responses', async () => {
+    let accessToken = 'old-token'
+    const refresh = vi.fn().mockImplementation(async () => {
+      accessToken = 'new-token'
+      return accessToken
+    })
+    configureAuthentication({
+      getAccessToken: () => accessToken,
+      refreshAccessToken: refresh,
+      onAuthenticationFailed: vi.fn(),
+    })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      .mockImplementation(() => Promise.resolve(new Response('{"ok":true}', {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(Promise.all([apiRequest('/one'), apiRequest('/two')])).resolves.toEqual([
+      { ok: true }, { ok: true },
+    ])
+
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    for (const call of fetchMock.mock.calls.slice(2)) {
+      expect((call[1]!.headers as Headers).get('Authorization')).toBe('Bearer new-token')
+    }
+  })
+
+  it('reuses the refreshed token when a concurrent old-token 401 arrives late', async () => {
+    let accessToken = 'old-token'
+    let resolveLateResponse!: (response: Response) => void
+    const refreshAccessToken = vi.fn().mockImplementation(async () => {
+      accessToken = 'new-token'
+      return accessToken
+    })
+    configureAuthentication({
+      getAccessToken: () => accessToken,
+      refreshAccessToken,
+      onAuthenticationFailed: vi.fn(),
+    })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      .mockReturnValueOnce(new Promise<Response>((resolve) => { resolveLateResponse = resolve }))
+      .mockImplementation(() => Promise.resolve(new Response('{"ok":true}', {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const first = apiRequest('/one')
+    const second = apiRequest('/two')
+    await expect(first).resolves.toEqual({ ok: true })
+    resolveLateResponse(new Response('{}', { status: 401 }))
+    await expect(second).resolves.toEqual({ ok: true })
+
+    expect(refreshAccessToken).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+
+  it('does not replay an old-account request with a newly logged-in user token', async () => {
+    let accessToken = 'old-user-token'
+    let resolveResponse!: (response: Response) => void
+    const refreshAccessToken = vi.fn()
+    configureAuthentication({
+      getAccessToken: () => accessToken,
+      refreshAccessToken,
+      onAuthenticationFailed: vi.fn(),
+    })
+    const fetchMock = vi.fn().mockReturnValue(new Promise<Response>((resolve) => {
+      resolveResponse = resolve
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const oldRequest = apiRequest('/transfer', { method: 'POST' })
+    accessToken = 'new-user-token'
+    resolveResponse(new Response('{}', { status: 401 }))
+
+    await expect(oldRequest).rejects.toMatchObject({ status: 401 })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(refreshAccessToken).not.toHaveBeenCalled()
+  })
+
+  it('notifies authentication failure once when a shared refresh fails', async () => {
+    const onAuthenticationFailed = vi.fn()
+    const refreshAccessToken = vi.fn().mockResolvedValue(null)
+    configureAuthentication({
+      getAccessToken: () => 'expired-token',
+      refreshAccessToken,
+      onAuthenticationFailed,
+    })
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(
+      new Response('{}', { status: 401 }),
+    )))
+
+    const results = await Promise.allSettled([apiRequest('/one'), apiRequest('/two')])
+
+    expect(results.every((result) => result.status === 'rejected')).toBe(true)
+    expect(refreshAccessToken).toHaveBeenCalledOnce()
+    expect(onAuthenticationFailed).toHaveBeenCalledOnce()
+  })
+
+  it('does not repeat a failed refresh for a late old-token 401', async () => {
+    let accessToken: string | null = 'old-token'
+    let resolveLateResponse!: (response: Response) => void
+    const onAuthenticationFailed = vi.fn(() => { accessToken = null })
+    const refreshAccessToken = vi.fn().mockResolvedValue(null)
+    configureAuthentication({
+      getAccessToken: () => accessToken,
+      refreshAccessToken,
+      onAuthenticationFailed,
+    })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      .mockReturnValueOnce(new Promise<Response>((resolve) => { resolveLateResponse = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const first = apiRequest('/one')
+    const second = apiRequest('/two')
+    await expect(first).rejects.toMatchObject({ status: 401 })
+    resolveLateResponse(new Response('{}', { status: 401 }))
+    await expect(second).rejects.toMatchObject({ status: 401 })
+
+    expect(refreshAccessToken).toHaveBeenCalledOnce()
+    expect(onAuthenticationFailed).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('replays a request at most once when it remains unauthorized', async () => {
+    const refreshAccessToken = vi.fn().mockResolvedValue('new-token')
+    configureAuthentication({
+      getAccessToken: () => 'old-token',
+      refreshAccessToken,
+      onAuthenticationFailed: vi.fn(),
+    })
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response('{}', { status: 401 }),
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(apiRequest('/protected')).rejects.toMatchObject({ status: 401 })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(refreshAccessToken).toHaveBeenCalledOnce()
   })
 
   it('maps FastAPI errors', async () => {

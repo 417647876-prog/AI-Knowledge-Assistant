@@ -28,7 +28,10 @@ describe('KnowledgeBaseSidebar', () => {
 
   it('展示知识库并允许选择', async () => {
     const store = useWorkspaceStore()
-    store.knowledgeBases = [{ id: 'kb-1', name: '人事制度', description: null }]
+    store.knowledgeBases = [{
+      id: 'kb-1', name: '人事制度', description: null,
+      owner_id: 'u-1', owner_username: 'alice',
+    }]
     const wrapper = mountSidebar()
 
     expect(wrapper.text()).toContain('人事制度')
@@ -40,7 +43,10 @@ describe('KnowledgeBaseSidebar', () => {
   it('为长知识库名称提供可截断样式和完整标题', () => {
     const store = useWorkspaceStore()
     const longName = '这是一个非常非常长且不包含空格的知识库名称'
-    store.knowledgeBases = [{ id: 'kb-long', name: longName, description: null }]
+    store.knowledgeBases = [{
+      id: 'kb-long', name: longName, description: null,
+      owner_id: 'u-1', owner_username: 'alice',
+    }]
 
     const wrapper = mountSidebar()
 
@@ -60,6 +66,7 @@ describe('KnowledgeBaseSidebar', () => {
   it('创建知识库后关闭对话框并清空表单', async () => {
     vi.mocked(createKnowledgeBase).mockResolvedValue({
       id: 'kb-2', name: '研发规范', description: '研发资料',
+      owner_id: 'u-1', owner_username: 'alice',
     })
     const wrapper = mountSidebar()
     await wrapper.get('[data-test="create-knowledge-base"]').trigger('click')

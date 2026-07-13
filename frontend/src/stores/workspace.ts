@@ -18,18 +18,36 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     knowledgeBases.value.find((item) => item.id === activeKnowledgeBaseId.value) ?? null)
   const activeDocuments = computed(() => activeKnowledgeBaseId.value
     ? documents.value[activeKnowledgeBaseId.value] ?? [] : [])
+  let generation = 0
+
+  function reset() {
+    generation += 1
+    knowledgeBases.value = []
+    activeKnowledgeBaseId.value = null
+    documents.value = {}
+    answer.value = null
+    asking.value = false
+    loadingKnowledgeBases.value = false
+  }
 
   async function loadKnowledgeBases() {
+    const operationGeneration = generation
     loadingKnowledgeBases.value = true
     try {
-      knowledgeBases.value = await listKnowledgeBases()
+      const loaded = await listKnowledgeBases()
+      if (operationGeneration !== generation) return
+      knowledgeBases.value = loaded
       if (!activeKnowledgeBaseId.value && knowledgeBases.value.length)
         activeKnowledgeBaseId.value = knowledgeBases.value[0]!.id
-    } finally { loadingKnowledgeBases.value = false }
+    } finally {
+      if (operationGeneration === generation) loadingKnowledgeBases.value = false
+    }
   }
 
   async function createKnowledgeBase(input: CreateKnowledgeBaseInput) {
+    const operationGeneration = generation
     const created = await createRequest(input)
+    if (operationGeneration !== generation) return created
     knowledgeBases.value.push(created)
     activeKnowledgeBaseId.value = created.id
     answer.value = null
@@ -42,16 +60,20 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   async function uploadAndTrackDocument(file: File) {
+    const operationGeneration = generation
     const id = activeKnowledgeBaseId.value
     if (!id) throw new Error('请先选择知识库。')
     const pending = { ...await uploadDocument(id, file), file_name: file.name }
+    if (operationGeneration !== generation) return pending
     documents.value[id] = [pending, ...(documents.value[id] ?? [])]
     try {
       const finished = { ...await pollDocumentStatus(pending.document_id), file_name: file.name }
+      if (operationGeneration !== generation) return finished
       documents.value[id] = documents.value[id].map((item) =>
         item.document_id === finished.document_id ? finished : item)
       return finished
     } catch (error) {
+      if (operationGeneration !== generation) throw error
       const failed: DocumentTask = {
         ...pending,
         status: 'failed',
@@ -65,19 +87,23 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   async function submitQuestion(question: string) {
+    const operationGeneration = generation
     const knowledgeBaseId = activeKnowledgeBaseId.value
     if (!knowledgeBaseId) throw new Error('请先选择知识库。')
     asking.value = true
     try {
       const result = await askQuestion(knowledgeBaseId, question.trim(), 5)
-      if (activeKnowledgeBaseId.value === knowledgeBaseId) answer.value = result
+      if (operationGeneration === generation && activeKnowledgeBaseId.value === knowledgeBaseId)
+        answer.value = result
       return result
-    } finally { asking.value = false }
+    } finally {
+      if (operationGeneration === generation) asking.value = false
+    }
   }
 
   return {
     knowledgeBases, activeKnowledgeBaseId, documents, answer, asking, loadingKnowledgeBases,
     activeKnowledgeBase, activeDocuments, loadKnowledgeBases, createKnowledgeBase,
-    selectKnowledgeBase, uploadAndTrackDocument, submitQuestion,
+    selectKnowledgeBase, uploadAndTrackDocument, submitQuestion, reset,
   }
 })
