@@ -1,6 +1,10 @@
 :root { font-family: Inter, "Microsoft YaHei", sans-serif; color: #18212f; background: #f4f6f8; }
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; }
+body { margin: 0; min-width: 0; min-height: 100vh; }
+.app-shell, .workspace-layout, .knowledge-sidebar, .workspace-main, .workspace-card {
+  min-width: 0;
+  max-width: 100%;
+}
 .app-header { padding: 20px 28px; color: #fff; background: #17324d; }
 .app-header h1 { margin: 0; font-size: 22px; }
 .workspace-empty { padding: 64px; text-align: center; color: #667085; }
@@ -15,4 +19,11 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
   .workspace-layout { grid-template-columns: 1fr; }
   .knowledge-sidebar { border-right: 0; border-bottom: 1px solid #e5e7eb; }
   .workspace-main { padding: 16px; }
+}
+
+@media (max-width: 480px) {
+  .app-header { padding: 16px; }
+  .knowledge-sidebar { padding: 12px; }
+  .workspace-main { padding: 12px; }
+  .workspace-card { padding: 12px; }
 }

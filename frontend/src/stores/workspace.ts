@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { pollDocumentStatus, uploadDocument } from '../api/documents'
 import { createKnowledgeBase as createRequest, listKnowledgeBases } from '../api/knowledgeBases'
 import { askQuestion } from '../api/questions'
+import { ApiError } from '../api/client'
 import type { CreateKnowledgeBaseInput } from '../api/knowledgeBases'
 import type { DocumentTask, KnowledgeBase, QuestionResponse } from '../types/api'
 
@@ -45,10 +46,22 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (!id) throw new Error('请先选择知识库。')
     const pending = { ...await uploadDocument(id, file), file_name: file.name }
     documents.value[id] = [pending, ...(documents.value[id] ?? [])]
-    const finished = { ...await pollDocumentStatus(pending.document_id), file_name: file.name }
-    documents.value[id] = documents.value[id].map((item) =>
-      item.document_id === finished.document_id ? finished : item)
-    return finished
+    try {
+      const finished = { ...await pollDocumentStatus(pending.document_id), file_name: file.name }
+      documents.value[id] = documents.value[id].map((item) =>
+        item.document_id === finished.document_id ? finished : item)
+      return finished
+    } catch (error) {
+      const failed: DocumentTask = {
+        ...pending,
+        status: 'failed',
+        error_code: error instanceof ApiError ? error.code : 'DOCUMENT_POLL_FAILED',
+        error_message: error instanceof Error ? error.message : '文档状态查询失败。',
+      }
+      documents.value[id] = documents.value[id].map((item) =>
+        item.document_id === pending.document_id ? failed : item)
+      throw error
+    }
   }
 
   async function submitQuestion(question: string) {

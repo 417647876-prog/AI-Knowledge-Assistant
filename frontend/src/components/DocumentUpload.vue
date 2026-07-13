@@ -41,5 +41,13 @@ async function upload(event: Event) {
 </template>
 
 <style scoped>
-.document-upload { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.document-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  max-width: 100%;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.document-upload input { min-width: 0; max-width: 100%; }
 </style>

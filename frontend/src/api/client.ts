@@ -24,7 +24,10 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
     const payload = await response.json().catch(() => ({})) as ApiErrorEnvelope
     throw new ApiError(
       response.status, payload.error?.code ?? 'HTTP_ERROR',
-      payload.error?.message ?? '请求失败，请稍后重试。', payload.error?.request_id,
+      payload.error?.message ?? (response.status >= 500
+        ? '服务暂不可用，请稍后重试。'
+        : '请求失败，请稍后重试。'),
+      payload.error?.request_id ?? response.headers.get('X-Request-ID') ?? undefined,
     )
   }
   return await response.json() as T

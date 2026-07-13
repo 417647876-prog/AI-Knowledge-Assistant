@@ -20,6 +20,30 @@ describe('apiRequest', () => {
     )
   })
 
+  it('maps standard 422 errors and falls back to the response request id header', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: [{ loc: ['body', 'name'], msg: 'Field required', type: 'missing' }],
+    }), {
+      status: 422,
+      headers: { 'Content-Type': 'application/json', 'X-Request-ID': 'req-header-422' },
+    })))
+
+    await expect(apiRequest('/knowledge-bases')).rejects.toEqual(
+      new ApiError(422, 'HTTP_ERROR', '请求失败，请稍后重试。', 'req-header-422'),
+    )
+  })
+
+  it('uses a service unavailable message for ordinary server errors', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Internal Server Error', {
+      status: 500,
+      headers: { 'Content-Type': 'text/plain', 'X-Request-ID': 'req-header-500' },
+    })))
+
+    await expect(apiRequest('/ready')).rejects.toEqual(
+      new ApiError(500, 'HTTP_ERROR', '服务暂不可用，请稍后重试。', 'req-header-500'),
+    )
+  })
+
   it('maps network errors safely', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
     await expect(apiRequest('/ready')).rejects.toMatchObject({

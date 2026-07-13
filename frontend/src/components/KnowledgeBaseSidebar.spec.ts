@@ -37,6 +37,18 @@ describe('KnowledgeBaseSidebar', () => {
     expect(store.activeKnowledgeBaseId).toBe('kb-1')
   })
 
+  it('为长知识库名称提供可截断样式和完整标题', () => {
+    const store = useWorkspaceStore()
+    const longName = '这是一个非常非常长且不包含空格的知识库名称'
+    store.knowledgeBases = [{ id: 'kb-long', name: longName, description: null }]
+
+    const wrapper = mountSidebar()
+
+    const name = wrapper.get('.knowledge-base-name')
+    expect(name.text()).toBe(longName)
+    expect(name.attributes('title')).toBe(longName)
+  })
+
   it('点击新建按钮后显示对话框', async () => {
     const wrapper = mountSidebar()
 

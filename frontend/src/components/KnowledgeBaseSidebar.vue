@@ -38,7 +38,7 @@ async function submit() {
       @select="store.selectKnowledgeBase"
     >
       <el-menu-item v-for="item in store.knowledgeBases" :key="item.id" :index="item.id">
-        {{ item.name }}
+        <span class="knowledge-base-name" :title="item.name">{{ item.name }}</span>
       </el-menu-item>
     </el-menu>
 
@@ -65,7 +65,18 @@ async function submit() {
 </template>
 
 <style scoped>
-.knowledge-base-sidebar { min-width: 240px; }
+.knowledge-base-sidebar, .el-menu, .el-menu-item {
+  min-width: 0;
+  max-width: 100%;
+}
+.knowledge-base-name {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sidebar-heading { display: flex; align-items: center; justify-content: space-between; padding: 16px; }
 .sidebar-heading h2 { margin: 0; font-size: 18px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }

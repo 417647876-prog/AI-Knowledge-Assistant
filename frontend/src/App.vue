@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
+import { formatApiError } from './api/client'
 import DocumentTable from './components/DocumentTable.vue'
 import DocumentUpload from './components/DocumentUpload.vue'
 import KnowledgeBaseSidebar from './components/KnowledgeBaseSidebar.vue'
@@ -7,8 +8,18 @@ import QuestionPanel from './components/QuestionPanel.vue'
 import { useWorkspaceStore } from './stores/workspace'
 
 const store = useWorkspaceStore()
+const knowledgeBaseLoadError = ref<string | null>(null)
 
-onMounted(() => store.loadKnowledgeBases())
+async function loadKnowledgeBases() {
+  knowledgeBaseLoadError.value = null
+  try {
+    await store.loadKnowledgeBases()
+  } catch (error) {
+    knowledgeBaseLoadError.value = formatApiError(error)
+  }
+}
+
+onMounted(loadKnowledgeBases)
 </script>
 
 <template>
@@ -20,7 +31,22 @@ onMounted(() => store.loadKnowledgeBases())
       </aside>
 
       <section class="workspace-main">
-        <template v-if="store.activeKnowledgeBase">
+        <section
+          v-if="knowledgeBaseLoadError"
+          data-test="knowledge-base-load-error"
+          class="workspace-empty workspace-card"
+        >
+          <p>{{ knowledgeBaseLoadError }}</p>
+          <el-button
+            data-test="reload-knowledge-bases"
+            type="primary"
+            :loading="store.loadingKnowledgeBases"
+            @click="loadKnowledgeBases"
+          >
+            重新加载
+          </el-button>
+        </section>
+        <template v-else-if="store.activeKnowledgeBase">
           <section class="workspace-card">
             <DocumentUpload />
             <DocumentTable />

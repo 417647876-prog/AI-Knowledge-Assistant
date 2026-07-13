@@ -12,6 +12,7 @@ vi.mock('../api/questions', () => ({ askQuestion: vi.fn() }))
 import { createKnowledgeBase, listKnowledgeBases } from '../api/knowledgeBases'
 import { pollDocumentStatus, uploadDocument } from '../api/documents'
 import { askQuestion } from '../api/questions'
+import { ApiError } from '../api/client'
 import { useWorkspaceStore } from './workspace'
 
 describe('workspace knowledge bases', () => {
@@ -66,6 +67,36 @@ describe('workspace knowledge bases', () => {
 
     expect(store.activeDocuments[0]).toMatchObject({
       status: 'ready', file_name: '制度.txt',
+    })
+  })
+
+  it.each([
+    [
+      '轮询超时',
+      new ApiError(0, 'DOCUMENT_POLL_TIMEOUT', '文档处理时间较长，请稍后刷新状态。'),
+      'DOCUMENT_POLL_TIMEOUT',
+      '文档处理时间较长，请稍后刷新状态。',
+    ],
+    ['状态查询失败', new Error('状态查询失败'), 'DOCUMENT_POLL_FAILED', '状态查询失败'],
+  ])('%s 时将文档行更新为明确失败状态', async (_name, error, code, message) => {
+    const pending = {
+      document_id: 'doc-failed', job_id: 'job-failed', status: 'pending' as const,
+      error_code: null, error_message: null,
+    }
+    vi.mocked(uploadDocument).mockResolvedValue(pending)
+    vi.mocked(pollDocumentStatus).mockRejectedValue(error)
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+
+    await expect(store.uploadAndTrackDocument(new File(['制度'], '制度.txt'))).rejects.toBe(error)
+
+    expect(store.activeDocuments[0]).toMatchObject({
+      document_id: 'doc-failed',
+      job_id: 'job-failed',
+      file_name: '制度.txt',
+      status: 'failed',
+      error_code: code,
+      error_message: message,
     })
   })
 
