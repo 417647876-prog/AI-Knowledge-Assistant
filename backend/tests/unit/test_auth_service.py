@@ -211,5 +211,5 @@ async def test_require_admin_rejects_regular_user() -> None:
     with pytest.raises(AppError) as error:
         await require_admin(user)
 
-    assert error.value.code == "FORBIDDEN"
+    assert error.value.code == "PERMISSION_DENIED"
     assert error.value.status_code == 403

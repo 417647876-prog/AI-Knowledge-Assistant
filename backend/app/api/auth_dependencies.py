@@ -42,13 +42,15 @@ async def require_admin(
     user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     if user.role != ADMIN_ROLE:
-        raise AppError(code="FORBIDDEN", message="需要管理员权限。", status_code=403)
+        raise AppError(
+            code="PERMISSION_DENIED", message="需要管理员权限。", status_code=403
+        )
     return user
 
 
 def _unauthorized() -> AppError:
     return AppError(
-        code="UNAUTHORIZED",
+        code="AUTHENTICATION_REQUIRED",
         message="用户未登录或账号已停用。",
         status_code=401,
     )

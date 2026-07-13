@@ -70,7 +70,7 @@ async def logout(
         path=REFRESH_COOKIE_PATH,
         secure=settings.refresh_cookie_secure,
         httponly=True,
-        samesite="strict",
+        samesite="lax",
     )
     return response
 
@@ -101,7 +101,7 @@ def _set_refresh_cookie(
         path=REFRESH_COOKIE_PATH,
         secure=settings.refresh_cookie_secure,
         httponly=True,
-        samesite="strict",
+        samesite="lax",
     )
 
 

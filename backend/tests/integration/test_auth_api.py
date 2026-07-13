@@ -6,7 +6,7 @@ import httpx
 import pytest
 from sqlalchemy import delete, update
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.security import create_access_token, hash_password
 from app.db.models import ADMIN_ROLE, RefreshSession, User
 from app.db.session import session_factory
@@ -19,6 +19,15 @@ pytestmark = [
         reason="设置 RUN_DATABASE_TESTS=1 后运行 PostgreSQL 集成测试",
     ),
 ]
+
+
+def assert_session_cookie(cookie: str, *, secure: bool) -> None:
+    assert cookie.startswith("refresh_token=")
+    assert "HttpOnly" in cookie
+    assert "Max-Age=604800" in cookie
+    assert "Path=/api/v1/auth" in cookie
+    assert "samesite=lax" in cookie.casefold()
+    assert ("Secure" in cookie) is secure
 
 
 @pytest.fixture
@@ -63,8 +72,7 @@ async def test_login_refresh_logout_me_and_inactive_user(auth_user: User) -> Non
         assert login.json()["user"]["role"] == "admin"
         assert login.headers["X-Request-ID"] == "auth-login-001"
         login_cookie = login.headers["set-cookie"]
-        assert "HttpOnly" in login_cookie
-        assert "Path=/api/v1/auth" in login_cookie
+        assert_session_cookie(login_cookie, secure=False)
         first_refresh = client.cookies.get("refresh_token")
         assert first_refresh
 
@@ -95,7 +103,7 @@ async def test_login_refresh_logout_me_and_inactive_user(auth_user: User) -> Non
         assert refreshed.status_code == 200
         second_refresh = client.cookies.get("refresh_token")
         assert second_refresh and second_refresh != first_refresh
-        assert "Path=/api/v1/auth" in refreshed.headers["set-cookie"]
+        assert_session_cookie(refreshed.headers["set-cookie"], secure=False)
 
         client.cookies.set("refresh_token", first_refresh, path="/api/v1/auth")
         replay = await client.post(
@@ -114,6 +122,9 @@ async def test_login_refresh_logout_me_and_inactive_user(auth_user: User) -> Non
         cleared_cookie = logout.headers["set-cookie"]
         assert "Path=/api/v1/auth" in cleared_cookie
         assert "Max-Age=0" in cleared_cookie
+        assert "HttpOnly" in cleared_cookie
+        assert "samesite=lax" in cleared_cookie.casefold()
+        assert "Secure" not in cleared_cookie
 
         async with session_factory.begin() as session:
             await session.execute(
@@ -124,7 +135,7 @@ async def test_login_refresh_logout_me_and_inactive_user(auth_user: User) -> Non
             headers={"Authorization": f"Bearer {login.json()['access_token']}"},
         )
         assert inactive_me.status_code == 401
-        assert inactive_me.json()["error"]["code"] == "UNAUTHORIZED"
+        assert inactive_me.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
 
         missing_user_token = create_access_token(
             user_id=uuid4(), role="admin", settings=get_settings()
@@ -134,4 +145,37 @@ async def test_login_refresh_logout_me_and_inactive_user(auth_user: User) -> Non
             headers={"Authorization": f"Bearer {missing_user_token}"},
         )
         assert missing_user_me.status_code == 401
-        assert missing_user_me.json()["error"]["code"] == "UNAUTHORIZED"
+        assert missing_user_me.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
+
+        missing_bearer_me = await client.get("/api/v1/auth/me")
+        assert missing_bearer_me.status_code == 401
+        assert (
+            missing_bearer_me.json()["error"]["code"]
+            == "AUTHENTICATION_REQUIRED"
+        )
+
+
+@pytest.mark.asyncio
+async def test_login_and_refresh_cookie_use_secure_setting(auth_user: User) -> None:
+    secure_settings = Settings(_env_file=None, refresh_cookie_secure=True)
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: secure_settings
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        login = await client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": auth_user.username,
+                "password": "correct horse battery",
+            },
+        )
+        assert login.status_code == 200
+        assert_session_cookie(login.headers["set-cookie"], secure=True)
+
+        refreshed = await client.post(
+            "/api/v1/auth/refresh",
+            headers={"Origin": "http://localhost:5173"},
+        )
+        assert refreshed.status_code == 200
+        assert_session_cookie(refreshed.headers["set-cookie"], secure=True)
