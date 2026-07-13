@@ -12,6 +12,7 @@ vi.mock('../api/documents', () => ({
 
 import { ApiError } from '../api/client'
 import { createKnowledgeBase } from '../api/knowledgeBases'
+import { useAuthStore } from '../stores/auth'
 import { useWorkspaceStore } from '../stores/workspace'
 import KnowledgeBaseSidebar from './KnowledgeBaseSidebar.vue'
 
@@ -38,6 +39,35 @@ describe('KnowledgeBaseSidebar', () => {
     await wrapper.get('.el-menu-item').trigger('click')
 
     expect(store.activeKnowledgeBaseId).toBe('kb-1')
+  })
+
+  it('管理员查看知识库时显示所有者', () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'u-admin', username: 'root', role: 'admin', is_active: true }
+    const store = useWorkspaceStore()
+    store.knowledgeBases = [{
+      id: 'kb-1', name: '人事制度', description: null,
+      owner_id: 'u-1', owner_username: 'alice',
+    }]
+
+    const wrapper = mountSidebar()
+
+    expect(wrapper.get('[data-test="knowledge-base-owner"]').text()).toContain('alice')
+  })
+
+  it('普通用户不显示知识库所有者副标题', () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'u-1', username: 'alice', role: 'user', is_active: true }
+    const store = useWorkspaceStore()
+    store.knowledgeBases = [{
+      id: 'kb-1', name: '人事制度', description: null,
+      owner_id: 'u-1', owner_username: 'alice',
+    }]
+
+    const wrapper = mountSidebar()
+
+    expect(wrapper.find('[data-test="knowledge-base-owner"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('所有者：')
   })
 
   it('为长知识库名称提供可截断样式和完整标题', () => {

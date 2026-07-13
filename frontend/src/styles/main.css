@@ -1,12 +1,30 @@
 :root { font-family: Inter, "Microsoft YaHei", sans-serif; color: #18212f; background: #f4f6f8; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 0; min-height: 100vh; }
-.app-shell, .workspace-layout, .knowledge-sidebar, .workspace-main, .workspace-card {
+.app-shell, .workspace-page, .workspace-layout, .knowledge-sidebar, .workspace-main,
+.workspace-card, .login-page, .admin-users-page, .forbidden-page {
   min-width: 0;
   max-width: 100%;
 }
-.app-header { padding: 20px 28px; color: #fff; background: #17324d; }
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 28px;
+  color: #fff;
+  background: #17324d;
+}
 .app-header h1 { margin: 0; font-size: 22px; }
+.header-user { display: flex; align-items: center; gap: 12px; }
+.header-user a { color: #fff; }
+.auth-loading { display: grid; min-height: 100vh; place-items: center; color: #667085; }
+.login-page { display: grid; min-height: 100vh; padding: 16px; place-items: center; }
+.login-card { width: min(100%, 420px); }
+.login-card h1 { margin-top: 0; }
+.login-card .el-button { width: 100%; }
+.login-error { color: #b42318; }
+.admin-users-page, .forbidden-page { margin: 24px; }
 .workspace-empty { padding: 64px; text-align: center; color: #667085; }
 .workspace-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: calc(100vh - 68px); }
 .knowledge-sidebar { padding: 20px; background: #fff; border-right: 1px solid #e5e7eb; }
@@ -22,8 +40,10 @@ body { margin: 0; min-width: 0; min-height: 100vh; }
 }
 
 @media (max-width: 480px) {
-  .app-header { padding: 16px; }
+  .app-header { align-items: flex-start; flex-direction: column; padding: 16px; }
+  .header-user { flex-wrap: wrap; }
   .knowledge-sidebar { padding: 12px; }
   .workspace-main { padding: 12px; }
   .workspace-card { padding: 12px; }
+  .admin-users-page, .forbidden-page { margin: 12px; }
 }

@@ -2,8 +2,10 @@
 import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { formatApiError } from '../api/client'
+import { useAuthStore } from '../stores/auth'
 import { useWorkspaceStore } from '../stores/workspace'
 
+const auth = useAuthStore()
 const store = useWorkspaceStore()
 const dialogVisible = ref(false)
 const submitting = ref(false)
@@ -38,7 +40,16 @@ async function submit() {
       @select="store.selectKnowledgeBase"
     >
       <el-menu-item v-for="item in store.knowledgeBases" :key="item.id" :index="item.id">
-        <span class="knowledge-base-name" :title="item.name">{{ item.name }}</span>
+        <span class="knowledge-base-label">
+          <span class="knowledge-base-name" :title="item.name">{{ item.name }}</span>
+          <small
+            v-if="auth.isAdmin"
+            data-test="knowledge-base-owner"
+            class="knowledge-base-owner"
+          >
+            所有者：{{ item.owner_username }}
+          </small>
+        </span>
       </el-menu-item>
     </el-menu>
 
@@ -77,6 +88,8 @@ async function submit() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.knowledge-base-label { display: grid; min-width: 0; line-height: 1.4; }
+.knowledge-base-owner { color: #667085; }
 .sidebar-heading { display: flex; align-items: center; justify-content: space-between; padding: 16px; }
 .sidebar-heading h2 { margin: 0; font-size: 18px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
