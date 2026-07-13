@@ -6,7 +6,8 @@
 
 - 阶段 1A：FastAPI 基础、统一错误、PostgreSQL + pgvector、Alembic。
 - 阶段 1B：知识库 API、安全上传、PDF/DOCX/XLSX/Markdown/TXT 解析。
-- 下一步：阶段 1C 文本清洗、切片、Embedding 与向量入库。
+- 阶段 1C：文本清洗、中文递归切片、Fake/OpenAI Embedding、事务性向量入库。
+- 下一步：阶段 1D 向量检索、Prompt、问答与结构化引用。
 
 ## 本地启动
 
@@ -29,6 +30,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_l
 - [项目学习笔记](docs/学习笔记.md)
 - [第一阶段 RAG 后端设计](docs/superpowers/specs/2026-07-10-rag-backend-design.md)
 - [阶段 1B 文档解析设计](docs/superpowers/specs/2026-07-12-stage-1b-knowledge-base-document-parsing-design.md)
+- [阶段 1C 向量入库设计](docs/superpowers/specs/2026-07-13-stage-1c-chunking-vector-ingestion-design.md)
 - [学习任务与资源](MISSION.md)
 
 ## 验证

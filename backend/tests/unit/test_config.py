@@ -20,3 +20,17 @@ def test_settings_use_stage_1a_defaults(monkeypatch: pytest.MonkeyPatch) -> None
 def test_settings_reject_non_1536_embedding_dimensions() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, embedding_dimensions=1024)
+
+
+def test_settings_use_stage_1c_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.chunk_size == 800
+    assert settings.chunk_overlap == 120
+    assert settings.embedding_provider == "fake"
+    assert settings.embedding_batch_size == 64
+
+
+def test_settings_reject_overlap_not_smaller_than_chunk_size() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, chunk_size=100, chunk_overlap=100)
