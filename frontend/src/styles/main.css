@@ -4,3 +4,15 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
 .app-header { padding: 20px 28px; color: #fff; background: #17324d; }
 .app-header h1 { margin: 0; font-size: 22px; }
 .workspace-empty { padding: 64px; text-align: center; color: #667085; }
+.workspace-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: calc(100vh - 68px); }
+.knowledge-sidebar { padding: 20px; background: #fff; border-right: 1px solid #e5e7eb; }
+.sidebar-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.workspace-main { display: grid; gap: 20px; align-content: start; padding: 24px; }
+.workspace-card { padding: 20px; border: 1px solid #e5e7eb; border-radius: 14px; background: #fff; box-shadow: 0 8px 24px rgb(15 23 42 / 5%); }
+.citation-list { display: grid; gap: 12px; margin-top: 16px; }
+
+@media (max-width: 900px) {
+  .workspace-layout { grid-template-columns: 1fr; }
+  .knowledge-sidebar { border-right: 0; border-bottom: 1px solid #e5e7eb; }
+  .workspace-main { padding: 16px; }
+}
