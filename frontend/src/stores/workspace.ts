@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
+import { pollDocumentStatus, uploadDocument } from '../api/documents'
 import { createKnowledgeBase as createRequest, listKnowledgeBases } from '../api/knowledgeBases'
 import type { CreateKnowledgeBaseInput } from '../api/knowledgeBases'
 import type { DocumentTask, KnowledgeBase, QuestionResponse } from '../types/api'
@@ -36,9 +37,20 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     answer.value = null
   }
 
+  async function uploadAndTrackDocument(file: File) {
+    const id = activeKnowledgeBaseId.value
+    if (!id) throw new Error('请先选择知识库。')
+    const pending = { ...await uploadDocument(id, file), file_name: file.name }
+    documents.value[id] = [pending, ...(documents.value[id] ?? [])]
+    const finished = { ...await pollDocumentStatus(pending.document_id), file_name: file.name }
+    documents.value[id] = documents.value[id].map((item) =>
+      item.document_id === finished.document_id ? finished : item)
+    return finished
+  }
+
   return {
     knowledgeBases, activeKnowledgeBaseId, documents, answer, loadingKnowledgeBases,
     activeKnowledgeBase, activeDocuments, loadKnowledgeBases, createKnowledgeBase,
-    selectKnowledgeBase,
+    selectKnowledgeBase, uploadAndTrackDocument,
   }
 })
