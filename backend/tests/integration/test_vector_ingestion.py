@@ -52,8 +52,8 @@ async def test_process_stores_vectors_and_is_safe_to_retry(tmp_path) -> None:
             upload_directory=tmp_path,
             parser_registry=ParserRegistry({".txt": TextParser()}),
             chunker=RecursiveTextChunker(chunk_size=10, chunk_overlap=2),
-            embedding_provider=FakeEmbeddingProvider(dimensions=1536),
-            embedding_dimensions=1536,
+            embedding_provider=FakeEmbeddingProvider(dimensions=512),
+            embedding_dimensions=512,
         )
         await service.process(document.id)
         await service.process(document.id)
@@ -73,4 +73,4 @@ async def test_process_stores_vectors_and_is_safe_to_retry(tmp_path) -> None:
     assert job.chunk_count == len(chunks)
     assert len(chunks) > 1
     assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
-    assert all(len(chunk.embedding) == 1536 for chunk in chunks)
+    assert all(len(chunk.embedding) == 512 for chunk in chunks)
