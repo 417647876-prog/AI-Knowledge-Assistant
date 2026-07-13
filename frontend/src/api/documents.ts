@@ -9,8 +9,8 @@ export function uploadDocument(knowledgeBaseId: string, file: File) {
   })
 }
 
-export const getDocument = (id: string) =>
-  apiRequest<DocumentTask>(`/api/v1/documents/${id}`)
+export const getDocument = (id: string, signal?: AbortSignal) =>
+  apiRequest<DocumentTask>(`/api/v1/documents/${id}`, { signal })
 
 interface PollOptions {
   intervalMs?: number
@@ -27,12 +27,35 @@ export async function pollDocumentStatus(id: string, options: PollOptions = {}) 
   const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
   const now = options.now ?? Date.now
   const deadline = now() + timeoutMs
+  const timeoutError = () => new ApiError(
+    0, 'DOCUMENT_POLL_TIMEOUT', '文档处理时间较长，请稍后刷新状态。',
+  )
 
   while (true) {
-    const document = await request(id)
+    const remainingMs = deadline - now()
+    if (remainingMs <= 0) throw timeoutError()
+
+    const controller = new AbortController()
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        controller.abort()
+        reject(timeoutError())
+      }, remainingMs)
+    })
+
+    let document: DocumentTask
+    try {
+      document = await Promise.race([request(id, controller.signal), timeout])
+    } catch (error) {
+      if (controller.signal.aborted) throw timeoutError()
+      throw error
+    } finally {
+      clearTimeout(timeoutId)
+    }
+
+    if (now() >= deadline) throw timeoutError()
     if (document.status === 'ready' || document.status === 'failed') return document
-    if (now() >= deadline)
-      throw new ApiError(0, 'DOCUMENT_POLL_TIMEOUT', '文档处理时间较长，请稍后刷新状态。')
-    await sleep(intervalMs)
+    await sleep(Math.min(intervalMs, deadline - now()))
   }
 }
