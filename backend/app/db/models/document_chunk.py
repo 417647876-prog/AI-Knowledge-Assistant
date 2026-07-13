@@ -31,4 +31,4 @@ class DocumentChunk(TimestampMixin, Base):
     extra_metadata: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict
     )
-    embedding: Mapped[list[float]] = mapped_column(VECTOR(1536), nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(VECTOR(512), nullable=False)

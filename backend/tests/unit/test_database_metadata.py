@@ -28,7 +28,7 @@ def test_document_duplicate_constraint_is_scoped_to_knowledge_base() -> None:
     assert {"knowledge_base_id", "file_hash"} in column_sets
 
 
-def test_document_chunk_embedding_is_1536_dimensions() -> None:
+def test_document_chunk_embedding_is_512_dimensions() -> None:
     embedding_type = DocumentChunk.__table__.c.embedding.type
 
-    assert embedding_type.dim == 1536
+    assert embedding_type.dim == 512

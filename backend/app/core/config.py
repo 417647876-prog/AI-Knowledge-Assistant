@@ -16,16 +16,26 @@ class Settings(BaseSettings):
     app_name: str = "AI 企业知识库助手"
     app_env: Literal["development", "test", "production"] = "development"
     database_url: str = "postgresql+psycopg://knowledge:knowledge@localhost:5432/knowledge"
-    embedding_dimensions: int = Field(default=1536, ge=1536, le=1536)
+    embedding_dimensions: int = Field(default=512, ge=512, le=512)
     upload_directory: Path = Path("uploads")
     max_upload_bytes: int = 20 * 1024 * 1024
     chunk_size: int = Field(default=800, gt=0)
     chunk_overlap: int = Field(default=120, ge=0)
-    embedding_provider: Literal["fake", "openai"] = "fake"
+    embedding_provider: Literal["fake", "local", "openai"] = "local"
     embedding_base_url: str = "https://api.openai.com/v1"
     embedding_api_key: str | None = None
-    embedding_model: str = "text-embedding-3-small"
-    embedding_batch_size: int = Field(default=64, gt=0, le=2048)
+    embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    embedding_device: Literal["auto", "cuda", "cpu"] = "auto"
+    embedding_batch_size: int = Field(default=32, gt=0, le=2048)
+    chat_provider: Literal["fake", "deepseek"] = "fake"
+    chat_base_url: str = "https://api.deepseek.com"
+    chat_api_key: str | None = None
+    chat_model: str = "deepseek-v4-flash"
+    chat_timeout_seconds: float = Field(default=30.0, gt=0)
+    rag_top_k_default: int = Field(default=5, ge=1, le=20)
+    rag_top_k_max: int = Field(default=20, ge=1, le=100)
+    rag_score_threshold: float = Field(default=0.55, ge=-1.0, le=1.0)
+    rag_question_max_length: int = Field(default=2000, ge=1, le=10000)
 
     @model_validator(mode="after")
     def validate_chunk_settings(self) -> "Settings":
@@ -33,6 +43,10 @@ class Settings(BaseSettings):
             raise ValueError("chunk_overlap 必须小于 chunk_size")
         if self.embedding_provider == "openai" and not self.embedding_api_key:
             raise ValueError("使用 OpenAI Embedding 时必须配置 API Key")
+        if self.chat_provider == "deepseek" and not self.chat_api_key:
+            raise ValueError("使用 DeepSeek Chat 时必须配置 API Key")
+        if self.rag_top_k_default > self.rag_top_k_max:
+            raise ValueError("rag_top_k_default 不能大于 rag_top_k_max")
         return self
 
 
