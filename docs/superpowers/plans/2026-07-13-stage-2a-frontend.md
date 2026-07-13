@@ -62,7 +62,7 @@ frontend/
 - [ ] **Step 1: 创建 Vue TypeScript 工程并安装依赖**
 
 ```powershell
-npm.cmd create vite@8.1.4 frontend -- --template vue-ts
+npm.cmd create vite@8.1.0 frontend -- --template vue-ts
 Set-Location frontend
 npm.cmd install
 npm.cmd install element-plus@2.14.3 pinia@3.0.4
