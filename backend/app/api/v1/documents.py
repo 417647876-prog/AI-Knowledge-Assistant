@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,21 +13,29 @@ from app.db.models.document import Document
 from app.db.models.ingestion_job import IngestionJob
 from app.db.models.knowledge_base import KnowledgeBase
 from app.db.session import get_session
+from app.knowledge.background import run_ingestion
 
 router = APIRouter(tags=["documents"])
 _allowed_extensions = {".pdf", ".docx", ".xlsx", ".md", ".txt"}
 
 
-def _document_response(document: Document, job: IngestionJob) -> dict[str, str]:
-    return {"document_id": str(document.id), "job_id": str(job.id), "status": document.status}
+def _document_response(document: Document, job: IngestionJob) -> dict[str, str | None]:
+    return {
+        "document_id": str(document.id),
+        "job_id": str(job.id),
+        "status": document.status,
+        "error_code": document.error_code,
+        "error_message": document.error_message,
+    }
 
 
 @router.post("/api/v1/knowledge-bases/{knowledge_base_id}/documents", status_code=202)
 async def upload_document(
     knowledge_base_id: UUID,
+    background_tasks: BackgroundTasks,
     file: Annotated[UploadFile, File()],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> dict[str, str]:
+) -> dict[str, str | None]:
     extension = Path(file.filename or "").suffix.lower()
     if extension not in _allowed_extensions:
         raise AppError(
@@ -68,13 +76,14 @@ async def upload_document(
     job = IngestionJob(document_id=document.id)
     session.add(job)
     await session.commit()
+    background_tasks.add_task(run_ingestion, document.id)
     return _document_response(document, job)
 
 
 @router.get("/api/v1/documents/{document_id}")
 async def get_document(
     document_id: UUID, session: Annotated[AsyncSession, Depends(get_session)]
-) -> dict[str, str]:
+) -> dict[str, str | None]:
     document = await session.get(Document, document_id)
     if document is None:
         raise AppError(code="DOCUMENT_NOT_FOUND", message="文档不存在。", status_code=404)
