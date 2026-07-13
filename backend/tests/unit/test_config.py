@@ -58,3 +58,21 @@ def test_settings_reject_default_top_k_above_maximum() -> None:
 def test_settings_reject_overlap_not_smaller_than_chunk_size() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, chunk_size=100, chunk_overlap=100)
+
+
+def test_settings_use_authentication_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.access_token_expire_minutes == 15
+    assert settings.refresh_token_expire_days == 7
+    assert settings.refresh_cookie_secure is False
+
+
+def test_production_settings_require_jwt_secret_key() -> None:
+    with pytest.raises(ValidationError, match="JWT_SECRET_KEY"):
+        Settings(_env_file=None, app_env="production", refresh_cookie_secure=True)
+
+
+def test_production_settings_require_secure_refresh_cookie() -> None:
+    with pytest.raises(ValidationError, match="REFRESH_COOKIE_SECURE"):
+        Settings(_env_file=None, app_env="production", jwt_secret_key="x" * 64)
