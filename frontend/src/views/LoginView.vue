@@ -11,6 +11,7 @@ const loginError = ref<string | null>(null)
 const form = reactive({ username: '', password: '' })
 
 async function submit() {
+  if (submitting.value) return
   loginError.value = null
   submitting.value = true
   try {

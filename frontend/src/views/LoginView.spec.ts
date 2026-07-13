@@ -12,6 +12,7 @@ import { login } from '../api/auth'
 import { ApiError } from '../api/client'
 import { createAppRouter } from '../router'
 import { useAuthStore } from '../stores/auth'
+import type { AuthSession } from '../types/api'
 import LoginView from './LoginView.vue'
 
 describe('LoginView', () => {
@@ -64,5 +65,41 @@ describe('LoginView', () => {
       '用户名或密码错误。 [INVALID_CREDENTIALS] 请求标识：req-login-1',
     )
     expect(router.currentRoute.value.fullPath).toBe('/login')
+  })
+
+  it('登录请求完成前忽略连续重复提交并保持加载态', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const auth = useAuthStore()
+    auth.initialized = true
+    let resolveLogin!: (session: AuthSession) => void
+    vi.mocked(login).mockReturnValue(new Promise((resolve) => {
+      resolveLogin = resolve
+    }))
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/login')
+    await router.isReady()
+    const wrapper = mount(LoginView, {
+      global: { plugins: [pinia, router, ElementPlus] },
+    })
+    await wrapper.get('input[type="text"]').setValue('alice')
+    await wrapper.get('input[type="password"]').setValue('correct-secret')
+
+    void wrapper.get('form').trigger('submit')
+    void wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(login).toHaveBeenCalledOnce()
+    expect(wrapper.get('button').classes()).toContain('is-loading')
+
+    resolveLogin({
+      access_token: 'access-token', token_type: 'bearer', expires_in: 900,
+      user: { id: 'u-1', username: 'alice', role: 'user', is_active: true },
+    })
+    await flushPromises()
+
+    expect(login).toHaveBeenCalledOnce()
+    expect(wrapper.get('button').classes()).not.toContain('is-loading')
+    expect(router.currentRoute.value.fullPath).toBe('/')
   })
 })

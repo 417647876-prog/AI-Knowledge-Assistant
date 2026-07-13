@@ -1,9 +1,21 @@
 <script setup lang="ts">
-import { RouterView } from 'vue-router'
+import { watch } from 'vue'
+import { RouterView, useRoute, useRouter } from 'vue-router'
 import AppHeader from './components/AppHeader.vue'
 import { useAuthStore } from './stores/auth'
 
 const auth = useAuthStore()
+const route = useRoute()
+const router = useRouter()
+
+watch(() => auth.user, (user) => {
+  if (
+    !user
+    && auth.initialized
+    && !auth.initializing
+    && route.meta.requiresAuth
+  ) void router.replace('/login')
+})
 </script>
 
 <template>
