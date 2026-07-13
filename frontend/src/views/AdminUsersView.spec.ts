@@ -143,6 +143,40 @@ describe('AdminUsersView', () => {
     expect(wrapper.text()).toContain('bob')
   })
 
+  it('弹窗已打开后开始 load 时，创建和重置都不能提交', async () => {
+    const { wrapper, store } = mountView()
+    await wrapper.get('[data-test="create-user"]').trigger('click')
+    await wrapper.get('[data-test="username"]').setValue('bob')
+    await wrapper.get('[data-test="password"]').setValue('temporary pass 123')
+    store.loading = true
+    await flushPromises()
+
+    const createSubmit = wrapper.get('[data-test="submit-user"]')
+    expect(createSubmit.attributes('disabled')).toBeDefined()
+    createSubmit.element.closest('form')!.dispatchEvent(new Event('submit', {
+      bubbles: true, cancelable: true,
+    }))
+    await flushPromises()
+    expect(elementMocks.confirm).not.toHaveBeenCalled()
+    expect(store.createUser).not.toHaveBeenCalled()
+
+    store.loading = false
+    await wrapper.get('[data-test="cancel-create"]').trigger('click')
+    await wrapper.get('[data-test="reset-mobile-u-1"]').trigger('click')
+    await wrapper.get('[data-test="reset-password"]').setValue('replacement pass 123')
+    store.loading = true
+    await flushPromises()
+
+    const resetSubmit = wrapper.get('[data-test="submit-reset"]')
+    expect(resetSubmit.attributes('disabled')).toBeDefined()
+    resetSubmit.element.closest('form')!.dispatchEvent(new Event('submit', {
+      bubbles: true, cancelable: true,
+    }))
+    await flushPromises()
+    expect(elementMocks.confirm).not.toHaveBeenCalled()
+    expect(store.resetPassword).not.toHaveBeenCalled()
+  })
+
   it('创建输入不符合后端边界时显示清晰提示且不发请求', async () => {
     const { wrapper, store } = mountView()
     await wrapper.get('[data-test="create-user"]').trigger('click')

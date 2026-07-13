@@ -22,6 +22,16 @@ const alice: AdminUser = {
   created_at: '2026-07-13T08:00:00Z', updated_at: '2026-07-13T08:00:00Z',
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 describe('admin users store', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
@@ -89,6 +99,121 @@ describe('admin users store', () => {
     })).rejects.toBe(failure)
 
     expect(store.users).toEqual([alice])
+  })
+
+  it('GET pending 时后调用的创建等待旧 GET，创建结果最终保留', async () => {
+    const loadRequest = deferred<AdminUser[]>()
+    const createRequest = deferred<AdminUser>()
+    const bob = { ...alice, id: 'u-2', username: 'bob' }
+    vi.mocked(listAdminUsers).mockReturnValue(loadRequest.promise)
+    vi.mocked(createAdminUser).mockReturnValue(createRequest.promise)
+    const store = useAdminUsersStore()
+
+    const loading = store.loadUsers()
+    const creating = store.createUser({
+      username: 'bob', password: 'temporary pass 123', role: 'user',
+    })
+
+    await vi.waitFor(() => expect(listAdminUsers).toHaveBeenCalledOnce())
+    expect(createAdminUser).not.toHaveBeenCalled()
+    loadRequest.resolve([alice])
+    await loading
+    await vi.waitFor(() => expect(createAdminUser).toHaveBeenCalledOnce())
+    createRequest.resolve(bob)
+    await creating
+
+    expect(store.users).toEqual([alice, bob])
+  })
+
+  it('重叠 load 按调用顺序执行且不会提前解除 loading 或越过 mutation', async () => {
+    const firstLoad = deferred<AdminUser[]>()
+    const secondLoad = deferred<AdminUser[]>()
+    const updateRequest = deferred<AdminUser>()
+    const updatedAlice = { ...alice, role: 'admin' as const }
+    vi.mocked(listAdminUsers)
+      .mockReturnValueOnce(firstLoad.promise)
+      .mockReturnValueOnce(secondLoad.promise)
+    vi.mocked(updateAdminUser).mockReturnValue(updateRequest.promise)
+    const store = useAdminUsersStore()
+
+    const first = store.loadUsers()
+    const second = store.loadUsers()
+    const updating = store.updateUser('u-1', { role: 'admin' })
+
+    await vi.waitFor(() => expect(listAdminUsers).toHaveBeenCalledOnce())
+    expect(updateAdminUser).not.toHaveBeenCalled()
+    expect(store.loading).toBe(true)
+
+    firstLoad.resolve([alice])
+    await first
+    await vi.waitFor(() => expect(listAdminUsers).toHaveBeenCalledTimes(2))
+    expect(store.loading).toBe(true)
+    expect(updateAdminUser).not.toHaveBeenCalled()
+
+    secondLoad.resolve([alice])
+    await second
+    await vi.waitFor(() => expect(updateAdminUser).toHaveBeenCalledOnce())
+    expect(store.loading).toBe(false)
+    updateRequest.resolve(updatedAlice)
+    await updating
+
+    expect(store.users).toEqual([updatedAlice])
+  })
+
+  it('mutation pending 时后调用的 load 等待 mutation，不能用旧结果覆盖', async () => {
+    const updateRequest = deferred<AdminUser>()
+    const loadRequest = deferred<AdminUser[]>()
+    const updatedAlice = { ...alice, is_active: false }
+    vi.mocked(updateAdminUser).mockReturnValue(updateRequest.promise)
+    vi.mocked(listAdminUsers).mockReturnValue(loadRequest.promise)
+    const store = useAdminUsersStore()
+    store.users = [alice]
+
+    const updating = store.updateUser('u-1', { is_active: false })
+    const loading = store.loadUsers()
+
+    await vi.waitFor(() => expect(updateAdminUser).toHaveBeenCalledOnce())
+    expect(listAdminUsers).not.toHaveBeenCalled()
+    updateRequest.resolve(updatedAlice)
+    await updating
+    await vi.waitFor(() => expect(listAdminUsers).toHaveBeenCalledOnce())
+    loadRequest.resolve([updatedAlice])
+    await loading
+
+    expect(store.users).toEqual([updatedAlice])
+  })
+
+  it('排队操作失败后释放队列，后续 mutation 仍可完成', async () => {
+    const loadRequest = deferred<AdminUser[]>()
+    const createRequest = deferred<AdminUser>()
+    const failure = new Error('load failed')
+    const bob = { ...alice, id: 'u-2', username: 'bob' }
+    vi.mocked(listAdminUsers)
+      .mockReturnValueOnce(loadRequest.promise)
+      .mockResolvedValueOnce([bob])
+    vi.mocked(createAdminUser).mockReturnValue(createRequest.promise)
+    const store = useAdminUsersStore()
+
+    const loading = store.loadUsers()
+    const loadFailure = loading.catch((error: unknown) => error)
+    const creating = store.createUser({
+      username: 'bob', password: 'temporary pass 123', role: 'user',
+    })
+    await vi.waitFor(() => expect(listAdminUsers).toHaveBeenCalledOnce())
+    expect(createAdminUser).not.toHaveBeenCalled()
+
+    loadRequest.reject(failure)
+    expect(await loadFailure).toBe(failure)
+    await vi.waitFor(() => expect(createAdminUser).toHaveBeenCalledOnce())
+    createRequest.resolve(bob)
+    await creating
+
+    expect(store.loading).toBe(false)
+    expect(store.users).toEqual([bob])
+
+    await store.loadUsers()
+    expect(listAdminUsers).toHaveBeenCalledTimes(2)
+    expect(store.users).toEqual([bob])
   })
 
   it('修改成功后只替换目标用户且保留列表其他项', async () => {

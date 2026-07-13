@@ -52,7 +52,7 @@ function resetCreateForm(): void {
 }
 
 async function submitCreate(): Promise<void> {
-  if (submittingCreate.value) return
+  if (submittingCreate.value || store.loading) return
   pageError.value = null
   const validationError = validateUsername(createForm.username)
     ?? validatePassword(createForm.password)
@@ -122,7 +122,7 @@ watch(resetVisible, (visible) => {
 }, { flush: 'sync' })
 
 async function submitReset(): Promise<void> {
-  if (submittingReset.value) return
+  if (submittingReset.value || store.loading) return
   pageError.value = null
   const validationError = validatePassword(resetForm.password)
   if (validationError) {
@@ -297,6 +297,7 @@ onMounted(async () => {
           data-test="submit-user"
           native-type="submit"
           type="primary"
+          :disabled="store.loading"
           :loading="submittingCreate"
         >确认创建</el-button>
         <el-button
@@ -332,6 +333,7 @@ onMounted(async () => {
           data-test="submit-reset"
           native-type="submit"
           type="primary"
+          :disabled="store.loading"
           :loading="submittingReset"
         >确认重置</el-button>
         <el-button
