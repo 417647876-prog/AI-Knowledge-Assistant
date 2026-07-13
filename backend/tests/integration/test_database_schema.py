@@ -4,6 +4,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from app.core.config import Settings
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
@@ -15,7 +17,7 @@ pytestmark = [
 
 @pytest.mark.asyncio
 async def test_initial_migration_creates_pgvector_and_core_tables() -> None:
-    database_url = os.environ["DATABASE_URL"]
+    database_url = Settings().database_url
     engine = create_async_engine(database_url)
     try:
         async with engine.connect() as connection:

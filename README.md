@@ -8,7 +8,9 @@
 - 阶段 1B：知识库 API、安全上传、PDF/DOCX/XLSX/Markdown/TXT 解析。
 - 阶段 1C：文本清洗、中文递归切片、事务性向量入库。
 - 阶段 1D：本地 BGE Small、pgvector 余弦检索、DeepSeek 问答与结构化引用。
-- 下一步：阶段 1E 完整验证、演示材料与部署整理。
+- 阶段 1E：自动化测试、Docker 冒烟脚本、中文使用文档与演示材料。
+
+第一阶段的 RAG 后端闭环已经完成：创建知识库 → 上传文档 → 解析和向量入库 → 检索问答 → 返回可追溯引用。
 
 ## 本地启动
 
@@ -28,6 +30,28 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_l
 - 健康检查：<http://127.0.0.1:8000/health>
 - 就绪检查：<http://127.0.0.1:8000/ready>
 
+## 离线冒烟验证
+
+冒烟测试会实际调用已启动的 API，验证“创建知识库 → 上传 TXT → 后台入库 → 问答 → 引用”全链路。
+为避免下载模型或调用付费模型，请另开一个 PowerShell 窗口，使用 Fake Provider 启动服务：
+
+```powershell
+Set-Location backend
+$env:EMBEDDING_PROVIDER = "fake"
+$env:CHAT_PROVIDER = "fake"
+$env:RAG_SCORE_THRESHOLD = "-1"
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_loop:new_event_loop
+```
+
+待服务启动后，在第二个窗口执行：
+
+```powershell
+Set-Location backend
+uv run python -m scripts.smoke_test
+```
+
+脚本只在本地 Docker 数据库中创建一条临时知识库和测试文档；它不读取 DeepSeek Key。
+
 ## 学习资料
 
 - [项目学习笔记](docs/学习笔记.md)
@@ -35,6 +59,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_l
 - [阶段 1B 文档解析设计](docs/superpowers/specs/2026-07-12-stage-1b-knowledge-base-document-parsing-design.md)
 - [阶段 1C 向量入库设计](docs/superpowers/specs/2026-07-13-stage-1c-chunking-vector-ingestion-design.md)
 - [阶段 1D 本地语义检索与问答设计](docs/superpowers/specs/2026-07-13-stage-1d-retrieval-question-answering-design.md)
+- [阶段 1E 验证与演示指南](docs/阶段1E验证与演示.md)
 - [学习任务与资源](MISSION.md)
 
 ## 1D API
@@ -55,6 +80,28 @@ Content-Type: application/json
 POST /api/v1/documents/{document_id}/reprocess
 ```
 
+## API 调用示例
+
+下面以 PowerShell 为例，变量分别保存接口返回的知识库和文档 ID。上传后需要等待文档状态变为 `ready`，再发起提问。
+
+```powershell
+$knowledgeBase = Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8000/api/v1/knowledge-bases" `
+  -ContentType "application/json" `
+  -Body '{"name":"人事制度","description":"演示知识库"}'
+
+$upload = curl.exe -s -X POST `
+  -F "file=@./annual-leave.txt;type=text/plain" `
+  "http://127.0.0.1:8000/api/v1/knowledge-bases/$($knowledgeBase.id)/documents" | ConvertFrom-Json
+
+Invoke-RestMethod "http://127.0.0.1:8000/api/v1/documents/$($upload.document_id)"
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8000/api/v1/knowledge-bases/$($knowledgeBase.id)/questions" `
+  -ContentType "application/json" `
+  -Body '{"question":"员工入职满一年后有多少天年假？","top_k":5}'
+```
+
 ## 验证
 
 ```powershell
@@ -62,4 +109,14 @@ Set-Location backend
 uv run pytest -v
 uv run ruff check app tests migrations
 uv run ruff format --check app tests migrations
+```
+
+数据库集成测试需要先启动 Docker PostgreSQL：
+
+```powershell
+docker compose -f deploy/docker-compose.yml up -d
+Set-Location backend
+uv run alembic upgrade head
+$env:RUN_DATABASE_TESTS = "1"
+uv run pytest -v
 ```
