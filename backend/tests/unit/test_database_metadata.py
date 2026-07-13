@@ -1,20 +1,47 @@
 from sqlalchemy import UniqueConstraint
 
 from app.db.base import Base
-from app.db.models import Document, DocumentChunk, IngestionJob, KnowledgeBase
+from app.db.models import (
+    ADMIN_ROLE,
+    USER_ROLE,
+    Document,
+    DocumentChunk,
+    IngestionJob,
+    KnowledgeBase,
+    RefreshSession,
+    User,
+)
 
 
-def test_stage_1a_metadata_contains_four_core_tables() -> None:
+def test_metadata_contains_six_core_tables() -> None:
     assert set(Base.metadata.tables) == {
         "knowledge_bases",
         "documents",
         "document_chunks",
         "ingestion_jobs",
+        "users",
+        "refresh_sessions",
     }
     assert KnowledgeBase.__tablename__ == "knowledge_bases"
     assert Document.__tablename__ == "documents"
     assert DocumentChunk.__tablename__ == "document_chunks"
     assert IngestionJob.__tablename__ == "ingestion_jobs"
+    assert User.__tablename__ == "users"
+    assert RefreshSession.__tablename__ == "refresh_sessions"
+
+
+def test_auth_models_enforce_unique_identity_and_ownership() -> None:
+    assert KnowledgeBase.__table__.c.owner_id.nullable is False
+    assert len(KnowledgeBase.__table__.c.owner_id.foreign_keys) == 1
+    assert User.__table__.c.username.unique is True
+    assert RefreshSession.__table__.c.token_hash.unique is True
+
+
+def test_user_normalizes_username_and_exports_roles() -> None:
+    user = User(username="  Admin  ", password_hash="hashed")
+
+    assert user.username == "admin"
+    assert (ADMIN_ROLE, USER_ROLE) == ("admin", "user")
 
 
 def test_document_duplicate_constraint_is_scoped_to_knowledge_base() -> None:

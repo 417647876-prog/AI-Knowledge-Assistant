@@ -16,7 +16,7 @@ pytestmark = [
 
 
 @pytest.mark.asyncio
-async def test_initial_migration_creates_pgvector_and_core_tables() -> None:
+async def test_auth_migration_creates_users_sessions_and_owned_knowledge_bases() -> None:
     database_url = Settings().database_url
     engine = create_async_engine(database_url)
     try:
@@ -28,10 +28,25 @@ async def test_initial_migration_creates_pgvector_and_core_tables() -> None:
                 text(
                     "SELECT tablename FROM pg_tables "
                     "WHERE schemaname='public' AND tablename IN "
-                    "('knowledge_bases','documents','document_chunks','ingestion_jobs')"
+                    "('knowledge_bases','documents','document_chunks','ingestion_jobs',"
+                    "'users','refresh_sessions')"
                 )
             )
             table_names = {row[0] for row in table_rows}
+            owner_is_nullable = await connection.scalar(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_schema='public' AND table_name='knowledge_bases' "
+                    "AND column_name='owner_id'"
+                )
+            )
+            owner_foreign_key_count = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM pg_constraint "
+                    "WHERE conrelid='knowledge_bases'::regclass "
+                    "AND contype='f' AND conname='fk_knowledge_bases_owner_id_users'"
+                )
+            )
     finally:
         await engine.dispose()
 
@@ -41,4 +56,8 @@ async def test_initial_migration_creates_pgvector_and_core_tables() -> None:
         "documents",
         "document_chunks",
         "ingestion_jobs",
+        "users",
+        "refresh_sessions",
     }
+    assert owner_is_nullable == "NO"
+    assert owner_foreign_key_count == 1
