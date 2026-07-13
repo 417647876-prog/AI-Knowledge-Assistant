@@ -1,4 +1,4 @@
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import CHAR, CheckConstraint, Text, UniqueConstraint
 
 from app.db.base import Base
 from app.db.models import (
@@ -35,6 +35,22 @@ def test_auth_models_enforce_unique_identity_and_ownership() -> None:
     assert len(KnowledgeBase.__table__.c.owner_id.foreign_keys) == 1
     assert User.__table__.c.username.unique is True
     assert RefreshSession.__table__.c.token_hash.unique is True
+    assert User.__table__.c.username.type.length == 50
+    assert isinstance(User.__table__.c.password_hash.type, Text)
+    assert isinstance(RefreshSession.__table__.c.token_hash.type, CHAR)
+    assert RefreshSession.__table__.c.token_hash.type.length == 64
+    assert "replaced_by_id" in RefreshSession.__table__.c
+    assert "replaced_by_session_id" not in RefreshSession.__table__.c
+
+    role_checks = [
+        constraint
+        for constraint in User.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    ]
+    assert any(
+        "role IN ('admin', 'user')" in str(constraint.sqltext)
+        for constraint in role_checks
+    )
 
 
 def test_user_normalizes_username_and_exports_roles() -> None:

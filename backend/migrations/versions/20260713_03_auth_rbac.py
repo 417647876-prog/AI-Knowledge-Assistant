@@ -21,8 +21,8 @@ def upgrade() -> None:
     op.create_table(
         "users",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("username", sa.String(length=100), nullable=False),
-        sa.Column("password_hash", sa.String(length=255), nullable=False),
+        sa.Column("username", sa.String(length=50), nullable=False),
+        sa.Column("password_hash", sa.Text(), nullable=False),
         sa.Column("role", sa.String(length=20), server_default="user", nullable=False),
         sa.Column("is_active", sa.Boolean(), server_default=sa.text("true"), nullable=False),
         sa.Column(
@@ -37,6 +37,9 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
+        sa.CheckConstraint(
+            "role IN ('admin', 'user')", name=op.f("ck_users_role_values")
+        ),
         sa.PrimaryKeyConstraint("id", name="pk_users"),
         sa.UniqueConstraint("username", name="uq_users_username"),
     )
@@ -44,10 +47,10 @@ def upgrade() -> None:
         "refresh_sessions",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("token_hash", sa.String(length=64), nullable=False),
+        sa.Column("token_hash", sa.CHAR(length=64), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("replaced_by_session_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("replaced_by_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -61,9 +64,9 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.ForeignKeyConstraint(
-            ["replaced_by_session_id"],
+            ["replaced_by_id"],
             ["refresh_sessions.id"],
-            name="fk_refresh_sessions_replaced_by_session_id_refresh_sessions",
+            name="fk_refresh_sessions_replaced_by_id_refresh_sessions",
         ),
         sa.ForeignKeyConstraint(
             ["user_id"],
