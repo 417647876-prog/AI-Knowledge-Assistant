@@ -5,7 +5,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.knowledge_base import KnowledgeBase
+from app.api.auth_dependencies import get_current_user
+from app.db.models import ADMIN_ROLE, KnowledgeBase, User
 from app.db.session import get_session
 
 router = APIRouter(prefix="/api/v1/knowledge-bases", tags=["knowledge-bases"])
@@ -20,26 +21,52 @@ class KnowledgeBaseResponse(BaseModel):
     id: str
     name: str
     description: str | None
+    owner_id: str
+    owner_username: str
 
 
 @router.post("", response_model=KnowledgeBaseResponse, status_code=201)
 async def create_knowledge_base(
-    payload: KnowledgeBaseCreate, session: Annotated[AsyncSession, Depends(get_session)]
+    payload: KnowledgeBaseCreate,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> KnowledgeBaseResponse:
-    knowledge_base = KnowledgeBase(name=payload.name, description=payload.description)
+    knowledge_base = KnowledgeBase(
+        name=payload.name,
+        description=payload.description,
+        owner_id=current_user.id,
+    )
     session.add(knowledge_base)
     await session.commit()
     return KnowledgeBaseResponse(
-        id=str(knowledge_base.id), name=knowledge_base.name, description=knowledge_base.description
+        id=str(knowledge_base.id),
+        name=knowledge_base.name,
+        description=knowledge_base.description,
+        owner_id=str(knowledge_base.owner_id),
+        owner_username=current_user.username,
     )
 
 
 @router.get("", response_model=list[KnowledgeBaseResponse])
 async def list_knowledge_bases(
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> list[KnowledgeBaseResponse]:
-    rows = (await session.scalars(select(KnowledgeBase).order_by(KnowledgeBase.created_at))).all()
+    statement = (
+        select(KnowledgeBase, User.username)
+        .join(User, User.id == KnowledgeBase.owner_id)
+        .order_by(KnowledgeBase.created_at)
+    )
+    if current_user.role != ADMIN_ROLE:
+        statement = statement.where(KnowledgeBase.owner_id == current_user.id)
+    rows = (await session.execute(statement)).all()
     return [
-        KnowledgeBaseResponse(id=str(row.id), name=row.name, description=row.description)
-        for row in rows
+        KnowledgeBaseResponse(
+            id=str(knowledge_base.id),
+            name=knowledge_base.name,
+            description=knowledge_base.description,
+            owner_id=str(knowledge_base.owner_id),
+            owner_username=owner_username,
+        )
+        for knowledge_base, owner_username in rows
     ]

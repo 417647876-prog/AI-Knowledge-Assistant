@@ -1,11 +1,15 @@
 import os
+from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import delete
 
+from app.core.security import hash_password
 from app.db.models.document import Document
 from app.db.models.document_chunk import DocumentChunk
 from app.db.models.knowledge_base import KnowledgeBase
+from app.db.models.user import USER_ROLE, User
 from app.db.session import session_factory
 from app.rag.retriever import VectorRetriever
 
@@ -16,6 +20,27 @@ pytestmark = [
         reason="设置 RUN_DATABASE_TESTS=1 后运行 PostgreSQL 集成测试",
     ),
 ]
+
+
+@pytest.fixture
+async def knowledge_base_owner() -> AsyncIterator[User]:
+    user = User(
+        id=uuid4(),
+        username=f"vector_retriever_{uuid4().hex}",
+        password_hash=hash_password("correct horse battery"),
+        role=USER_ROLE,
+        is_active=True,
+    )
+    async with session_factory.begin() as session:
+        session.add(user)
+    try:
+        yield user
+    finally:
+        async with session_factory.begin() as session:
+            await session.execute(
+                delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id)
+            )
+            await session.execute(delete(User).where(User.id == user.id))
 
 
 def _vector(first: float, second: float = 0.0) -> list[float]:
@@ -39,10 +64,16 @@ async def _add_document(session, knowledge_base_id, name: str) -> Document:
 
 
 @pytest.mark.asyncio
-async def test_search_orders_filters_limits_and_isolates_knowledge_base() -> None:
+async def test_search_orders_filters_limits_and_isolates_knowledge_base(
+    knowledge_base_owner: User,
+) -> None:
     async with session_factory() as session:
-        target = KnowledgeBase(name=f"目标知识库-{uuid4()}")
-        other = KnowledgeBase(name=f"其他知识库-{uuid4()}")
+        target = KnowledgeBase(
+            name=f"目标知识库-{uuid4()}", owner_id=knowledge_base_owner.id
+        )
+        other = KnowledgeBase(
+            name=f"其他知识库-{uuid4()}", owner_id=knowledge_base_owner.id
+        )
         session.add_all([target, other])
         await session.flush()
         target_document = await _add_document(session, target.id, "员工手册.txt")
