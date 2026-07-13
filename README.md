@@ -107,6 +107,8 @@ Remove-Variable securePassword
 
 本阶段只验证本机开发运行，不代表已经具备公网生产安全。生产部署必须使用随机高强度 `JWT_SECRET_KEY`、`REFRESH_COOKIE_SECURE=true`，由同一 HTTPS 域名提供前端和 `/api` 反向代理，并严格配置 `TRUSTED_ORIGINS`。PostgreSQL、Vite 和 Uvicorn 内部端口不能直接暴露公网。
 
+反向代理还必须提供两类入口保护：对登录接口按来源和账号维度做限速、限制并发连接；对文档上传设置真实请求体硬上限。例如 Nginx 的 `client_max_body_size` 应按“20 MB 文件 + multipart 编码开销”配置，不能只写 20 MB。应用内同时限制完整 multipart 请求体和文件内容大小，属于第二层防护；密码 128 字符上限和 Argon2 线程池隔离也不能替代代理层的抗 DoS、连接数与请求速率限制。
+
 手机在同一局域网访问也需要额外绑定非回环地址、防火墙规则和可信 Origin；这些操作会扩大网络暴露面，不属于本阶段默认启动步骤。不要把开发命令直接用于公网。
 
 ## 学习资料

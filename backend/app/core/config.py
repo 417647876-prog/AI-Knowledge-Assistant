@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     embedding_dimensions: int = Field(default=512, ge=512, le=512)
     upload_directory: Path = Path("uploads")
     max_upload_bytes: int = 20 * 1024 * 1024
+    upload_multipart_overhead_bytes: int = Field(default=1024 * 1024, ge=0)
     chunk_size: int = Field(default=800, gt=0)
     chunk_overlap: int = Field(default=120, ge=0)
     embedding_provider: Literal["fake", "local", "openai"] = "local"

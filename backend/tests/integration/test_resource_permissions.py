@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 
 from app.api.v1.questions import get_rag_service
 from app.core.config import get_settings
@@ -39,6 +39,7 @@ class ResourcePermissionContext:
     admin_client: httpx.AsyncClient
     alice_client: httpx.AsyncClient
     bob_client: httpx.AsyncClient
+    bob_id: UUID
     rag_service: StubRagService
 
 
@@ -93,7 +94,9 @@ async def permission_context(tmp_path: Path) -> AsyncIterator[ResourcePermission
         for user in users
     ]
     try:
-        yield ResourcePermissionContext(clients[0], clients[1], clients[2], rag_service)
+        yield ResourcePermissionContext(
+            clients[0], clients[1], clients[2], users[2].id, rag_service
+        )
     finally:
         for client in clients:
             await client.aclose()
@@ -192,3 +195,25 @@ async def test_upload_authorizes_before_file_validation_or_disk_write(
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "KNOWLEDGE_BASE_NOT_FOUND"
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_upload_guard_leaves_disabled_user_check_to_route_dependency(
+    permission_context: ResourcePermissionContext,
+) -> None:
+    knowledge_base_response = await permission_context.alice_client.post(
+        "/api/v1/knowledge-bases", json={"name": f"停用账号上传 {uuid4()}"}
+    )
+    knowledge_base_id = knowledge_base_response.json()["id"]
+    async with session_factory.begin() as session:
+        await session.execute(
+            update(User).where(User.id == permission_context.bob_id).values(is_active=False)
+        )
+
+    response = await permission_context.bob_client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base_id}/documents",
+        files={"file": ("制度.txt", "内容", "text/plain")},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"

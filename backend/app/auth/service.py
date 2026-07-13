@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import Settings
 from app.core.exceptions import AppError
@@ -48,7 +49,11 @@ class AuthService:
                 select(User).where(User.username == normalized_username)
             )
             password_hash = user.password_hash if user is not None else _DUMMY_PASSWORD_HASH
-            password_matches = verify_password(password, password_hash)
+            password_matches = await run_in_threadpool(
+                verify_password,
+                password,
+                password_hash,
+            )
             if user is None or not password_matches or not user.is_active:
                 raise _invalid_credentials()
             return self._issue_session(user, self._now())

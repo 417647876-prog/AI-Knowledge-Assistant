@@ -1,5 +1,6 @@
 import asyncio
 import os
+import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -9,7 +10,15 @@ import httpx
 import pytest
 from sqlalchemy import delete, select, update
 
-from app.api.v1.admin_users import AdminUserResponse, AdminUserUpdate, update_user
+from app.api.v1.admin_users import (
+    AdminPasswordReset,
+    AdminUserCreate,
+    AdminUserResponse,
+    AdminUserUpdate,
+    create_user,
+    reset_password,
+    update_user,
+)
 from app.auth.service import AuthService
 from app.core.config import get_settings
 from app.core.exceptions import AppError
@@ -140,6 +149,52 @@ async def test_admin_can_list_and_create_users_but_regular_user_cannot(
     )
     assert duplicate.status_code == 409
     assert duplicate.json()["error"]["code"] == "USERNAME_ALREADY_EXISTS"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "reset"])
+async def test_admin_password_hashing_does_not_block_event_loop(
+    admin_api: AdminApiContext,
+    operation: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = threading.Event()
+    released_while_hashing = False
+
+    def slow_hash(_password: str) -> str:
+        nonlocal released_while_hashing
+        released_while_hashing = release.wait(timeout=0.5)
+        return "hashed-password"
+
+    monkeypatch.setattr("app.api.v1.admin_users.hash_password", slow_hash)
+
+    async with session_factory() as session:
+        if operation == "create":
+            coroutine = create_user(
+                AdminUserCreate(
+                    username=f"threadpool_{uuid4().hex}",
+                    password="temporary pass 123",
+                    role="user",
+                ),
+                admin_api.admin,
+                session,
+            )
+        else:
+            coroutine = reset_password(
+                admin_api.user.id,
+                AdminPasswordReset(password="replacement pass 123"),
+                admin_api.admin,
+                session,
+                get_settings(),
+            )
+        task = asyncio.create_task(coroutine)
+        await asyncio.sleep(0)
+        release.set()
+        result = await task
+
+    if operation == "create":
+        admin_api.created_user_ids.append(result.id)
+    assert released_while_hashing is True
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ from pydantic import BaseModel, StringConstraints, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.api.auth_dependencies import require_admin
 from app.auth.schemas import CurrentUserResponse
@@ -78,9 +79,10 @@ async def create_user(
     if existing is not None:
         raise _username_exists()
 
+    password_hash = await run_in_threadpool(hash_password, payload.password)
     user = User(
         username=normalized_username,
-        password_hash=hash_password(payload.password),
+        password_hash=password_hash,
         role=payload.role,
         is_active=True,
     )
@@ -163,7 +165,7 @@ async def reset_password(
     target = await session.scalar(select(User).where(User.id == user_id).with_for_update())
     if target is None:
         raise _user_not_found()
-    target.password_hash = hash_password(payload.password)
+    target.password_hash = await run_in_threadpool(hash_password, payload.password)
     await AuthService(
         session=session,
         settings=settings,

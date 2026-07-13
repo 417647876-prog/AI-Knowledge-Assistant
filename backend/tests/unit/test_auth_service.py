@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -73,6 +75,32 @@ async def test_unknown_username_still_runs_virtual_password_verification() -> No
     assert error.value.code == "INVALID_CREDENTIALS"
     verify.assert_called_once()
     assert verify.call_args.args[0] == "wrong password"
+
+
+@pytest.mark.asyncio
+async def test_login_password_verification_does_not_block_event_loop() -> None:
+    service = make_service(make_session(None), datetime.now(UTC))
+    release = threading.Event()
+    released_while_verifying = False
+
+    def slow_verify(_password: str, _password_hash: str) -> bool:
+        nonlocal released_while_verifying
+        released_while_verifying = release.wait(timeout=0.5)
+        return False
+
+    async def heartbeat() -> None:
+        await asyncio.sleep(0)
+        release.set()
+
+    with (
+        patch("app.auth.service.verify_password", side_effect=slow_verify),
+        pytest.raises(AppError),
+    ):
+        login_task = asyncio.create_task(service.login("missing", "wrong password"))
+        await heartbeat()
+        await login_task
+
+    assert released_while_verifying is True
 
 
 @pytest.mark.asyncio

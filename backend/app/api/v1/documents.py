@@ -47,12 +47,14 @@ async def upload_document(
         raise AppError(
             code="UNSUPPORTED_FILE_TYPE", message="当前不支持该文件格式。", status_code=415
         )
-    content = await file.read()
     settings = get_settings()
+    content = bytearray()
+    while chunk := await file.read(64 * 1024):
+        content.extend(chunk)
+        if len(content) > settings.max_upload_bytes:
+            raise AppError(code="FILE_TOO_LARGE", message="文件超过 20 MB 限制。", status_code=413)
     if not content:
         raise AppError(code="DOCUMENT_CONTENT_EMPTY", message="文档内容为空。", status_code=422)
-    if len(content) > settings.max_upload_bytes:
-        raise AppError(code="FILE_TOO_LARGE", message="文件超过 20 MB 限制。", status_code=413)
     file_hash = hashlib.sha256(content).hexdigest()
     duplicate = await session.scalar(
         select(Document.id).where(

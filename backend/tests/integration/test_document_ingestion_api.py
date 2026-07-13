@@ -116,3 +116,36 @@ async def test_whitespace_document_finishes_failed_with_safe_error(
     assert state.json()["status"] == "failed"
     assert state.json()["error_code"] == "DOCUMENT_CONTENT_EMPTY"
     assert state.json()["error_message"] == "文档内容为空。"
+
+
+@pytest.mark.asyncio
+async def test_upload_enforces_exact_file_size_boundary(
+    tmp_path, authenticated_client: httpx.AsyncClient
+) -> None:
+    settings = get_settings()
+    previous_upload_directory = settings.upload_directory
+    previous_max_upload_bytes = settings.max_upload_bytes
+    settings.upload_directory = tmp_path
+    settings.max_upload_bytes = 4
+    try:
+        knowledge_base = (
+            await authenticated_client.post(
+                "/api/v1/knowledge-bases",
+                json={"name": f"1B 边界测试 {uuid4()}"},
+            )
+        ).json()
+        accepted = await authenticated_client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents",
+            files={"file": ("four.txt", b"1234", "text/plain")},
+        )
+        rejected = await authenticated_client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents",
+            files={"file": ("five.txt", b"12345", "text/plain")},
+        )
+    finally:
+        settings.upload_directory = previous_upload_directory
+        settings.max_upload_bytes = previous_max_upload_bytes
+
+    assert accepted.status_code == 202
+    assert rejected.status_code == 413
+    assert rejected.json()["error"]["code"] == "FILE_TOO_LARGE"
