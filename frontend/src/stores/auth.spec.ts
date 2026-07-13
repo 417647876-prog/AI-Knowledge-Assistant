@@ -114,6 +114,23 @@ describe('auth store', () => {
     expect(store.user).toEqual(bobSession.user)
   })
 
+  it('stays anonymous when a login observed by initialization fails', async () => {
+    let rejectLogin!: (error: Error) => void
+    vi.mocked(login).mockReturnValue(new Promise((_resolve, reject) => { rejectLogin = reject }))
+    vi.mocked(refresh).mockResolvedValue(userSession)
+    const store = useAuthStore()
+
+    const loggingIn = store.login('bob', 'wrong-secret')
+    const loginResult = expect(loggingIn).rejects.toThrow('login failed')
+    const initializing = store.initialize()
+    rejectLogin(new Error('login failed'))
+    await Promise.all([loginResult, initializing])
+
+    expect(refresh).not.toHaveBeenCalled()
+    expect(store.accessToken).toBeNull()
+    expect(store.user).toBeNull()
+  })
+
   it('does not start an automatic refresh while a login is changing the session', async () => {
     let resolveLogin!: (session: AuthSession) => void
     const bobSession: AuthSession = {
@@ -229,6 +246,25 @@ describe('auth store', () => {
     expect(login).toHaveBeenCalledWith('bob', 'secret')
     expect(store.accessToken).toBe('bob-token')
     expect(store.user).toEqual(bobSession.user)
+  })
+
+  it('stays anonymous when a logout observed by initialization fails', async () => {
+    vi.mocked(login).mockResolvedValue(userSession)
+    let rejectLogout!: (error: Error) => void
+    vi.mocked(logout).mockReturnValue(new Promise((_resolve, reject) => { rejectLogout = reject }))
+    vi.mocked(refresh).mockResolvedValue(userSession)
+    const store = useAuthStore()
+    await store.login('alice', 'secret')
+
+    const loggingOut = store.logout()
+    const logoutResult = expect(loggingOut).rejects.toThrow('logout failed')
+    const initializing = store.initialize()
+    rejectLogout(new Error('logout failed'))
+    await Promise.all([logoutResult, initializing])
+
+    expect(refresh).not.toHaveBeenCalled()
+    expect(store.accessToken).toBeNull()
+    expect(store.user).toBeNull()
   })
 
   it('stays anonymous when initialization cannot refresh the session', async () => {

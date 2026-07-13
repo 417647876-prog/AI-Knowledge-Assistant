@@ -70,14 +70,19 @@ export const useAuthStore = defineStore('auth', () => {
     if (initialized.value) return Promise.resolve()
     if (initializationPromise) return initializationPromise
     const generation = authenticationGeneration
+    const pendingLogout = logoutSessionPromise
+    const pendingLogin = loginSessionPromise
+    const observedExplicitOperation = Boolean(pendingLogout || pendingLogin)
     initializing.value = true
     initializationPromise = (async () => {
       try {
-        const pendingLogout = logoutSessionPromise
         if (pendingLogout) await pendingLogout.catch(() => undefined)
-        const pendingLogin = loginSessionPromise
         if (pendingLogin) await pendingLogin.catch(() => undefined)
-        if (generation !== authenticationGeneration || accessToken.value) return
+        if (
+          observedExplicitOperation
+          || generation !== authenticationGeneration
+          || accessToken.value
+        ) return
         const session = await requestRefreshSession()
         if (generation === authenticationGeneration) applySession(session)
       } catch {
