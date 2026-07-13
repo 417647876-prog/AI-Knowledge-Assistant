@@ -1,5 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthSession } from '../types/api'
 
 vi.mock('../api/auth', () => ({
@@ -7,6 +7,7 @@ vi.mock('../api/auth', () => ({
 }))
 
 import { login, logout, refresh } from '../api/auth'
+import { apiRequest } from '../api/client'
 import { useAuthStore } from './auth'
 import { useWorkspaceStore } from './workspace'
 
@@ -17,6 +18,7 @@ const userSession: AuthSession = {
 
 describe('auth store', () => {
   beforeEach(() => setActivePinia(createPinia()))
+  afterEach(() => vi.unstubAllGlobals())
 
   it('restores the in-memory session during initialization', async () => {
     vi.mocked(refresh).mockResolvedValue(userSession)
@@ -88,6 +90,52 @@ describe('auth store', () => {
     expect(store.user).toEqual(newSession.user)
   })
 
+  it('does not let initialization refresh overwrite a login that started first', async () => {
+    let resolveLogin!: (session: AuthSession) => void
+    let resolveRefresh: ((session: AuthSession) => void) | undefined
+    const bobSession: AuthSession = {
+      ...userSession,
+      access_token: 'bob-token',
+      user: { ...userSession.user, id: 'u-bob', username: 'bob' },
+    }
+    vi.mocked(login).mockReturnValue(new Promise((resolve) => { resolveLogin = resolve }))
+    vi.mocked(refresh).mockReturnValue(new Promise((resolve) => { resolveRefresh = resolve }))
+    const store = useAuthStore()
+
+    const loggingIn = store.login('bob', 'secret')
+    const initializing = store.initialize()
+    resolveLogin(bobSession)
+    await loggingIn
+    resolveRefresh?.(userSession)
+    await initializing
+
+    expect(refresh).not.toHaveBeenCalled()
+    expect(store.accessToken).toBe('bob-token')
+    expect(store.user).toEqual(bobSession.user)
+  })
+
+  it('does not start an automatic refresh while a login is changing the session', async () => {
+    let resolveLogin!: (session: AuthSession) => void
+    const bobSession: AuthSession = {
+      ...userSession,
+      access_token: 'bob-token',
+      user: { ...userSession.user, id: 'u-bob', username: 'bob' },
+    }
+    vi.mocked(login).mockReturnValue(new Promise((resolve) => { resolveLogin = resolve }))
+    vi.mocked(refresh).mockResolvedValue(userSession)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 401 })))
+    const store = useAuthStore()
+
+    const loggingIn = store.login('bob', 'secret')
+    await expect(apiRequest('/protected')).rejects.toMatchObject({ status: 401 })
+    resolveLogin(bobSession)
+    await loggingIn
+
+    expect(refresh).not.toHaveBeenCalled()
+    expect(store.accessToken).toBe('bob-token')
+    expect(store.user).toEqual(bobSession.user)
+  })
+
   it('serializes overlapping logins so logout waits for every cookie response', async () => {
     let resolveFirstLogin!: (session: AuthSession) => void
     vi.mocked(login).mockReturnValueOnce(new Promise((resolve) => { resolveFirstLogin = resolve }))
@@ -140,6 +188,8 @@ describe('auth store', () => {
     vi.mocked(refresh).mockReturnValue(new Promise((resolve) => { resolveRefresh = resolve }))
     const store = useAuthStore()
     await store.login('alice', 'secret')
+    store.accessToken = null
+    store.user = null
     const initializing = store.initialize()
 
     const loggingOut = store.logout()
@@ -153,6 +203,32 @@ describe('auth store', () => {
     expect(logout).toHaveBeenCalledOnce()
     expect(store.accessToken).toBeNull()
     expect(store.user).toBeNull()
+  })
+
+  it('waits for logout before sending a login that starts later', async () => {
+    vi.mocked(login).mockResolvedValue(userSession)
+    let resolveLogout!: () => void
+    vi.mocked(logout).mockReturnValue(new Promise((resolve) => { resolveLogout = resolve }))
+    const store = useAuthStore()
+    await store.login('alice', 'secret')
+    vi.mocked(login).mockClear()
+    const bobSession: AuthSession = {
+      ...userSession,
+      access_token: 'bob-token',
+      user: { ...userSession.user, id: 'u-bob', username: 'bob' },
+    }
+    vi.mocked(login).mockResolvedValue(bobSession)
+
+    const loggingOut = store.logout()
+    const loggingIn = store.login('bob', 'secret')
+    expect(login).not.toHaveBeenCalled()
+
+    resolveLogout()
+    await Promise.all([loggingOut, loggingIn])
+
+    expect(login).toHaveBeenCalledWith('bob', 'secret')
+    expect(store.accessToken).toBe('bob-token')
+    expect(store.user).toEqual(bobSession.user)
   })
 
   it('stays anonymous when initialization cannot refresh the session', async () => {

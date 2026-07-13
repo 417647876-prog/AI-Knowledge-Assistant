@@ -19,6 +19,7 @@ export const useAuthStore = defineStore('auth', () => {
   let authenticationGeneration = 0
   let refreshSessionPromise: Promise<AuthSession> | null = null
   let loginSessionPromise: Promise<AuthSession> | null = null
+  let logoutSessionPromise: Promise<void> | null = null
   let initializationPromise: Promise<void> | null = null
 
   function applySession(session: AuthSession) {
@@ -47,6 +48,7 @@ export const useAuthStore = defineStore('auth', () => {
   configureAuthentication({
     getAccessToken: () => accessToken.value,
     refreshAccessToken: async () => {
+      if (loginSessionPromise || logoutSessionPromise) return null
       const generation = authenticationGeneration
       try {
         const session = await requestRefreshSession()
@@ -71,6 +73,11 @@ export const useAuthStore = defineStore('auth', () => {
     initializing.value = true
     initializationPromise = (async () => {
       try {
+        const pendingLogout = logoutSessionPromise
+        if (pendingLogout) await pendingLogout.catch(() => undefined)
+        const pendingLogin = loginSessionPromise
+        if (pendingLogin) await pendingLogin.catch(() => undefined)
+        if (generation !== authenticationGeneration || accessToken.value) return
         const session = await requestRefreshSession()
         if (generation === authenticationGeneration) applySession(session)
       } catch {
@@ -84,38 +91,52 @@ export const useAuthStore = defineStore('auth', () => {
     return initializationPromise
   }
 
-  async function login(username: string, password: string) {
+  function login(username: string, password: string): Promise<AuthSession> {
     authenticationGeneration += 1
     const generation = authenticationGeneration
     clearSession()
-    const pendingRefresh = refreshSessionPromise
-    if (pendingRefresh) await pendingRefresh.catch(() => undefined)
     const previousLogin = loginSessionPromise
-    if (previousLogin) await previousLogin.catch(() => undefined)
-    if (generation !== authenticationGeneration) throw new Error('认证操作已取消。')
-    const pendingLogin = loginRequest(username, password)
-    loginSessionPromise = pendingLogin
-    try {
-      const session = await pendingLogin
+    const previousLogout = logoutSessionPromise
+    const operation = (async () => {
+      if (previousLogout) await previousLogout.catch(() => undefined)
+      const pendingRefresh = refreshSessionPromise
+      if (pendingRefresh) await pendingRefresh.catch(() => undefined)
+      if (previousLogin) await previousLogin.catch(() => undefined)
+      if (generation !== authenticationGeneration) throw new Error('认证操作已取消。')
+      const session = await loginRequest(username, password)
       if (generation === authenticationGeneration) applySession(session)
       return session
-    } finally {
-      if (loginSessionPromise === pendingLogin) loginSessionPromise = null
-    }
+    })()
+    loginSessionPromise = operation
+    operation.then(
+      () => { if (loginSessionPromise === operation) loginSessionPromise = null },
+      () => { if (loginSessionPromise === operation) loginSessionPromise = null },
+    )
+    return operation
   }
 
-  async function logout() {
+  function logout(): Promise<void> {
     authenticationGeneration += 1
     clearSession()
-    const pendingRefresh = refreshSessionPromise
-    if (pendingRefresh) await pendingRefresh.catch(() => undefined)
     const pendingLogin = loginSessionPromise
-    if (pendingLogin) await pendingLogin.catch(() => undefined)
-    try {
-      await logoutRequest()
-    } finally {
-      clearSession()
-    }
+    const previousLogout = logoutSessionPromise
+    const operation = (async () => {
+      if (previousLogout) await previousLogout.catch(() => undefined)
+      const pendingRefresh = refreshSessionPromise
+      if (pendingRefresh) await pendingRefresh.catch(() => undefined)
+      if (pendingLogin) await pendingLogin.catch(() => undefined)
+      try {
+        await logoutRequest()
+      } finally {
+        clearSession()
+      }
+    })()
+    logoutSessionPromise = operation
+    operation.then(
+      () => { if (logoutSessionPromise === operation) logoutSessionPromise = null },
+      () => { if (logoutSessionPromise === operation) logoutSessionPromise = null },
+    )
+    return operation
   }
 
   return { accessToken, user, initialized, initializing, isAdmin, initialize, login, logout }
