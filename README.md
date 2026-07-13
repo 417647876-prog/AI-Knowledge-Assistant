@@ -30,6 +30,31 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_l
 - 健康检查：<http://127.0.0.1:8000/health>
 - 就绪检查：<http://127.0.0.1:8000/ready>
 
+## 阶段 2A 前端
+
+阶段 2A 增加了基于 Vue 3、TypeScript、Vite、Pinia 和 Element Plus 的单页工作台，并使用 Vitest 进行前端测试。
+
+从仓库根目录打开两个 PowerShell 窗口。终端 1 启动数据库和 FastAPI：
+
+```powershell
+docker compose -f deploy/docker-compose.yml up -d
+Set-Location backend
+uv run alembic upgrade head
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop app.core.event_loop:new_event_loop
+```
+
+终端 2 安装依赖并启动前端：
+
+```powershell
+Set-Location frontend
+npm.cmd install
+npm.cmd run dev
+```
+
+打开 <http://127.0.0.1:5173> 后，可以创建和切换知识库，上传 TXT、Markdown、PDF、DOCX 或 XLSX 文档并观察处理状态，以及提问并查看引用来源。当前文档列表只保存在本次浏览器会话中；刷新页面后不会重新加载此前上传的文档。
+
+更完整的环境要求、访问地址和验证命令见 [阶段 2A 前端使用说明](frontend/README.md)。
+
 ## 离线冒烟验证
 
 冒烟测试会实际调用已启动的 API，验证“创建知识库 → 上传 TXT → 后台入库 → 问答 → 引用”全链路。
