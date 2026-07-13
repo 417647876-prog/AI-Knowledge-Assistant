@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import case, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.contracts import EmbeddingProvider
@@ -94,7 +94,14 @@ class IngestionService:
         return await self._session.scalar(
             select(IngestionJob)
             .where(IngestionJob.document_id == document_id)
-            .order_by(IngestionJob.id.desc())
+            .order_by(
+                case(
+                    (IngestionJob.status == "pending", 0),
+                    (IngestionJob.status == "running", 1),
+                    else_=2,
+                ),
+                IngestionJob.finished_at.desc().nullslast(),
+            )
         )
 
     async def _update_stage(

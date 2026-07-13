@@ -95,3 +95,36 @@ async def get_document(
     if job is None:
         raise AppError(code="DOCUMENT_NOT_FOUND", message="文档任务不存在。", status_code=404)
     return _document_response(document, job)
+
+
+@router.post("/api/v1/documents/{document_id}/reprocess", status_code=202)
+async def reprocess_document(
+    document_id: UUID,
+    background_tasks: BackgroundTasks,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, str | None]:
+    document = await session.scalar(
+        select(Document).where(Document.id == document_id).with_for_update()
+    )
+    if document is None:
+        raise AppError(code="DOCUMENT_NOT_FOUND", message="文档不存在。", status_code=404)
+    active_job = await session.scalar(
+        select(IngestionJob.id).where(
+            IngestionJob.document_id == document_id,
+            IngestionJob.status.in_(("pending", "running")),
+        )
+    )
+    if active_job is not None:
+        raise AppError(
+            code="DOCUMENT_PROCESSING",
+            message="文档正在处理中，请勿重复提交。",
+            status_code=409,
+        )
+    document.status = "pending"
+    document.error_code = None
+    document.error_message = None
+    job = IngestionJob(document_id=document.id)
+    session.add(job)
+    await session.commit()
+    background_tasks.add_task(run_ingestion, document.id)
+    return _document_response(document, job)
