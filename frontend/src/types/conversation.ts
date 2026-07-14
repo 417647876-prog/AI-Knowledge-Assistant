@@ -14,6 +14,39 @@ export interface StreamTimings {
   total_ms: number
 }
 
+export type AssistantStatus = 'streaming' | 'completed' | 'stopped' | 'failed'
+
+export interface UserMessage {
+  id: string
+  kind: 'user'
+  content: string
+  createdAt: string
+}
+
+export interface AssistantMessage {
+  id: string
+  kind: 'assistant'
+  questionId: string
+  content: string
+  createdAt: string
+  status: AssistantStatus
+  phase: 'rewriting' | 'retrieving' | 'generating' | null
+  citations: Citation[]
+  standaloneQuestion: string | null
+  retrievedChunkCount: number | null
+  timings: StreamTimings | null
+  errorCode: string | null
+  requestId: string | null
+}
+
+export interface DividerMessage {
+  id: string
+  kind: 'divider'
+  createdAt: string
+}
+
+export type ConversationMessage = UserMessage | AssistantMessage | DividerMessage
+
 export type QuestionStreamEvent =
   | { event: 'status'; data: { phase: 'rewriting' | 'retrieving' | 'generating' } }
   | { event: 'rewrite'; data: { standalone_question: string; elapsed_ms: number } }
