@@ -145,13 +145,13 @@ class KeywordRetriever:
     ) -> list[RetrievedChunk]: ...
 ```
 
-- [ ] **Step 1：写精确编号、排序、限制和跨知识库隔离测试**
-- [ ] **Step 2：将安全 Token 用 `|` 连接后传给 `to_tsquery('simple', ...)` 查询**
+- [x] **Step 1：写精确编号、排序、限制和跨知识库隔离测试**
+- [x] **Step 2：将安全 Token 用 `|` 连接后传给 `to_tsquery('simple', ...)` 查询**
 
 `build_search_text` 只产生中文、ASCII 字母和数字 Token，因此可安全构造 `token1 | token2` 的 OR 查询；禁止把原始用户文本直接传给 `to_tsquery`。排序使用 `ts_rank_cd` 降序，再按 `DocumentChunk.id` 升序稳定排序。`query_embedding` 和 `score_threshold` 为统一协议参数，在关键词实现中不使用。
 
-- [ ] **Step 3：空 Token 查询直接返回空列表**
-- [ ] **Step 4：运行数据库测试并提交**
+- [x] **Step 3：空 Token 查询直接返回空列表**
+- [x] **Step 4：运行数据库测试并提交**
 
 运行：`$env:RUN_DATABASE_TESTS='1'; uv run pytest tests/integration/test_keyword_retriever.py tests/integration/test_resource_permissions.py -q; Remove-Item Env:RUN_DATABASE_TESTS`
 
