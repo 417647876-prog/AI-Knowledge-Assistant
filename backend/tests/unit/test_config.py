@@ -43,6 +43,14 @@ def test_settings_use_stage_1d_rag_defaults() -> None:
     assert settings.rag_top_k_max == 20
     assert settings.rag_score_threshold == 0.55
     assert settings.rag_question_max_length == 2000
+    assert settings.rag_retrieval_mode == "vector"
+    assert settings.rag_rrf_rank_constant == 60
+
+
+@pytest.mark.parametrize("rank_constant", [0, 1001])
+def test_settings_reject_invalid_rrf_rank_constant(rank_constant: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, rag_rrf_rank_constant=rank_constant)
 
 
 def test_settings_require_key_for_deepseek() -> None:

@@ -8,12 +8,14 @@ import pytest
 from sqlalchemy import delete
 
 from app.ai.contracts import ConversationMessage
-from app.api.v1.questions import get_rag_service
-from app.core.config import get_settings
+from app.api.v1.questions import build_retriever, get_rag_service
+from app.core.config import Settings, get_settings
 from app.core.security import create_access_token, hash_password
 from app.db.models import USER_ROLE, KnowledgeBase, RefreshSession, User
 from app.db.session import session_factory
 from app.main import create_app
+from app.rag.hybrid_retriever import HybridRetriever
+from app.rag.retriever import VectorRetriever
 from app.rag.schemas import Citation, QuestionAnswer
 from app.rag.streaming import StreamEvent
 
@@ -24,6 +26,20 @@ pytestmark = [
         reason="设置 RUN_DATABASE_TESTS=1 后运行 PostgreSQL 集成测试",
     ),
 ]
+
+
+def test_retriever_factory_selects_vector_or_hybrid_mode() -> None:
+    session = object()
+
+    vector = build_retriever(session, Settings(_env_file=None, rag_retrieval_mode="vector"))
+    hybrid = build_retriever(
+        session,
+        Settings(_env_file=None, rag_retrieval_mode="hybrid", rag_rrf_rank_constant=37),
+    )
+
+    assert isinstance(vector, VectorRetriever)
+    assert isinstance(hybrid, HybridRetriever)
+    assert hybrid._rank_constant == 37
 
 
 class StubRagService:

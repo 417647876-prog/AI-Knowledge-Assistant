@@ -27,6 +27,9 @@ from app.authorization.service import get_accessible_knowledge_base
 from app.core.config import Settings, get_settings
 from app.db.models import User
 from app.db.session import get_session
+from app.rag.contracts import Retriever
+from app.rag.hybrid_retriever import HybridRetriever
+from app.rag.keyword_retriever import KeywordRetriever
 from app.rag.retriever import VectorRetriever
 from app.rag.service import RagService
 
@@ -145,6 +148,17 @@ async def get_question_rewriter(
     return ChatQuestionRewriter(chat_provider)
 
 
+def build_retriever(session: AsyncSession, settings: Settings) -> Retriever:
+    vector = VectorRetriever(session)
+    if settings.rag_retrieval_mode == "vector":
+        return vector
+    return HybridRetriever(
+        vector,
+        KeywordRetriever(session),
+        rank_constant=settings.rag_rrf_rank_constant,
+    )
+
+
 async def get_rag_service(
     session: Annotated[AsyncSession, Depends(get_session)],
     embedding_provider: Annotated[EmbeddingProvider, Depends(get_question_embedding_provider)],
@@ -155,7 +169,7 @@ async def get_rag_service(
     return RagService(
         session=session,
         embedding_provider=embedding_provider,
-        retriever=VectorRetriever(session),
+        retriever=build_retriever(session, settings),
         chat_provider=chat_provider,
         question_rewriter=question_rewriter,
         score_threshold=settings.rag_score_threshold,

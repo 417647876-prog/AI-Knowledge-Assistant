@@ -89,7 +89,7 @@ async def test_answer_retrieves_generates_and_maps_real_citations() -> None:
 
     result = await service.answer(
         knowledge_base_id=knowledge_base_id,
-        question="年假有几天？",
+        question="  年假有几天？  ",
         top_k=5,
     )
 
@@ -97,6 +97,7 @@ async def test_answer_retrieves_generates_and_maps_real_citations() -> None:
     assert result.retrieved_chunk_count == 1
     assert [item.citation_id for item in result.citations] == [1]
     assert retriever.calls[0]["knowledge_base_id"] == knowledge_base_id
+    assert retriever.calls[0]["query"] == "年假有几天？"
     assert retriever.calls[0]["score_threshold"] == 0.55
     assert chat.call_count == 1
 
@@ -145,10 +146,11 @@ async def test_stream_rewrites_retrieves_generates_citations_and_timings() -> No
     chunk = _chunk()
     rewriter = RecordingRewriter("向量检索有什么缺点？")
     chat = StreamingCountingChatProvider("unused", ["答案 [", "1]"])
+    retriever = StubRetriever([chunk])
     service = RagService(
         session=FakeSession(object()),
         embedding_provider=FakeEmbeddingProvider(dimensions=512),
-        retriever=StubRetriever([chunk]),
+        retriever=retriever,
         chat_provider=chat,
         question_rewriter=rewriter,
         score_threshold=0.55,
@@ -180,6 +182,7 @@ async def test_stream_rewrites_retrieves_generates_citations_and_timings() -> No
         "total_ms",
     }
     assert rewriter.calls == [(history, "它的缺点？")]
+    assert retriever.calls[0]["query"] == "向量检索有什么缺点？"
 
 
 @pytest.mark.asyncio

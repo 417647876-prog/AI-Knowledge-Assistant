@@ -13,8 +13,8 @@ from app.ai.contracts import (
 from app.core.exceptions import AppError
 from app.db.models.knowledge_base import KnowledgeBase
 from app.rag.citations import map_citations
+from app.rag.contracts import Retriever
 from app.rag.prompt import build_rag_prompt
-from app.rag.retriever import VectorRetriever
 from app.rag.schemas import QuestionAnswer
 from app.rag.streaming import CitationTracker, StreamEvent, citation_payload
 
@@ -31,7 +31,7 @@ class RagService:
         *,
         session: AsyncSession,
         embedding_provider: EmbeddingProvider,
-        retriever: VectorRetriever,
+        retriever: Retriever,
         chat_provider: StreamingChatProvider,
         question_rewriter: QuestionRewriter,
         score_threshold: float,
@@ -55,6 +55,7 @@ class RagService:
         query_embedding = await self._embedding_provider.embed_query(question)
         return await self._retriever.search(
             knowledge_base_id=knowledge_base_id,
+            query=question,
             query_embedding=query_embedding,
             top_k=top_k,
             score_threshold=self._score_threshold,

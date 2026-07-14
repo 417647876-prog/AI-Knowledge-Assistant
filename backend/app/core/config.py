@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     rag_top_k_max: int = Field(default=20, ge=1, le=100)
     rag_score_threshold: float = Field(default=0.55, ge=-1.0, le=1.0)
     rag_question_max_length: int = Field(default=2000, ge=1, le=10000)
+    rag_retrieval_mode: Literal["vector", "hybrid"] = "vector"
+    rag_rrf_rank_constant: int = Field(default=60, ge=1, le=1000)
 
     jwt_secret_key: str = "development-only-change-me-please-32-chars"
     jwt_algorithm: Literal["HS256"] = "HS256"
