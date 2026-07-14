@@ -1,4 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
+import { watch } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../api/questions', () => ({ streamQuestion: vi.fn() }))
@@ -54,6 +55,31 @@ describe('conversations store', () => {
       'kb-1', '它呢？', [], expect.any(AbortSignal),
     )
     expect(sessionStorage.getItem(conversationStorageKey('u-1', 'kb-1'))).toContain('答案。[1]')
+  })
+
+  it('流完成时触发回答状态的响应式更新', async () => {
+    vi.mocked(streamQuestion).mockReturnValue(events({
+      event: 'done', data: {
+        request_id: 'req-reactive', citations: [], retrieved_chunk_count: 0,
+        timings: { rewrite_ms: 0, retrieval_ms: 0, generation_ms: 1, total_ms: 1 },
+      },
+    }))
+    const store = useConversationsStore()
+    const statuses: (string | null)[] = []
+    const stopWatching = watch(
+      () => {
+        const last = store.messages[store.messages.length - 1]
+        return last?.kind === 'assistant' ? last.status : null
+      },
+      (status) => statuses.push(status),
+      { flush: 'sync' },
+    )
+    store.activate('u-1', 'kb-1')
+
+    await store.submit('问题')
+    stopWatching()
+
+    expect(statuses).toContain('completed')
   })
 
   it('将主动中止的部分回答标记为已停止且不进入下一轮上下文', async () => {

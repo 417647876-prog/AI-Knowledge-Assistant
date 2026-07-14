@@ -145,7 +145,11 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
     messages.value = trimConversation([...messages.value, question, answer])
     persistActive()
-    await consume(question.id, question.content, answer)
+    const reactiveAnswer = messages.value.find(
+      (item): item is AssistantMessage => item.kind === 'assistant' && item.id === answer.id,
+    )
+    if (!reactiveAnswer) throw new Error('未找到当前回答。')
+    await consume(question.id, question.content, reactiveAnswer)
   }
 
   function stop() {
@@ -174,7 +178,9 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
     messages.value[index] = replacement
     persistActive()
-    await consume(question.id, question.content, replacement)
+    const reactiveReplacement = messages.value[index]
+    if (!reactiveReplacement || reactiveReplacement.kind !== 'assistant') return
+    await consume(question.id, question.content, reactiveReplacement)
   }
 
   function newConversation() {
