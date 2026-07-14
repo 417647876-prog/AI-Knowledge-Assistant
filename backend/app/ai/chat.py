@@ -22,7 +22,7 @@ class FakeChatProvider:
         tokens: list[str] | None = None,
     ) -> None:
         self._answer = answer
-        self._tokens = tokens or [answer]
+        self._tokens = tokens if tokens is not None else [answer]
 
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
         return self._answer
