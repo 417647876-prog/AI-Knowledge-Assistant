@@ -16,6 +16,15 @@ def _rewrite_error() -> AppError:
     )
 
 
+def _validate_result(result: object) -> str:
+    if not isinstance(result, str):
+        raise _rewrite_error()
+    result = result.strip()
+    if not result or len(result) > 2000:
+        raise _rewrite_error()
+    return result
+
+
 class ChatQuestionRewriter:
     def __init__(self, chat_provider: ChatProvider) -> None:
         self._chat_provider = chat_provider
@@ -34,12 +43,9 @@ class ChatQuestionRewriter:
                 REWRITE_SYSTEM_PROMPT,
                 json.dumps(payload, ensure_ascii=False, indent=2),
             )
-        except AppError as error:
+        except Exception as error:
             raise _rewrite_error() from error
-        result = result.strip()
-        if not result or len(result) > 2000:
-            raise _rewrite_error()
-        return result
+        return _validate_result(result)
 
 
 class FakeQuestionRewriter:
@@ -49,4 +55,4 @@ class FakeQuestionRewriter:
     async def rewrite(
         self, history: list[ConversationMessage], question: str
     ) -> str:
-        return self._result or question.strip()
+        return _validate_result(question if self._result is None else self._result)

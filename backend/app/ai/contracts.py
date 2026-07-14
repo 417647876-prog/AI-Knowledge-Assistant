@@ -8,6 +8,10 @@ class ConversationMessage:
     role: Literal["user", "assistant"]
     content: str
 
+    def __post_init__(self) -> None:
+        if self.role not in ("user", "assistant"):
+            raise ValueError("role 必须是 'user' 或 'assistant'")
+
 
 class EmbeddingProvider(Protocol):
     async def embed_documents(self, texts: list[str]) -> list[list[float]]: ...
