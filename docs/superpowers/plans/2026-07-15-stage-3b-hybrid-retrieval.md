@@ -184,7 +184,7 @@ class HybridRetriever:
     def __init__(self, vector: Retriever, keyword: Retriever, *, rank_constant: int = 60): ...
 ```
 
-- [ ] **Step 1：写去重、双路加分、稳定排序和 top_k 测试**
+- [x] **Step 1：写去重、双路加分、稳定排序和 top_k 测试**
 
 ```python
 def test_rrf_rewards_chunk_found_by_both_retrievers() -> None:
@@ -192,13 +192,13 @@ def test_rrf_rewards_chunk_found_by_both_retrievers() -> None:
     assert fused[0].chunk_id == shared.chunk_id
 ```
 
-- [ ] **Step 2：实现 RRF**
+- [x] **Step 2：实现 RRF**
 
 每个列表从 1 开始排名，分数累加 `1 / (rank_constant + rank)`；按融合分数降序、`str(chunk_id)` 升序；输出使用 `dataclasses.replace(chunk, relevance_score=fused_score)`。
 
-- [ ] **Step 3：VectorRetriever 和评估 Runner 接受并透传 `query`，向量 SQL 保持不变**
-- [ ] **Step 4：HybridRetriever 分别请求 `top_k` 个候选并融合**
-- [ ] **Step 5：运行单元测试并提交**
+- [x] **Step 3：VectorRetriever 和评估 Runner 接受并透传 `query`，向量 SQL 保持不变**
+- [x] **Step 4：HybridRetriever 分别请求 `top_k` 个候选并融合**
+- [x] **Step 5：运行单元测试并提交**
 
 运行：`uv run pytest tests/unit/test_reciprocal_rank_fusion.py tests/unit/test_hybrid_retriever.py tests/unit/test_rag_service.py -q`
 
