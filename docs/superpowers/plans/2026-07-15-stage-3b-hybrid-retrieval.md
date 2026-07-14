@@ -263,18 +263,18 @@ chunks = await self._retriever.search(
 - 修改：`docs/阶段3执行进度.md`
 - 修改：`README.md`
 
-- [ ] **Step 1：分别生成 vector 和 hybrid 报告**
+- [x] **Step 1：分别生成 vector 和 hybrid 报告**
 
 ```powershell
 uv run python -m scripts.evaluate_rag --dataset tests/fixtures/evaluation/stage3.jsonl --knowledge-base-id $env:EVALUATION_KNOWLEDGE_BASE_ID --mode vector --output reports/stage3b-vector.json
 uv run python -m scripts.evaluate_rag --dataset tests/fixtures/evaluation/stage3.jsonl --knowledge-base-id $env:EVALUATION_KNOWLEDGE_BASE_ID --mode hybrid --output reports/stage3b-hybrid.json
 ```
 
-- [ ] **Step 2：检查质量门**
+- [x] **Step 2：检查质量门**
 
 总体 Recall@5 不低于 3A；关键词分类 Recall@5 至少提升 10 个百分点。未达标时保持 3B `进行中`，记录失败数据，不进入 3C。
 
-- [ ] **Step 3：运行完整测试和 Ruff**
+- [x] **Step 3：运行完整测试和 Ruff**
 
 运行命令与 3A Task 5 相同，预期全部通过。
 
