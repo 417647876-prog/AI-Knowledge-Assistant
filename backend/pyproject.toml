@@ -1,0 +1,45 @@
+[project]
+name = "ai-knowledge-assistant-backend"
+version = "0.1.0"
+description = "AI 企业知识库助手后端"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "alembic>=1.14,<2",
+  "fastapi>=0.115,<1",
+  "openpyxl>=3.1.5",
+  "pgvector>=0.4,<1",
+  "psycopg[binary]>=3.2,<4",
+  "pwdlib[argon2]>=0.3,<1",
+  "pydantic-settings>=2.7,<3",
+  "pyjwt>=2.10,<3",
+  "pymupdf>=1.28.0",
+  "python-docx>=1.2.0",
+  "python-multipart>=0.0.32",
+  "sentence-transformers>=5,<6",
+  "sqlalchemy[asyncio]>=2.0,<3",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.28,<1",
+  "httpx2>=2.5,<3",
+  "pytest>=8.3,<10",
+  "pytest-asyncio>=0.25,<2",
+  "ruff>=0.9,<1",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+  "integration: requires PostgreSQL + pgvector",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
