@@ -202,4 +202,63 @@ describe('conversations store', () => {
     expect(sessionStorage.getItem(conversationStorageKey('u-1', 'kb-2'))).toBeNull()
     expect(sessionStorage.getItem(conversationStorageKey('u-2', 'kb-1'))).not.toBeNull()
   })
+
+  it('停止后忽略已缓冲的完成事件', async () => {
+    let release!: () => void
+    vi.mocked(streamQuestion).mockImplementation(async function* () {
+      yield { event: 'token', data: { delta: '已收到的片段' } }
+      await new Promise<void>((resolve) => { release = resolve })
+      yield {
+        event: 'done', data: {
+          request_id: 'req-late', citations: [], retrieved_chunk_count: 0,
+          timings: { rewrite_ms: 0, retrieval_ms: 0, generation_ms: 1, total_ms: 1 },
+        },
+      }
+    })
+    const store = useConversationsStore()
+    store.activate('u-1', 'kb-1')
+    const pending = store.submit('问题')
+    await vi.waitFor(() => expect(store.messages[store.messages.length - 1]).toMatchObject({ content: '已收到的片段' }))
+
+    store.stop()
+    release()
+    await pending
+
+    expect(store.messages[store.messages.length - 1]).toMatchObject({
+      status: 'stopped', content: '已收到的片段', requestId: null,
+    })
+  })
+
+  it('旧流结束时不会覆盖重新激活知识库后的新会话', async () => {
+    let releaseOld!: () => void
+    vi.mocked(streamQuestion)
+      .mockImplementationOnce(async function* () {
+        yield { event: 'token', data: { delta: '旧片段' } }
+        await new Promise<void>((resolve) => { releaseOld = resolve })
+        yield {
+          event: 'done', data: {
+            request_id: 'req-old', citations: [], retrieved_chunk_count: 0,
+            timings: { rewrite_ms: 0, retrieval_ms: 0, generation_ms: 1, total_ms: 1 },
+          },
+        }
+      })
+      .mockReturnValueOnce(events({
+        event: 'done', data: {
+          request_id: 'req-new', citations: [], retrieved_chunk_count: 0,
+          timings: { rewrite_ms: 0, retrieval_ms: 0, generation_ms: 1, total_ms: 1 },
+        },
+      }))
+    const store = useConversationsStore()
+    store.activate('u-1', 'kb-1')
+    const oldPending = store.submit('旧问题')
+    await vi.waitFor(() => expect(store.messages[store.messages.length - 1]).toMatchObject({ content: '旧片段' }))
+
+    store.activate('u-1', 'kb-2')
+    store.activate('u-1', 'kb-1')
+    await store.submit('新问题')
+    releaseOld()
+    await oldPending
+
+    expect(sessionStorage.getItem(conversationStorageKey('u-1', 'kb-1'))).toContain('req-new')
+  })
 })

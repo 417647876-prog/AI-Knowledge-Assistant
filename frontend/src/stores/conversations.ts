@@ -22,7 +22,7 @@ export const useConversationsStore = defineStore('conversations', () => {
   ))
 
   let controller: AbortController | null = null
-  let clearGeneration = 0
+  let streamGeneration = 0
   const pendingSaves = new Map<string, ReturnType<typeof setTimeout>>()
 
   const saveKey = (userId: string, knowledgeBaseId: string) => `${userId}:${knowledgeBaseId}`
@@ -69,7 +69,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     if (!runUserId || !runKnowledgeBaseId) throw new Error('请先选择知识库。')
 
     const runMessages = messages.value
-    const runGeneration = clearGeneration
+    const runGeneration = streamGeneration
     const runController = new AbortController()
     controller = runController
 
@@ -78,6 +78,7 @@ export const useConversationsStore = defineStore('conversations', () => {
       for await (const event of streamQuestion(
         runKnowledgeBaseId, question, history, runController.signal,
       )) {
+        if (runGeneration !== streamGeneration || runController.signal.aborted) break
         if (event.event === 'status') answer.phase = event.data.phase
         if (event.event === 'rewrite') {
           answer.standaloneQuestion = event.data.standalone_question
@@ -125,7 +126,7 @@ export const useConversationsStore = defineStore('conversations', () => {
       answer.phase = null
     } finally {
       if (controller === runController) controller = null
-      if (runGeneration === clearGeneration)
+      if (runGeneration === streamGeneration && !runController.signal.aborted)
         saveNow(runUserId, runKnowledgeBaseId, runMessages)
     }
   }
@@ -148,6 +149,7 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   function stop() {
+    streamGeneration += 1
     const activeAnswer = [...messages.value].reverse().find(
       (item): item is AssistantMessage => item.kind === 'assistant' && item.status === 'streaming',
     )
@@ -185,7 +187,6 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   function clear() {
     stop()
-    clearGeneration += 1
     messages.value = []
     persistActive()
   }
@@ -198,7 +199,6 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
     if (activeUserId.value === userId) {
       stop()
-      clearGeneration += 1
       messages.value = []
     }
     clearUserConversations(userId)
