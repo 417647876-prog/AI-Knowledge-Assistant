@@ -4,7 +4,7 @@
 
 **目标：** 在保留纯向量回退路径的基础上，增加中文关键词检索和 RRF 排名融合。
 
-**架构：** 入库时生成稳定的中文检索 Token；PostgreSQL 用生成的 `tsvector` 和 GIN 索引完成关键词检索。`HybridRetriever` 并行组织向量与关键词候选，再用纯函数 `rrf_fuse` 融合。
+**架构：** 入库时生成稳定的中文检索 Token；PostgreSQL 用生成的 `tsvector` 和 GIN 索引完成关键词检索。`HybridRetriever` 在共享请求级 `AsyncSession` 上顺序组织向量与关键词候选，再用纯函数 `rrf_fuse` 融合，避免同一数据库会话发生并发调用。
 
 **技术栈：** Python 3.12、SQLAlchemy 2、Alembic、PostgreSQL `tsvector`、pgvector、pytest。
 
