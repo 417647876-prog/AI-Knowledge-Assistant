@@ -59,3 +59,30 @@ class EvaluationCase(BaseModel):
         if expected_role == "assistant":
             raise ValueError("历史消息必须以完整问答对结束")
         return self
+
+
+class CaseResult(BaseModel):
+    case_id: str
+    retrieved_files: list[str]
+    citation_files: list[str]
+    recall_at_k: float = Field(ge=0, le=1)
+    reciprocal_rank: float = Field(ge=0, le=1)
+    refused: bool
+    refusal_correct: bool
+    latency_ms: float = Field(ge=0)
+
+
+class EvaluationReport(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    mode: Literal["vector", "hybrid", "rerank", "rewrite"]
+    dataset_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    top_k: int = Field(ge=5)
+    case_count: int = Field(ge=1)
+    recall_at_5: float = Field(ge=0, le=1)
+    mrr_at_5: float = Field(ge=0, le=1)
+    citation_hit_rate: float = Field(ge=0, le=1)
+    refusal_accuracy: float = Field(ge=0, le=1)
+    latency_p50_ms: float = Field(ge=0)
+    latency_p95_ms: float = Field(ge=0)
+    environment: dict[str, str] = Field(default_factory=dict)
+    cases: list[CaseResult]

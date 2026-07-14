@@ -205,6 +205,7 @@ def test_recall_and_mrr_use_ranked_sources() -> None:
 
 **文件：**
 
+- 修改：`backend/app/evaluation/schemas.py`
 - 新建：`backend/app/evaluation/runner.py`
 - 新建：`backend/tests/unit/test_evaluation_runner.py`
 
@@ -226,15 +227,20 @@ async def evaluate_cases(
     *, cases: list[EvaluationCase], knowledge_base_id: UUID,
     embedding_provider: EmbeddingProvider, retriever: EvaluationRetriever,
     answerer: EvaluationAnswerer, top_k: int, score_threshold: float,
+    mode: Literal["vector", "hybrid", "rerank", "rewrite"] = "vector",
+    environment: dict[str, str] | None = None,
 ) -> EvaluationReport: ...
 ```
 
-- [ ] **Step 1：用 Stub Retriever 写顺序、参数和耗时非负测试**
-- [ ] **Step 2：确认失败后实现逐案例 Embedding 与检索**
+Runner 对校验后的案例按固定 JSON 表示计算 `dataset_sha256`，并把 `mode` 和脱敏后的
+`environment` 写入报告。这样单元测试不依赖数据集文件路径，CLI 仍能输出可复现元数据。
+
+- [x] **Step 1：用 Stub Retriever 写顺序、参数和耗时非负测试**
+- [x] **Step 2：确认失败后实现逐案例 Embedding 与检索**
 
 Runner 使用 `time.perf_counter()` 记录检索链路耗时。检索指标使用 Retriever 的完整候选；引用和拒答指标使用 `EvaluationAnswerer` 返回的 `QuestionAnswer`。相同文件的多个片段保持原排名，相关性由“文件名 + 关键文本”共同判断。3A 的 Answerer 使用 Fake ChatProvider，真实 Chat 模型不进入普通测试。
 
-- [ ] **Step 3：运行评估模块测试**
+- [x] **Step 3：运行评估模块测试**
 
 运行：`uv run pytest tests/unit/test_evaluation_dataset.py tests/unit/test_evaluation_metrics.py tests/unit/test_evaluation_runner.py -q`
 
