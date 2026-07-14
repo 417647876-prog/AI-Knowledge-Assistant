@@ -1,4 +1,4 @@
-import type { DocumentTask } from '../types/api'
+import type { DocumentListResponse, DocumentTask } from '../types/api'
 import { ApiError, apiRequest } from './client'
 
 export function uploadDocument(knowledgeBaseId: string, file: File) {
@@ -11,6 +11,19 @@ export function uploadDocument(knowledgeBaseId: string, file: File) {
 
 export const getDocument = (id: string, signal?: AbortSignal) =>
   apiRequest<DocumentTask>(`/api/v1/documents/${id}`, { signal })
+
+export async function listDocuments(knowledgeBaseId: string): Promise<DocumentTask[]> {
+  const response = await apiRequest<DocumentListResponse>(
+    `/api/v1/knowledge-bases/${knowledgeBaseId}/documents`,
+  )
+  return response.items
+}
+
+export const reprocessDocument = (id: string) =>
+  apiRequest<DocumentTask>(`/api/v1/documents/${id}/reprocess`, { method: 'POST' })
+
+export const deleteDocument = (id: string) =>
+  apiRequest<void>(`/api/v1/documents/${id}`, { method: 'DELETE' })
 
 interface PollOptions {
   intervalMs?: number

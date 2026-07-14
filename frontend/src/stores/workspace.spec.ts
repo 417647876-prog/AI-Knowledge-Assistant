@@ -5,14 +5,18 @@ vi.mock('../api/knowledgeBases', () => ({
   listKnowledgeBases: vi.fn(), createKnowledgeBase: vi.fn(),
 }))
 vi.mock('../api/documents', () => ({
-  uploadDocument: vi.fn(), pollDocumentStatus: vi.fn(),
+  deleteDocument: vi.fn(), listDocuments: vi.fn(), pollDocumentStatus: vi.fn(),
+  reprocessDocument: vi.fn(), uploadDocument: vi.fn(),
 }))
 vi.mock('../api/questions', () => ({ askQuestion: vi.fn() }))
 
 import { createKnowledgeBase, listKnowledgeBases } from '../api/knowledgeBases'
-import { pollDocumentStatus, uploadDocument } from '../api/documents'
+import {
+  deleteDocument, listDocuments, pollDocumentStatus, reprocessDocument, uploadDocument,
+} from '../api/documents'
 import { askQuestion } from '../api/questions'
 import { ApiError } from '../api/client'
+import type { DocumentTask } from '../types/api'
 import { useWorkspaceStore } from './workspace'
 
 describe('workspace knowledge bases', () => {
@@ -26,7 +30,7 @@ describe('workspace knowledge bases', () => {
     }]
     store.activeKnowledgeBaseId = 'kb-1'
     store.documents = { 'kb-1': [{
-      document_id: 'doc-1', job_id: 'job-1', status: 'ready',
+      document_id: 'doc-1', job_id: 'job-1', file_name: '员工手册.txt', status: 'ready',
       error_code: null, error_message: null,
     }] }
     store.answer = {
@@ -76,6 +80,92 @@ describe('workspace knowledge bases', () => {
     expect(store.activeKnowledgeBaseId).toBe('kb-1')
   })
 
+  it('加载当前知识库的历史文档', async () => {
+    const documents = [{
+      document_id: 'doc-1', job_id: 'job-1', file_name: '员工手册.txt', status: 'ready' as const,
+      error_code: null, error_message: null,
+    }]
+    vi.mocked(listDocuments).mockResolvedValue(documents)
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+
+    await store.loadDocuments()
+
+    expect(listDocuments).toHaveBeenCalledWith('kb-1')
+    expect(store.activeDocuments).toEqual(documents)
+  })
+
+  it('切换知识库后忽略旧请求返回的文档列表', async () => {
+    let resolveDocuments!: (items: Array<{
+      document_id: string; job_id: string; file_name: string; status: 'ready'
+      error_code: null; error_message: null
+    }>) => void
+    vi.mocked(listDocuments).mockReturnValue(new Promise((resolve) => { resolveDocuments = resolve }))
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-a'
+
+    const loading = store.loadDocuments()
+    store.selectKnowledgeBase('kb-b')
+    resolveDocuments([{
+      document_id: 'doc-a', job_id: 'job-a', file_name: '旧知识库.txt', status: 'ready',
+      error_code: null, error_message: null,
+    }])
+    await loading
+
+    expect(store.documents).toEqual({})
+  })
+
+  it('恢复处理中历史文档的轮询，且不重复发起同一文档轮询', async () => {
+    const parsing = {
+      document_id: 'doc-1', job_id: 'job-1', file_name: '员工手册.txt', status: 'parsing' as const,
+      error_code: null, error_message: null,
+    }
+    let resolvePoll!: (document: DocumentTask) => void
+    vi.mocked(listDocuments).mockResolvedValue([parsing])
+    vi.mocked(pollDocumentStatus).mockReturnValue(new Promise((resolve) => { resolvePoll = resolve }))
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+
+    await store.loadDocuments()
+    await store.loadDocuments()
+    expect(pollDocumentStatus).toHaveBeenCalledTimes(1)
+
+    resolvePoll({ ...parsing, status: 'ready' })
+    await Promise.resolve()
+    expect(store.activeDocuments[0]).toMatchObject({ status: 'ready' })
+  })
+
+  it('重处理后更新对应文档行', async () => {
+    const pending = {
+      document_id: 'doc-1', job_id: 'job-2', file_name: '员工手册.txt', status: 'pending' as const,
+      error_code: null, error_message: null,
+    }
+    vi.mocked(reprocessDocument).mockResolvedValue(pending)
+    vi.mocked(pollDocumentStatus).mockResolvedValue({ ...pending, status: 'ready' })
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+    store.documents = { 'kb-1': [{ ...pending, job_id: 'job-1', status: 'failed' }] }
+
+    await store.reprocessDocument('doc-1')
+
+    expect(reprocessDocument).toHaveBeenCalledWith('doc-1')
+    expect(store.activeDocuments[0]).toMatchObject({ job_id: 'job-2', status: 'ready' })
+  })
+
+  it('删除成功后移除对应文档行', async () => {
+    vi.mocked(deleteDocument).mockResolvedValue(undefined)
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+    store.documents = { 'kb-1': [{
+      document_id: 'doc-1', job_id: 'job-1', file_name: '员工手册.txt', status: 'ready', error_code: null, error_message: null,
+    }] }
+
+    await store.deleteDocument('doc-1')
+
+    expect(deleteDocument).toHaveBeenCalledWith('doc-1')
+    expect(store.activeDocuments).toEqual([])
+  })
+
   it('adds and selects a newly created knowledge base', async () => {
     vi.mocked(createKnowledgeBase).mockResolvedValue({
       id: 'kb-2', name: '研发规范', description: '研发资料',
@@ -106,7 +196,7 @@ describe('workspace knowledge bases', () => {
 
   it('tracks an uploaded document until ready', async () => {
     const pending = {
-      document_id: 'doc-1', job_id: 'job-1', status: 'pending' as const,
+      document_id: 'doc-1', job_id: 'job-1', file_name: '制度.txt', status: 'pending' as const,
       error_code: null, error_message: null,
     }
     vi.mocked(uploadDocument).mockResolvedValue(pending)
@@ -131,7 +221,7 @@ describe('workspace knowledge bases', () => {
     ['状态查询失败', new Error('状态查询失败'), 'DOCUMENT_POLL_FAILED', '状态查询失败'],
   ])('%s 时将文档行更新为明确失败状态', async (_name, error, code, message) => {
     const pending = {
-      document_id: 'doc-failed', job_id: 'job-failed', status: 'pending' as const,
+      document_id: 'doc-failed', job_id: 'job-failed', file_name: '制度.txt', status: 'pending' as const,
       error_code: null, error_message: null,
     }
     vi.mocked(uploadDocument).mockResolvedValue(pending)

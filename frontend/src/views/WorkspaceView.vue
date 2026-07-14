@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { formatApiError } from '../api/client'
 import DocumentTable from '../components/DocumentTable.vue'
 import DocumentUpload from '../components/DocumentUpload.vue'
@@ -9,6 +9,7 @@ import { useWorkspaceStore } from '../stores/workspace'
 
 const store = useWorkspaceStore()
 const knowledgeBaseLoadError = ref<string | null>(null)
+const documentLoadError = ref<string | null>(null)
 
 async function loadKnowledgeBases() {
   knowledgeBaseLoadError.value = null
@@ -20,6 +21,19 @@ async function loadKnowledgeBases() {
 }
 
 onMounted(loadKnowledgeBases)
+
+async function loadDocuments() {
+  documentLoadError.value = null
+  try {
+    await store.loadDocuments()
+  } catch (error) {
+    documentLoadError.value = formatApiError(error)
+  }
+}
+
+watch(() => store.activeKnowledgeBaseId, (knowledgeBaseId) => {
+  if (knowledgeBaseId) void loadDocuments()
+}, { immediate: true })
 </script>
 
 <template>
@@ -48,6 +62,17 @@ onMounted(loadKnowledgeBases)
         <template v-else-if="store.activeKnowledgeBase">
           <section class="workspace-card">
             <DocumentUpload />
+            <el-alert
+              v-if="documentLoadError"
+              data-test="document-load-error"
+              type="error"
+              :title="documentLoadError"
+              show-icon
+              :closable="false"
+            />
+            <el-button v-if="documentLoadError" link type="primary" @click="loadDocuments">
+              重新加载文档
+            </el-button>
             <DocumentTable />
           </section>
           <section class="workspace-card">

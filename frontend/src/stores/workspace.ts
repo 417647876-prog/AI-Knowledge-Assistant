@@ -1,6 +1,12 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { pollDocumentStatus, uploadDocument } from '../api/documents'
+import {
+  deleteDocument as deleteRequest,
+  listDocuments,
+  pollDocumentStatus,
+  reprocessDocument as reprocessRequest,
+  uploadDocument,
+} from '../api/documents'
 import { createKnowledgeBase as createRequest, listKnowledgeBases } from '../api/knowledgeBases'
 import { askQuestion } from '../api/questions'
 import { ApiError } from '../api/client'
@@ -14,11 +20,45 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const answer = ref<QuestionResponse | null>(null)
   const asking = ref(false)
   const loadingKnowledgeBases = ref(false)
+  const loadingDocuments = ref(false)
   const activeKnowledgeBase = computed(() =>
     knowledgeBases.value.find((item) => item.id === activeKnowledgeBaseId.value) ?? null)
   const activeDocuments = computed(() => activeKnowledgeBaseId.value
     ? documents.value[activeKnowledgeBaseId.value] ?? [] : [])
   let generation = 0
+  const pollingDocumentIds = new Set<string>()
+
+  const isProcessing = (status: DocumentTask['status']) =>
+    status === 'pending' || status === 'parsing' || status === 'embedding'
+
+  function replaceDocument(knowledgeBaseId: string, document: DocumentTask) {
+    documents.value[knowledgeBaseId] = (documents.value[knowledgeBaseId] ?? []).map((item) =>
+      item.document_id === document.document_id ? document : item)
+  }
+
+  async function trackDocument(knowledgeBaseId: string, pending: DocumentTask) {
+    if (!isProcessing(pending.status) || pollingDocumentIds.has(pending.document_id)) return pending
+    const operationGeneration = generation
+    pollingDocumentIds.add(pending.document_id)
+    try {
+      const finished = await pollDocumentStatus(pending.document_id)
+      if (operationGeneration === generation && activeKnowledgeBaseId.value === knowledgeBaseId)
+        replaceDocument(knowledgeBaseId, finished)
+      return finished
+    } catch (error) {
+      if (operationGeneration === generation && activeKnowledgeBaseId.value === knowledgeBaseId) {
+        replaceDocument(knowledgeBaseId, {
+          ...pending,
+          status: 'failed',
+          error_code: error instanceof ApiError ? error.code : 'DOCUMENT_POLL_FAILED',
+          error_message: error instanceof Error ? error.message : '文档状态查询失败。',
+        })
+      }
+      throw error
+    } finally {
+      pollingDocumentIds.delete(pending.document_id)
+    }
+  }
 
   function reset() {
     generation += 1
@@ -28,6 +68,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     answer.value = null
     asking.value = false
     loadingKnowledgeBases.value = false
+    loadingDocuments.value = false
+    pollingDocumentIds.clear()
   }
 
   async function loadKnowledgeBases() {
@@ -54,6 +96,24 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return created
   }
 
+  async function loadDocuments() {
+    const operationGeneration = generation
+    const knowledgeBaseId = activeKnowledgeBaseId.value
+    if (!knowledgeBaseId) return
+    loadingDocuments.value = true
+    try {
+      const loaded = await listDocuments(knowledgeBaseId)
+      if (operationGeneration !== generation || activeKnowledgeBaseId.value !== knowledgeBaseId) return
+      documents.value[knowledgeBaseId] = loaded
+      for (const document of loaded) {
+        if (isProcessing(document.status)) void trackDocument(knowledgeBaseId, document).catch(() => {})
+      }
+    } finally {
+      if (operationGeneration === generation && activeKnowledgeBaseId.value === knowledgeBaseId)
+        loadingDocuments.value = false
+    }
+  }
+
   function selectKnowledgeBase(id: string) {
     activeKnowledgeBaseId.value = id
     answer.value = null
@@ -63,27 +123,31 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const operationGeneration = generation
     const id = activeKnowledgeBaseId.value
     if (!id) throw new Error('请先选择知识库。')
-    const pending = { ...await uploadDocument(id, file), file_name: file.name }
+    const pending = await uploadDocument(id, file)
     if (operationGeneration !== generation) return pending
     documents.value[id] = [pending, ...(documents.value[id] ?? [])]
-    try {
-      const finished = { ...await pollDocumentStatus(pending.document_id), file_name: file.name }
-      if (operationGeneration !== generation) return finished
-      documents.value[id] = documents.value[id].map((item) =>
-        item.document_id === finished.document_id ? finished : item)
-      return finished
-    } catch (error) {
-      if (operationGeneration !== generation) throw error
-      const failed: DocumentTask = {
-        ...pending,
-        status: 'failed',
-        error_code: error instanceof ApiError ? error.code : 'DOCUMENT_POLL_FAILED',
-        error_message: error instanceof Error ? error.message : '文档状态查询失败。',
-      }
-      documents.value[id] = documents.value[id].map((item) =>
-        item.document_id === pending.document_id ? failed : item)
-      throw error
-    }
+    return trackDocument(id, pending)
+  }
+
+  async function reprocessDocument(documentId: string) {
+    const operationGeneration = generation
+    const knowledgeBaseId = activeKnowledgeBaseId.value
+    if (!knowledgeBaseId) throw new Error('请先选择知识库。')
+    const pending = await reprocessRequest(documentId)
+    if (operationGeneration !== generation || activeKnowledgeBaseId.value !== knowledgeBaseId) return pending
+    replaceDocument(knowledgeBaseId, pending)
+    return trackDocument(knowledgeBaseId, pending)
+  }
+
+  async function deleteDocument(documentId: string) {
+    const operationGeneration = generation
+    const knowledgeBaseId = activeKnowledgeBaseId.value
+    if (!knowledgeBaseId) throw new Error('请先选择知识库。')
+    await deleteRequest(documentId)
+    if (operationGeneration !== generation || activeKnowledgeBaseId.value !== knowledgeBaseId) return
+    documents.value[knowledgeBaseId] = (documents.value[knowledgeBaseId] ?? []).filter(
+      (item) => item.document_id !== documentId,
+    )
   }
 
   async function submitQuestion(question: string) {
@@ -102,8 +166,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   return {
-    knowledgeBases, activeKnowledgeBaseId, documents, answer, asking, loadingKnowledgeBases,
+    knowledgeBases, activeKnowledgeBaseId, documents, answer, asking, loadingKnowledgeBases, loadingDocuments,
     activeKnowledgeBase, activeDocuments, loadKnowledgeBases, createKnowledgeBase,
-    selectKnowledgeBase, uploadAndTrackDocument, submitQuestion, reset,
+    selectKnowledgeBase, loadDocuments, uploadAndTrackDocument, reprocessDocument, deleteDocument,
+    submitQuestion, reset,
   }
 })
