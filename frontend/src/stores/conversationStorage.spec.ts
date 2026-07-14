@@ -63,25 +63,44 @@ describe('conversation storage', () => {
   })
 
   it('builds the final six completed pairs after the last divider', () => {
-    const messages = makeRounds(8)
-    messages.splice(4, 0, { id: 'divider', kind: 'divider' as const, createdAt: 'now' })
+    const messages = [
+      ...makeRound('before-1', 'completed'),
+      ...makeRound('before-2', 'completed'),
+      { id: 'divider', kind: 'divider' as const, createdAt: 'now' },
+      ...makeRound('post-1', 'completed'),
+      ...makeRound('post-2', 'completed'),
+      ...makeRound('post-3', 'completed'),
+      ...makeRound('post-4', 'completed'),
+      ...makeRound('post-5', 'completed'),
+      ...makeRound('post-6', 'completed'),
+      ...makeRound('post-7', 'completed'),
+      ...makeRound('post-8', 'completed'),
+    ]
 
     const history = buildHistory(messages)
 
     expect(history).toEqual([
-      { role: 'user', content: 'question 3' },
-      { role: 'assistant', content: 'answer 3' },
-      { role: 'user', content: 'question 4' },
-      { role: 'assistant', content: 'answer 4' },
-      { role: 'user', content: 'question 5' },
-      { role: 'assistant', content: 'answer 5' },
-      { role: 'user', content: 'question 6' },
-      { role: 'assistant', content: 'answer 6' },
-      { role: 'user', content: 'question 7' },
-      { role: 'assistant', content: 'answer 7' },
-      { role: 'user', content: 'question 8' },
-      { role: 'assistant', content: 'answer 8' },
+      { role: 'user', content: 'question post-3' },
+      { role: 'assistant', content: 'answer post-3' },
+      { role: 'user', content: 'question post-4' },
+      { role: 'assistant', content: 'answer post-4' },
+      { role: 'user', content: 'question post-5' },
+      { role: 'assistant', content: 'answer post-5' },
+      { role: 'user', content: 'question post-6' },
+      { role: 'assistant', content: 'answer post-6' },
+      { role: 'user', content: 'question post-7' },
+      { role: 'assistant', content: 'answer post-7' },
+      { role: 'user', content: 'question post-8' },
+      { role: 'assistant', content: 'answer post-8' },
     ])
+    expect(history).not.toContainEqual(expect.objectContaining({ content: 'question before-1' }))
+    expect(history).not.toContainEqual(expect.objectContaining({ content: 'answer before-1' }))
+    expect(history).not.toContainEqual(expect.objectContaining({ content: 'question before-2' }))
+    expect(history).not.toContainEqual(expect.objectContaining({ content: 'answer before-2' }))
+    expect(history).not.toContainEqual(expect.objectContaining({ content: 'question post-1' }))
+    expect(history).not.toContainEqual(expect.objectContaining({ content: 'answer post-1' }))
+    expect(history).not.toContainEqual(expect.objectContaining({ content: 'question post-2' }))
+    expect(history).not.toContainEqual(expect.objectContaining({ content: 'answer post-2' }))
   })
 
   it('excludes stopped and failed assistants from history', () => {

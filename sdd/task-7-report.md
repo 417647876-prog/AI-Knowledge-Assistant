@@ -22,3 +22,14 @@
 - `npm.cmd test -- --run src/stores/conversationStorage.spec.ts`：1 个测试文件、8 个测试全部通过。
 - `npm.cmd test -- --run`：19 个测试文件、146 个测试全部通过。
 - `npm.cmd run type-check`：通过。
+
+## 2026-07-14 测试假阳性修复
+
+- 加固“最后一条分隔线后的六组 completed 问答”测试：分隔线前保留 `before-1`、`before-2` 两组可识别问答，分隔线后追加 `post-1` 至 `post-8` 八组可识别问答。
+- 精确断言历史只含 `post-3` 至 `post-8` 的 12 条消息，并明确排除分隔线前消息及 `post-1`、`post-2`。因此，实现若忽略分隔线或忽略“仅取末六组”限制，测试都会失败。
+
+### 本次验证结果
+
+- `npm.cmd test -- --run src/stores/conversationStorage.spec.ts`：1 个测试文件、8 个测试全部通过。
+- `npm.cmd test -- --run`：19 个测试文件、146 个测试全部通过。
+- `npm.cmd run type-check`：通过。
