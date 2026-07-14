@@ -115,6 +115,30 @@ describe('workspace knowledge bases', () => {
     expect(store.documents).toEqual({})
   })
 
+  it('同一知识库的旧列表响应不能覆盖较新的结果', async () => {
+    let resolveOld!: (items: DocumentTask[]) => void
+    const oldRequest = new Promise<DocumentTask[]>((resolve) => { resolveOld = resolve })
+    const newer = [{
+      document_id: 'doc-new', job_id: 'job-new', file_name: '新列表.txt', status: 'ready' as const,
+      error_code: null, error_message: null,
+    }]
+    vi.mocked(listDocuments)
+      .mockReturnValueOnce(oldRequest)
+      .mockResolvedValueOnce(newer)
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+
+    const loadingOld = store.loadDocuments()
+    await store.loadDocuments()
+    resolveOld([{
+      document_id: 'doc-old', job_id: 'job-old', file_name: '旧列表.txt', status: 'ready',
+      error_code: null, error_message: null,
+    }])
+    await loadingOld
+
+    expect(store.activeDocuments).toEqual(newer)
+  })
+
   it('恢复处理中历史文档的轮询，且不重复发起同一文档轮询', async () => {
     const parsing = {
       document_id: 'doc-1', job_id: 'job-1', file_name: '员工手册.txt', status: 'parsing' as const,
@@ -133,6 +157,30 @@ describe('workspace knowledge bases', () => {
     resolvePoll({ ...parsing, status: 'ready' })
     await Promise.resolve()
     expect(store.activeDocuments[0]).toMatchObject({ status: 'ready' })
+  })
+
+  it('重置后的新轮询不会被旧轮询结束时解除去重保护', async () => {
+    const parsing = {
+      document_id: 'doc-1', job_id: 'job-1', file_name: '员工手册.txt', status: 'parsing' as const,
+      error_code: null, error_message: null,
+    }
+    let resolveOldPoll!: (document: DocumentTask) => void
+    vi.mocked(listDocuments).mockResolvedValue([parsing])
+    vi.mocked(pollDocumentStatus)
+      .mockReturnValueOnce(new Promise((resolve) => { resolveOldPoll = resolve }))
+      .mockReturnValueOnce(new Promise(() => {}))
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+    await store.loadDocuments()
+
+    store.reset()
+    store.activeKnowledgeBaseId = 'kb-1'
+    await store.loadDocuments()
+    resolveOldPoll({ ...parsing, status: 'ready' })
+    await Promise.resolve()
+    await store.loadDocuments()
+
+    expect(pollDocumentStatus).toHaveBeenCalledTimes(2)
   })
 
   it('重处理后更新对应文档行', async () => {
@@ -164,6 +212,20 @@ describe('workspace knowledge bases', () => {
 
     expect(deleteDocument).toHaveBeenCalledWith('doc-1')
     expect(store.activeDocuments).toEqual([])
+  })
+
+  it('删除失败时保留原文档行', async () => {
+    const error = new ApiError(500, 'DOCUMENT_DELETE_FAILED', '文档删除失败。')
+    vi.mocked(deleteDocument).mockRejectedValue(error)
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+    store.documents = { 'kb-1': [{
+      document_id: 'doc-1', job_id: 'job-1', file_name: '员工手册.txt', status: 'ready',
+      error_code: null, error_message: null,
+    }] }
+
+    await expect(store.deleteDocument('doc-1')).rejects.toBe(error)
+    expect(store.activeDocuments).toHaveLength(1)
   })
 
   it('adds and selects a newly created knowledge base', async () => {
@@ -215,11 +277,9 @@ describe('workspace knowledge bases', () => {
     [
       '轮询超时',
       new ApiError(0, 'DOCUMENT_POLL_TIMEOUT', '文档处理时间较长，请稍后刷新状态。'),
-      'DOCUMENT_POLL_TIMEOUT',
-      '文档处理时间较长，请稍后刷新状态。',
     ],
-    ['状态查询失败', new Error('状态查询失败'), 'DOCUMENT_POLL_FAILED', '状态查询失败'],
-  ])('%s 时将文档行更新为明确失败状态', async (_name, error, code, message) => {
+    ['状态查询失败', new Error('状态查询失败')],
+  ])('%s 时保留后端处理状态并向调用方报告错误', async (_name, error) => {
     const pending = {
       document_id: 'doc-failed', job_id: 'job-failed', file_name: '制度.txt', status: 'pending' as const,
       error_code: null, error_message: null,
@@ -231,13 +291,13 @@ describe('workspace knowledge bases', () => {
 
     await expect(store.uploadAndTrackDocument(new File(['制度'], '制度.txt'))).rejects.toBe(error)
 
-    expect(store.activeDocuments[0]).toMatchObject({
+    expect(store.activeDocuments[0]).toEqual({
       document_id: 'doc-failed',
       job_id: 'job-failed',
       file_name: '制度.txt',
-      status: 'failed',
-      error_code: code,
-      error_message: message,
+      status: 'pending',
+      error_code: null,
+      error_message: null,
     })
   })
 

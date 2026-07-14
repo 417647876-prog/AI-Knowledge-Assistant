@@ -73,7 +73,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 
 打开 <http://127.0.0.1:5173> 后先登录。管理员可在“用户管理”中创建、启停账号、切换角色和重置密码；普通用户只能看到自己的知识库。工作台会重新加载历史文档，并恢复处理中任务的状态轮询；失败文档可重新处理，删除会要求确认且不允许删除处理中任务。
 
-更完整的初始化、安全重置、权限验收和验证命令见 [阶段 2B 验证与演示](docs/阶段2B验证与演示.md)、[前端使用说明](frontend/README.md) 和 [阶段 2C 文档管理计划](docs/superpowers/plans/2026-07-14-stage-2c-document-management.md)。
+更完整的初始化、安全重置、权限验收和验证命令见 [阶段 2B 验证与演示](docs/阶段2B验证与演示.md)、[前端使用说明](frontend/README.md)、[阶段 2C 文档管理计划](docs/superpowers/plans/2026-07-14-stage-2c-document-management.md) 和 [阶段 2C 验证与演示](docs/阶段2C验证与演示.md)。
 
 ## 离线冒烟验证
 

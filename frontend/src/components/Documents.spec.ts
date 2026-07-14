@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 
@@ -59,6 +59,7 @@ describe('文档区域', () => {
     expect(wrapper.text()).toContain('等待处理')
     expect(wrapper.text()).toContain('可用')
     expect(wrapper.text()).toContain('处理失败')
+    expect(wrapper.text()).toContain('PARSE_FAILED')
     expect(wrapper.text()).toContain('无法解析文档。')
   })
 
@@ -66,7 +67,7 @@ describe('文档区域', () => {
     const store = useWorkspaceStore()
     store.activeKnowledgeBaseId = 'kb-1'
 
-    expect(mountDocuments().text()).toContain('当前会话还没有上传文档')
+    expect(mountDocuments().text()).toContain('当前知识库暂无文档')
   })
 
   it('上传失败时保留错误代码和请求标识', async () => {
@@ -103,17 +104,19 @@ describe('文档区域', () => {
     expect(input.attributes()).toHaveProperty('disabled')
   })
 
-  it('失败文档可以触发重处理，处理中禁止删除', async () => {
+  it('可用和失败文档允许重处理，处理中文档禁止重处理和删除', async () => {
     const store = useWorkspaceStore()
     store.activeKnowledgeBaseId = 'kb-1'
     store.documents['kb-1'] = [
       { document_id: 'doc-processing', job_id: 'job-1', file_name: '处理中.txt', status: 'parsing',
         error_code: null, error_message: null },
+      { document_id: 'doc-ready', job_id: 'job-ready', file_name: '可用.txt', status: 'ready',
+        error_code: null, error_message: null },
       { document_id: 'doc-failed', job_id: 'job-2', file_name: '失败.txt', status: 'failed',
         error_code: 'PARSE_FAILED', error_message: '无法解析文档。' },
     ]
     const reprocess = vi.spyOn(store, 'reprocessDocument').mockResolvedValue({
-      ...store.documents['kb-1']![1]!, status: 'ready',
+      ...store.documents['kb-1']![2]!, status: 'ready',
     })
     const wrapper = mountDocuments()
     await flushPromises()
@@ -121,6 +124,73 @@ describe('文档区域', () => {
     await wrapper.get('[data-test="reprocess-doc-failed"]').trigger('click')
 
     expect(reprocess).toHaveBeenCalledWith('doc-failed')
+    expect(wrapper.get('[data-test="reprocess-doc-ready"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-test="reprocess-doc-processing"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-test="delete-doc-processing"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('重处理进行中禁用当前行，避免重复提交', async () => {
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+    store.documents['kb-1'] = [{
+      document_id: 'doc-ready', job_id: 'job-1', file_name: '可用.txt', status: 'ready',
+      error_code: null, error_message: null,
+    }]
+    vi.spyOn(store, 'reprocessDocument').mockReturnValue(new Promise(() => {}))
+    const wrapper = mountDocuments()
+    await flushPromises()
+    const button = wrapper.get('[data-test="reprocess-doc-ready"]')
+
+    await button.trigger('click')
+    await button.trigger('click')
+
+    expect(store.reprocessDocument).toHaveBeenCalledTimes(1)
+    expect(button.attributes('disabled')).toBeDefined()
+  })
+
+  it('确认删除后调用 Store，取消时不调用', async () => {
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+    store.documents['kb-1'] = [{
+      document_id: 'doc-ready', job_id: 'job-1', file_name: '可用.txt', status: 'ready',
+      error_code: null, error_message: null,
+    }]
+    const removeDocument = vi.spyOn(store, 'deleteDocument').mockResolvedValue()
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue(undefined as never)
+    const wrapper = mountDocuments()
+    await flushPromises()
+
+    await wrapper.get('[data-test="delete-doc-ready"]').trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalled()
+    expect(removeDocument).toHaveBeenCalledWith('doc-ready')
+
+    removeDocument.mockClear()
+    confirm.mockRejectedValueOnce('cancel')
+    await wrapper.get('[data-test="delete-doc-ready"]').trigger('click')
+    await flushPromises()
+    expect(removeDocument).not.toHaveBeenCalled()
+  })
+
+  it('操作失败时显示错误代码和请求标识', async () => {
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+    store.documents['kb-1'] = [{
+      document_id: 'doc-ready', job_id: 'job-1', file_name: '可用.txt', status: 'ready',
+      error_code: null, error_message: null,
+    }]
+    vi.spyOn(store, 'reprocessDocument').mockRejectedValue(
+      new ApiError(409, 'DOCUMENT_PROCESSING', '文档正在处理中。', 'req-action-1'),
+    )
+    const showError = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as never)
+    const wrapper = mountDocuments()
+    await flushPromises()
+
+    await wrapper.get('[data-test="reprocess-doc-ready"]').trigger('click')
+    await flushPromises()
+
+    expect(showError).toHaveBeenCalledWith(
+      '文档正在处理中。 [DOCUMENT_PROCESSING] 请求标识：req-action-1',
+    )
   })
 })

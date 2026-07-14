@@ -9,7 +9,6 @@ import {
 } from '../api/documents'
 import { createKnowledgeBase as createRequest, listKnowledgeBases } from '../api/knowledgeBases'
 import { askQuestion } from '../api/questions'
-import { ApiError } from '../api/client'
 import type { CreateKnowledgeBaseInput } from '../api/knowledgeBases'
 import type { DocumentTask, KnowledgeBase, QuestionResponse } from '../types/api'
 
@@ -26,7 +25,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const activeDocuments = computed(() => activeKnowledgeBaseId.value
     ? documents.value[activeKnowledgeBaseId.value] ?? [] : [])
   let generation = 0
-  const pollingDocumentIds = new Set<string>()
+  let documentLoadSequence = 0
+  const pollingDocuments = new Map<string, symbol>()
 
   const isProcessing = (status: DocumentTask['status']) =>
     status === 'pending' || status === 'parsing' || status === 'embedding'
@@ -37,26 +37,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   async function trackDocument(knowledgeBaseId: string, pending: DocumentTask) {
-    if (!isProcessing(pending.status) || pollingDocumentIds.has(pending.document_id)) return pending
+    if (!isProcessing(pending.status) || pollingDocuments.has(pending.document_id)) return pending
     const operationGeneration = generation
-    pollingDocumentIds.add(pending.document_id)
+    const pollingToken = Symbol(pending.document_id)
+    pollingDocuments.set(pending.document_id, pollingToken)
     try {
       const finished = await pollDocumentStatus(pending.document_id)
       if (operationGeneration === generation && activeKnowledgeBaseId.value === knowledgeBaseId)
         replaceDocument(knowledgeBaseId, finished)
       return finished
-    } catch (error) {
-      if (operationGeneration === generation && activeKnowledgeBaseId.value === knowledgeBaseId) {
-        replaceDocument(knowledgeBaseId, {
-          ...pending,
-          status: 'failed',
-          error_code: error instanceof ApiError ? error.code : 'DOCUMENT_POLL_FAILED',
-          error_message: error instanceof Error ? error.message : '文档状态查询失败。',
-        })
-      }
-      throw error
     } finally {
-      pollingDocumentIds.delete(pending.document_id)
+      if (pollingDocuments.get(pending.document_id) === pollingToken)
+        pollingDocuments.delete(pending.document_id)
     }
   }
 
@@ -69,7 +61,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     asking.value = false
     loadingKnowledgeBases.value = false
     loadingDocuments.value = false
-    pollingDocumentIds.clear()
+    documentLoadSequence += 1
+    pollingDocuments.clear()
   }
 
   async function loadKnowledgeBases() {
@@ -100,16 +93,25 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const operationGeneration = generation
     const knowledgeBaseId = activeKnowledgeBaseId.value
     if (!knowledgeBaseId) return
+    const loadSequence = ++documentLoadSequence
     loadingDocuments.value = true
     try {
       const loaded = await listDocuments(knowledgeBaseId)
-      if (operationGeneration !== generation || activeKnowledgeBaseId.value !== knowledgeBaseId) return
+      if (
+        operationGeneration !== generation
+        || activeKnowledgeBaseId.value !== knowledgeBaseId
+        || loadSequence !== documentLoadSequence
+      ) return
       documents.value[knowledgeBaseId] = loaded
       for (const document of loaded) {
         if (isProcessing(document.status)) void trackDocument(knowledgeBaseId, document).catch(() => {})
       }
     } finally {
-      if (operationGeneration === generation && activeKnowledgeBaseId.value === knowledgeBaseId)
+      if (
+        operationGeneration === generation
+        && activeKnowledgeBaseId.value === knowledgeBaseId
+        && loadSequence === documentLoadSequence
+      )
         loadingDocuments.value = false
     }
   }
