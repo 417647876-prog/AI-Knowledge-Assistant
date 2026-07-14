@@ -8,12 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.chat import FakeChatProvider, OpenAICompatibleChatProvider
-from app.ai.contracts import ChatProvider, EmbeddingProvider
+from app.ai.contracts import EmbeddingProvider, StreamingChatProvider
 from app.ai.embeddings import (
     FakeEmbeddingProvider,
     OpenAICompatibleEmbeddingProvider,
     get_local_embedding_provider,
 )
+from app.ai.rewrite import ChatQuestionRewriter, FakeQuestionRewriter
 from app.api.auth_dependencies import get_current_user
 from app.authorization.service import get_accessible_knowledge_base
 from app.core.config import Settings, get_settings
@@ -86,7 +87,7 @@ async def get_question_embedding_provider(
 
 async def get_question_chat_provider(
     settings: Annotated[Settings, Depends(get_settings)],
-) -> AsyncIterator[ChatProvider]:
+) -> AsyncIterator[StreamingChatProvider]:
     if settings.chat_provider == "fake":
         yield FakeChatProvider()
         return
@@ -102,14 +103,20 @@ async def get_question_chat_provider(
 async def get_rag_service(
     session: Annotated[AsyncSession, Depends(get_session)],
     embedding_provider: Annotated[EmbeddingProvider, Depends(get_question_embedding_provider)],
-    chat_provider: Annotated[ChatProvider, Depends(get_question_chat_provider)],
+    chat_provider: Annotated[StreamingChatProvider, Depends(get_question_chat_provider)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> RagService:
+    question_rewriter = (
+        FakeQuestionRewriter()
+        if settings.chat_provider == "fake"
+        else ChatQuestionRewriter(chat_provider)
+    )
     return RagService(
         session=session,
         embedding_provider=embedding_provider,
         retriever=VectorRetriever(session),
         chat_provider=chat_provider,
+        question_rewriter=question_rewriter,
         score_threshold=settings.rag_score_threshold,
     )
 
