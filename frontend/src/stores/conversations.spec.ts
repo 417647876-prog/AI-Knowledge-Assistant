@@ -198,12 +198,23 @@ describe('conversations store', () => {
     store.activate('u-1', 'kb-1')
     await store.submit('问题')
     const failedId = store.messages[store.messages.length - 1]?.id
+    const statuses: (string | null)[] = []
+    const stopWatching = watch(
+      () => {
+        const answer = store.messages.find((item) => item.id === failedId)
+        return answer?.kind === 'assistant' ? answer.status : null
+      },
+      (status) => statuses.push(status),
+      { flush: 'sync' },
+    )
 
     await store.retry(failedId!)
+    stopWatching()
 
     expect(store.messages.filter((item) => item.kind === 'user')).toHaveLength(1)
     expect(store.messages).toHaveLength(2)
     expect(store.messages[store.messages.length - 1]).toMatchObject({ status: 'completed', content: '重试成功' })
+    expect(statuses).toContain('completed')
   })
 
   it('清理用户时取消该用户的等待保存并删除其全部会话', async () => {
