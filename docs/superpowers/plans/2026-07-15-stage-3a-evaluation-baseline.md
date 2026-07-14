@@ -309,7 +309,7 @@ uv run python -m scripts.evaluate_rag `
 - 修改：`docs/阶段3执行进度.md`
 - 修改：`README.md`
 
-- [ ] **Step 1：运行完整质量门**
+- [x] **Step 1：运行完整质量门**
 
 ```powershell
 Set-Location backend
@@ -323,13 +323,14 @@ Remove-Item Env:RUN_DATABASE_TESTS
 
 预期：全部通过。
 
-- [ ] **Step 2：Sol 只审查阶段 diff、接口和失败回退**
+- [x] **Step 2：Sol 只审查阶段 diff、接口和失败回退**
 
 运行：`git diff (git merge-base HEAD main)..HEAD -- backend/app/evaluation backend/scripts/evaluate_rag.py backend/tests docs README.md`
 
-- [ ] **Step 3：更新看板证据**
+- [x] **Step 3：更新看板证据**
 
-记录 30 条数据分类数量、基线报告路径、四条验证命令结果和提交标识；将 3A 标为 `已完成`，将 3B Task 1 标为 `进行中`。
+记录 30 条数据分类数量、基线报告路径、四条验证命令结果和提交标识；将 3A 标为 `已完成`，
+将 3B Task 1 标为下一步，等待切换到计划指定模型后再开始。
 
 - [ ] **Step 4：提交**
 

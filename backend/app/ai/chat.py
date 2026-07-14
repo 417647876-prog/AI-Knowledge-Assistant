@@ -46,9 +46,7 @@ class OpenAICompatibleChatProvider:
         self._api_key = api_key
         self._model = model
 
-    def _payload(
-        self, system_prompt: str, user_prompt: str, *, stream: bool
-    ) -> dict[str, object]:
+    def _payload(self, system_prompt: str, user_prompt: str, *, stream: bool) -> dict[str, object]:
         return {
             "model": self._model,
             "messages": [

@@ -29,13 +29,9 @@ class ChatQuestionRewriter:
     def __init__(self, chat_provider: ChatProvider) -> None:
         self._chat_provider = chat_provider
 
-    async def rewrite(
-        self, history: list[ConversationMessage], question: str
-    ) -> str:
+    async def rewrite(self, history: list[ConversationMessage], question: str) -> str:
         payload = {
-            "history": [
-                {"role": item.role, "content": item.content} for item in history
-            ],
+            "history": [{"role": item.role, "content": item.content} for item in history],
             "question": question,
         }
         try:
@@ -52,7 +48,5 @@ class FakeQuestionRewriter:
     def __init__(self, *, result: str | None = None) -> None:
         self._result = result
 
-    async def rewrite(
-        self, history: list[ConversationMessage], question: str
-    ) -> str:
+    async def rewrite(self, history: list[ConversationMessage], question: str) -> str:
         return _validate_result(question if self._result is None else self._result)

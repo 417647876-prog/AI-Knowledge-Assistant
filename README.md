@@ -12,8 +12,31 @@
 - 阶段 2A：Vue 3 单页工作台、上传与问答界面。
 - 阶段 2B：管理员账号、JWT 登录、可撤销刷新会话、角色权限和知识库隔离。
 - 阶段 2C：持久化文档列表、处理状态恢复、失败重处理和安全删除。
+- 阶段 2D：SSE 流式回答、浏览器会话历史、多轮问题改写和检索耗时事件。
+- 阶段 3A：30 条中文评估数据、Recall/MRR/引用/拒答指标和纯向量基线 CLI。
 
 当前闭环为：管理员初始化账号 → 用户登录 → 创建自己的知识库 → 上传文档 → 解析和向量入库 → 检索问答 → 返回可追溯引用。系统不提供公开注册，普通用户只能访问自己的资源，管理员可以查看和操作全部知识库。
+
+## 阶段 3A 纯向量评估
+
+阶段 3A 使用固定的 30 条中文案例评估关键词、语义、拒答、多轮和干扰问题。先准备已导入
+`backend/tests/fixtures/documents/01-` 至 `05-` 测试资料的知识库，再执行：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Set-Location backend
+$env:EVALUATION_KNOWLEDGE_BASE_ID = "知识库 UUID"
+uv run python -m scripts.evaluate_rag `
+  --dataset tests/fixtures/evaluation/stage3.jsonl `
+  --knowledge-base-id $env:EVALUATION_KNOWLEDGE_BASE_ID `
+  --mode vector `
+  --output reports/stage3a-vector-baseline.json
+Remove-Item Env:EVALUATION_KNOWLEDGE_BASE_ID
+```
+
+报告记录 Recall@5、MRR@5、引用命中率、拒答准确率和检索延迟，但不会记录数据库连接串或
+API Key。`backend/reports/*.json` 是本地运行产物，默认不提交 Git；执行状态和基线指标见
+[阶段 3 执行进度](docs/阶段3执行进度.md)。
 
 ## 本地启动
 
@@ -154,12 +177,25 @@ uv run ruff check app tests migrations scripts
 uv run ruff format --check app tests migrations scripts
 ```
 
-数据库集成测试需要先启动 Docker PostgreSQL：
+数据库集成测试会校验“最后一个管理员”和全局列表等约束，必须使用空的临时数据库，不能直接复用包含演示数据的开发库：
 
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
 docker compose -f deploy/docker-compose.yml up -d
-Set-Location backend
-uv run alembic upgrade head
-$env:RUN_DATABASE_TESTS = "1"; uv run pytest tests/integration -q; Remove-Item Env:RUN_DATABASE_TESTS
+$testDatabase = "knowledge_integration_test"
+docker compose -f deploy/docker-compose.yml exec -T postgres dropdb --if-exists --force -U knowledge $testDatabase
+docker compose -f deploy/docker-compose.yml exec -T postgres createdb -U knowledge $testDatabase
+try {
+  $env:DATABASE_URL = "postgresql+psycopg://knowledge:knowledge@localhost:5432/$testDatabase"
+  Set-Location backend
+  uv run alembic upgrade head
+  $env:RUN_DATABASE_TESTS = "1"
+  uv run pytest tests/integration -q
+}
+finally {
+  Remove-Item Env:RUN_DATABASE_TESTS -ErrorAction SilentlyContinue
+  Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue
+  Set-Location (git rev-parse --show-toplevel)
+  docker compose -f deploy/docker-compose.yml exec -T postgres dropdb --if-exists --force -U knowledge $testDatabase
+}
 ```

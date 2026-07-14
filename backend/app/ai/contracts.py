@@ -28,6 +28,4 @@ class StreamingChatProvider(ChatProvider, Protocol):
 
 
 class QuestionRewriter(Protocol):
-    async def rewrite(
-        self, history: list[ConversationMessage], question: str
-    ) -> str: ...
+    async def rewrite(self, history: list[ConversationMessage], question: str) -> str: ...
