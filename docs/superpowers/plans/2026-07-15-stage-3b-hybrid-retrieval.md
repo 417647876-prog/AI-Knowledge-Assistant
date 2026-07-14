@@ -226,8 +226,8 @@ rag_retrieval_mode: Literal["vector", "hybrid"] = "vector"
 rag_rrf_rank_constant: int = Field(default=60, ge=1, le=1000)
 ```
 
-- [ ] **Step 1：写 vector/hybrid 工厂选择和 query 透传测试**
-- [ ] **Step 2：让 RagService 通过 `Retriever` 协议接收实现**
+- [x] **Step 1：写 vector/hybrid 工厂选择和 query 透传测试**
+- [x] **Step 2：让 RagService 通过 `Retriever` 协议接收实现**
 
 `RagService.answer` 调用统一为：
 
@@ -241,14 +241,14 @@ chunks = await self._retriever.search(
 )
 ```
 
-- [ ] **Step 3：依配置构造 VectorRetriever 或 HybridRetriever**
-- [ ] **Step 4：运行 API、权限和回退测试**
+- [x] **Step 3：依配置构造 VectorRetriever 或 HybridRetriever**
+- [x] **Step 4：运行 API、权限和回退测试**
 
 运行：`uv run pytest tests/unit/test_config.py tests/unit/test_rag_service.py tests/integration/test_question_api.py tests/integration/test_resource_permissions.py -q`
 
 预期：默认纯向量行为不变；hybrid 显式开启；跨知识库仍返回 404。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 提交：`git commit -m "feat: 接入可回退的混合检索"`
 
