@@ -103,6 +103,35 @@ describe('conversation storage', () => {
     expect(history).not.toContainEqual(expect.objectContaining({ content: 'answer post-2' }))
   })
 
+  it('excludes every completed pair before the last divider when only two pairs follow it', () => {
+    const messages = [
+      ...makeRound('before-1', 'completed'),
+      ...makeRound('before-2', 'completed'),
+      ...makeRound('before-3', 'completed'),
+      ...makeRound('before-4', 'completed'),
+      ...makeRound('before-5', 'completed'),
+      ...makeRound('before-6', 'completed'),
+      ...makeRound('before-7', 'completed'),
+      ...makeRound('before-8', 'completed'),
+      { id: 'divider-after-eight-rounds', kind: 'divider' as const, createdAt: 'now' },
+      ...makeRound('post-1', 'completed'),
+      ...makeRound('post-2', 'completed'),
+    ]
+
+    const history = buildHistory(messages)
+
+    expect(history).toEqual([
+      { role: 'user', content: 'question post-1' },
+      { role: 'assistant', content: 'answer post-1' },
+      { role: 'user', content: 'question post-2' },
+      { role: 'assistant', content: 'answer post-2' },
+    ])
+    for (let number = 3; number <= 8; number += 1) {
+      expect(history).not.toContainEqual(expect.objectContaining({ content: `question before-${number}` }))
+      expect(history).not.toContainEqual(expect.objectContaining({ content: `answer before-${number}` }))
+    }
+  })
+
   it('excludes stopped and failed assistants from history', () => {
     expect(buildHistory([
       ...makeRound('one', 'completed'),

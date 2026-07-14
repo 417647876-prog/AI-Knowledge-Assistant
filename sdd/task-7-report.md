@@ -23,6 +23,17 @@
 - `npm.cmd test -- --run`：19 个测试文件、146 个测试全部通过。
 - `npm.cmd run type-check`：通过。
 
+## 2026-07-14 分隔线前多后少场景补强
+
+- 新增独立场景：最后一条分隔线前有 8 个 completed 问答对，分隔线后仅有 `post-1`、`post-2` 两个 completed 问答对。
+- 精确断言 `buildHistory` 只返回分隔线后的 4 条消息，并逐一排除分隔线前最后 6 个问答对（`before-3` 至 `before-8`）。因此，若实现忽略分隔线、只对全局历史执行 `slice(-6)`，将错误带入分隔线前的问答并使测试失败。
+
+### 本次验证结果
+
+- `npm.cmd test -- --run src/stores/conversationStorage.spec.ts`：1 个测试文件、9 个测试全部通过。
+- `npm.cmd test -- --run`：19 个测试文件、147 个测试全部通过。
+- `npm.cmd run type-check`：通过。
+
 ## 2026-07-14 测试假阳性修复
 
 - 加固“最后一条分隔线后的六组 completed 问答”测试：分隔线前保留 `before-1`、`before-2` 两组可识别问答，分隔线后追加 `post-1` 至 `post-8` 八组可识别问答。
