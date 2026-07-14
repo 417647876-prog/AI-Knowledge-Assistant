@@ -26,6 +26,7 @@ class EvaluationRetriever(Protocol):
         self,
         *,
         knowledge_base_id: UUID,
+        query: str,
         query_embedding: list[float],
         top_k: int,
         score_threshold: float,
@@ -73,6 +74,7 @@ async def evaluate_cases(
         query_embedding = await embedding_provider.embed_query(case.question)
         chunks = await retriever.search(
             knowledge_base_id=knowledge_base_id,
+            query=case.question,
             query_embedding=query_embedding,
             top_k=top_k,
             score_threshold=score_threshold,

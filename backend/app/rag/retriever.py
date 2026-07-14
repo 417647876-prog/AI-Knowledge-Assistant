@@ -16,6 +16,7 @@ class VectorRetriever:
         self,
         *,
         knowledge_base_id: UUID,
+        query: str = "",
         query_embedding: list[float],
         top_k: int,
         score_threshold: float,

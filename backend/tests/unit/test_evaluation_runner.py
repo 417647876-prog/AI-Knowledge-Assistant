@@ -25,6 +25,7 @@ class StubRetriever:
         self,
         *,
         knowledge_base_id: UUID,
+        query: str,
         query_embedding: list[float],
         top_k: int,
         score_threshold: float,
@@ -32,6 +33,7 @@ class StubRetriever:
         self.calls.append(
             {
                 "knowledge_base_id": knowledge_base_id,
+                "query": query,
                 "query_embedding": query_embedding,
                 "top_k": top_k,
                 "score_threshold": score_threshold,
@@ -61,6 +63,7 @@ class SequentialRetriever(StubRetriever):
         self,
         *,
         knowledge_base_id: UUID,
+        query: str,
         query_embedding: list[float],
         top_k: int,
         score_threshold: float,
@@ -68,6 +71,7 @@ class SequentialRetriever(StubRetriever):
         response_index = len(self.calls)
         await super().search(
             knowledge_base_id=knowledge_base_id,
+            query=query,
             query_embedding=query_embedding,
             top_k=top_k,
             score_threshold=score_threshold,
@@ -136,6 +140,7 @@ async def test_evaluate_cases_runs_single_case_with_stable_metadata() -> None:
     assert retriever.calls == [
         {
             "knowledge_base_id": knowledge_base_id,
+            "query": "试用期多久？",
             "query_embedding": [0.1, 0.2],
             "top_k": 5,
             "score_threshold": 0.55,
