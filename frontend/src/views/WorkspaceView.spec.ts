@@ -11,7 +11,7 @@ import { useWorkspaceStore } from '../stores/workspace'
 import WorkspaceView from './WorkspaceView.vue'
 
 describe('WorkspaceView', () => {
-  it('组装知识库工作台并在挂载时加载知识库', () => {
+  it('组装知识库工作台并在挂载时加载知识库与当前文档', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const store = useWorkspaceStore()
@@ -21,8 +21,10 @@ describe('WorkspaceView', () => {
     }]
     store.activeKnowledgeBaseId = 'kb-1'
     const loadKnowledgeBases = vi.spyOn(store, 'loadKnowledgeBases').mockResolvedValue()
+    const loadDocuments = vi.spyOn(store, 'loadDocuments').mockResolvedValue()
 
     const wrapper = mount(WorkspaceView, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
 
     expect(wrapper.findComponent(KnowledgeBaseSidebar).exists()).toBe(true)
     expect(wrapper.findComponent(DocumentUpload).exists()).toBe(true)
@@ -30,6 +32,7 @@ describe('WorkspaceView', () => {
     expect(wrapper.findComponent(QuestionPanel).exists()).toBe(true)
     expect(wrapper.text()).not.toContain('请选择或创建知识库')
     expect(loadKnowledgeBases).toHaveBeenCalledOnce()
+    expect(loadDocuments).toHaveBeenCalledOnce()
   })
 
   it('未选择知识库时保留侧栏并显示选择提示', () => {

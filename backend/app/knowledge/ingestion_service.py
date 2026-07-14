@@ -100,7 +100,8 @@ class IngestionService:
                     (IngestionJob.status == "running", 1),
                     else_=2,
                 ),
-                IngestionJob.finished_at.desc().nullslast(),
+                IngestionJob.created_at.desc(),
+                IngestionJob.id.desc(),
             )
         )
 

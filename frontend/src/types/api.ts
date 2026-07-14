@@ -1,4 +1,4 @@
-export type DocumentStatus = 'pending' | 'running' | 'ready' | 'failed'
+export type DocumentStatus = 'pending' | 'parsing' | 'embedding' | 'ready' | 'failed'
 export type UserRole = 'admin' | 'user'
 export interface CurrentUser {
   id: string
@@ -25,7 +25,10 @@ export interface KnowledgeBase {
 }
 export interface DocumentTask {
   document_id: string; job_id: string; status: DocumentStatus
-  error_code: string | null; error_message: string | null; file_name?: string
+  error_code: string | null; error_message: string | null; file_name: string
+}
+export interface DocumentListResponse {
+  items: DocumentTask[]
 }
 export interface Citation {
   citation_id: number; document_id: string; file_name: string; content: string
