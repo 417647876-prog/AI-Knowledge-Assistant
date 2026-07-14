@@ -1,0 +1,30 @@
+{"id":"keyword-01","category":"keyword","question":"员工入职满一年有多少天带薪年假？","expected_sources":[{"file_name":"01-年假制度.txt","contains":"5 天带薪年假"}]}
+{"id":"keyword-02","category":"keyword","question":"密码长度至少多少位？","expected_sources":[{"file_name":"02-信息安全规范.md","contains":"不少于 12 位"}]}
+{"id":"keyword-03","category":"keyword","question":"离开工位多久必须锁屏？","expected_sources":[{"file_name":"02-信息安全规范.md","contains":"超过 5 分钟"}]}
+{"id":"keyword-04","category":"keyword","question":"工作日打卡截止时间是什么时候？","expected_sources":[{"file_name":"03-员工手册.docx","contains":"9:30 前"}]}
+{"id":"keyword-05","category":"keyword","question":"信息安全基础培训日期是哪天？","expected_sources":[{"file_name":"04-培训计划.xlsx","contains":"2026-08-01"}]}
+{"id":"keyword-06","category":"keyword","question":"远程办公访问内部系统必须使用什么？","expected_sources":[{"file_name":"05-远程办公指南.pdf","contains":"公司 VPN"}]}
+{"id":"semantic-01","category":"semantic","question":"工作满一年后可以休多少天假？","expected_sources":[{"file_name":"01-年假制度.txt","contains":"5 天带薪年假"}]}
+{"id":"semantic-02","category":"semantic","question":"公司要求多长时间换一次密码？","expected_sources":[{"file_name":"02-信息安全规范.md","contains":"每 90 天更新一次"}]}
+{"id":"semantic-03","category":"semantic","question":"暂时离开座位时怎样保护电脑？","expected_sources":[{"file_name":"02-信息安全规范.md","contains":"锁定电脑屏幕"}]}
+{"id":"semantic-04","category":"semantic","question":"迟到半小时以上要怎样处理？","expected_sources":[{"file_name":"03-员工手册.docx","contains":"提交补卡说明"}]}
+{"id":"semantic-05","category":"semantic","question":"生病请假需要先做什么？","expected_sources":[{"file_name":"03-员工手册.docx","contains":"通知直属主管"}]}
+{"id":"semantic-06","category":"semantic","question":"研发部学习 Python 的课程安排在哪一天？","expected_sources":[{"file_name":"04-培训计划.xlsx","contains":"2026-08-15"}]}
+{"id":"semantic-07","category":"semantic","question":"人力资源培训的联系人是谁？","expected_sources":[{"file_name":"04-培训计划.xlsx","contains":"李老师"}]}
+{"id":"semantic-08","category":"semantic","question":"一周最多可以在家办公几天？","expected_sources":[{"file_name":"05-远程办公指南.pdf","contains":"最多可申请 2 天"}]}
+{"id":"refusal-01","category":"refusal","question":"公司差旅住宿报销标准是多少？","expected_sources":[],"should_refuse":true}
+{"id":"refusal-02","category":"refusal","question":"员工股票期权如何行权？","expected_sources":[],"should_refuse":true}
+{"id":"refusal-03","category":"refusal","question":"今年春节放假具体是哪几天？","expected_sources":[],"should_refuse":true}
+{"id":"refusal-04","category":"refusal","question":"公司的客服电话是多少？","expected_sources":[],"should_refuse":true}
+{"id":"refusal-05","category":"refusal","question":"销售提成比例是多少？","expected_sources":[],"should_refuse":true}
+{"id":"refusal-06","category":"refusal","question":"会议室可以容纳多少人？","expected_sources":[],"should_refuse":true}
+{"id":"multi-turn-01","category":"multi_turn","question":"那能顺延吗？","expected_sources":[{"file_name":"01-年假制度.txt","contains":"主管审批后顺延"}],"history":[{"role":"user","content":"年假制度怎么规定？"},{"role":"assistant","content":"员工入职满一年后享有 5 天带薪年假。"}]}
+{"id":"multi-turn-02","category":"multi_turn","question":"多久更新一次？","expected_sources":[{"file_name":"02-信息安全规范.md","contains":"每 90 天更新一次"}],"history":[{"role":"user","content":"密码有什么要求？"},{"role":"assistant","content":"密码长度不少于 12 位。"}]}
+{"id":"multi-turn-03","category":"multi_turn","question":"每周能申请几天？","expected_sources":[{"file_name":"05-远程办公指南.pdf","contains":"最多可申请 2 天"}],"history":[{"role":"user","content":"远程办公有什么规定？"},{"role":"assistant","content":"远程办公需要通过公司 VPN 访问内部系统。"}]}
+{"id":"multi-turn-04","category":"multi_turn","question":"病假怎么申请？","expected_sources":[{"file_name":"03-员工手册.docx","contains":"当天 10:00 前通知直属主管"}],"history":[{"role":"user","content":"员工手册中有哪些请假规则？"},{"role":"assistant","content":"员工请假需要按员工手册规定执行。"}]}
+{"id":"multi-turn-05","category":"multi_turn","question":"研发部什么时候上？","expected_sources":[{"file_name":"04-培训计划.xlsx","contains":"2026-08-15"}],"history":[{"role":"user","content":"培训计划里有 Python AI 入门吗？"},{"role":"assistant","content":"有一门 Python AI 入门课程，面向研发部。"}]}
+{"id":"multi-turn-06","category":"multi_turn","question":"迟到半小时怎么办？","expected_sources":[{"file_name":"03-员工手册.docx","contains":"提交补卡说明"}],"history":[{"role":"user","content":"考勤有什么规则？"},{"role":"assistant","content":"员工应在工作日 9:30 前完成打卡。"}]}
+{"id":"interference-01","category":"interference","question":"信息安全基础课程的培训日期是什么时候？","expected_sources":[{"file_name":"04-培训计划.xlsx","contains":"2026-08-01"}]}
+{"id":"interference-02","category":"interference","question":"远程办公时内部系统的访问要求是什么？","expected_sources":[{"file_name":"05-远程办公指南.pdf","contains":"公司 VPN"}]}
+{"id":"interference-03","category":"interference","question":"年假在什么情况下可以延后使用？","expected_sources":[{"file_name":"01-年假制度.txt","contains":"主管审批后顺延"}]}
+{"id":"interference-04","category":"interference","question":"培训计划中联系人使用哪个邮箱？","expected_sources":[{"file_name":"04-培训计划.xlsx","contains":"hr@example.com"}]}
