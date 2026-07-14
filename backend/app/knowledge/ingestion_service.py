@@ -12,6 +12,7 @@ from app.db.models.document_chunk import DocumentChunk
 from app.db.models.ingestion_job import IngestionJob
 from app.knowledge.chunking import RecursiveTextChunker
 from app.knowledge.parsers.registry import ParserRegistry
+from app.knowledge.search_tokens import build_search_text
 
 
 class IngestionService:
@@ -74,6 +75,7 @@ class IngestionService:
                         start_index=chunk.start_index,
                         extra_metadata=chunk.metadata,
                         embedding=embedding,
+                        search_text=build_search_text(chunk.content),
                     )
                 )
             document.status = "ready"
