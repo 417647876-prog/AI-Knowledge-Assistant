@@ -6,8 +6,7 @@ const safeProtocols = new Set(['http:', 'https:', 'mailto:'])
 
 export function renderSafeMarkdown(source: string): string {
   const template = document.createElement('template')
-  const plainSource = DOMPurify.sanitize(source, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] })
-  const markdownSource = plainSource.replace(
+  const markdownSource = source.replace(
     /\]\(\s*(?:javascript|vbscript|data)\s*:[^)]*\)/gi,
     ']',
   )

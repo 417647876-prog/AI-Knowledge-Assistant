@@ -30,4 +30,10 @@ describe('renderSafeMarkdown', () => {
     expect(html).toContain('target="_blank"')
     expect(html).toContain('rel="noopener noreferrer"')
   })
+
+  it('保留围栏代码块中的泛型尖括号', () => {
+    const html = renderSafeMarkdown('```csharp\nList<string> values = [];\n```')
+
+    expect(html).toContain('List&lt;string&gt; values = [];')
+  })
 })
