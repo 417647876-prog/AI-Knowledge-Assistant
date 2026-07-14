@@ -1,9 +1,10 @@
 import hashlib
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,24 +24,51 @@ router = APIRouter(tags=["documents"])
 _allowed_extensions = {".pdf", ".docx", ".xlsx", ".md", ".txt"}
 
 
-def _document_response(document: Document, job: IngestionJob) -> dict[str, str | None]:
-    return {
-        "document_id": str(document.id),
-        "job_id": str(job.id),
-        "status": document.status,
-        "error_code": document.error_code,
-        "error_message": document.error_message,
-    }
+class DocumentTaskResponse(BaseModel):
+    document_id: UUID
+    job_id: UUID
+    file_name: str
+    status: Literal["pending", "parsing", "embedding", "ready", "failed"]
+    error_code: str | None
+    error_message: str | None
 
 
-@router.post("/api/v1/knowledge-bases/{knowledge_base_id}/documents", status_code=202)
+class DocumentListResponse(BaseModel):
+    items: list[DocumentTaskResponse]
+
+
+def _document_response(document: Document, job: IngestionJob) -> DocumentTaskResponse:
+    return DocumentTaskResponse(
+        document_id=document.id,
+        job_id=job.id,
+        file_name=document.original_file_name,
+        status=document.status,
+        error_code=document.error_code,
+        error_message=document.error_message,
+    )
+
+
+async def _latest_job(session: AsyncSession, document_id: UUID) -> IngestionJob | None:
+    return await session.scalar(
+        select(IngestionJob)
+        .where(IngestionJob.document_id == document_id)
+        .order_by(IngestionJob.created_at.desc(), IngestionJob.id.desc())
+        .limit(1)
+    )
+
+
+@router.post(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents",
+    response_model=DocumentTaskResponse,
+    status_code=202,
+)
 async def upload_document(
     knowledge_base_id: UUID,
     background_tasks: BackgroundTasks,
     file: Annotated[UploadFile, File()],
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
-) -> dict[str, str | None]:
+) -> DocumentTaskResponse:
     await get_accessible_knowledge_base(session, current_user, knowledge_base_id)
     extension = Path(file.filename or "").suffix.lower()
     if extension not in _allowed_extensions:
@@ -86,30 +114,55 @@ async def upload_document(
     return _document_response(document, job)
 
 
-@router.get("/api/v1/documents/{document_id}")
+@router.get("/api/v1/documents/{document_id}", response_model=DocumentTaskResponse)
 async def get_document(
     document_id: UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
-) -> dict[str, str | None]:
+) -> DocumentTaskResponse:
     document = await get_accessible_document(session, current_user, document_id)
-    job = await session.scalar(
-        select(IngestionJob)
-        .where(IngestionJob.document_id == document_id)
-        .order_by(IngestionJob.id.desc())
-    )
+    job = await _latest_job(session, document_id)
     if job is None:
         raise AppError(code="DOCUMENT_NOT_FOUND", message="文档任务不存在。", status_code=404)
     return _document_response(document, job)
 
 
-@router.post("/api/v1/documents/{document_id}/reprocess", status_code=202)
+@router.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents",
+    response_model=DocumentListResponse,
+)
+async def list_documents(
+    knowledge_base_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> DocumentListResponse:
+    await get_accessible_knowledge_base(session, current_user, knowledge_base_id)
+    documents = (
+        await session.scalars(
+            select(Document)
+            .where(Document.knowledge_base_id == knowledge_base_id)
+            .order_by(Document.created_at.desc(), Document.id.desc())
+        )
+    ).all()
+    items: list[DocumentTaskResponse] = []
+    for document in documents:
+        job = await _latest_job(session, document.id)
+        if job is not None:
+            items.append(_document_response(document, job))
+    return DocumentListResponse(items=items)
+
+
+@router.post(
+    "/api/v1/documents/{document_id}/reprocess",
+    response_model=DocumentTaskResponse,
+    status_code=202,
+)
 async def reprocess_document(
     document_id: UUID,
     background_tasks: BackgroundTasks,
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
-) -> dict[str, str | None]:
+) -> DocumentTaskResponse:
     document = await get_accessible_document(session, current_user, document_id, for_update=True)
     active_job = await session.scalar(
         select(IngestionJob.id).where(
@@ -131,3 +184,46 @@ async def reprocess_document(
     await session.commit()
     background_tasks.add_task(run_ingestion, document.id)
     return _document_response(document, job)
+
+
+@router.delete("/api/v1/documents/{document_id}", status_code=204)
+async def delete_document(
+    document_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Response:
+    document = await get_accessible_document(session, current_user, document_id, for_update=True)
+    active_job = await session.scalar(
+        select(IngestionJob.id).where(
+            IngestionJob.document_id == document_id,
+            IngestionJob.status.in_(("pending", "running")),
+        )
+    )
+    if active_job is not None:
+        raise AppError(
+            code="DOCUMENT_PROCESSING",
+            message="文档正在处理中，请稍后再删除。",
+            status_code=409,
+        )
+
+    upload_root = get_settings().upload_directory.resolve()
+    stored_file = (upload_root / document.stored_file_name).resolve()
+    if not stored_file.is_relative_to(upload_root):
+        raise AppError(
+            code="DOCUMENT_DELETE_FAILED",
+            message="文档删除失败，请稍后重试。",
+            status_code=500,
+        )
+    try:
+        await session.delete(document)
+        await session.flush()
+        stored_file.unlink(missing_ok=True)
+        await session.commit()
+    except OSError as error:
+        await session.rollback()
+        raise AppError(
+            code="DOCUMENT_DELETE_FAILED",
+            message="文档删除失败，请稍后重试。",
+            status_code=500,
+        ) from error
+    return Response(status_code=204)

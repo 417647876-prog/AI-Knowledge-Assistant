@@ -136,6 +136,12 @@ async def test_documents_and_questions_are_isolated_by_owner(
     reprocess_response = await permission_context.bob_client.post(
         f"/api/v1/documents/{document_id}/reprocess"
     )
+    list_response = await permission_context.bob_client.get(
+        f"/api/v1/knowledge-bases/{knowledge_base_id}/documents"
+    )
+    delete_response = await permission_context.bob_client.delete(
+        f"/api/v1/documents/{document_id}"
+    )
     question_response = await permission_context.bob_client.post(
         f"/api/v1/knowledge-bases/{knowledge_base_id}/questions",
         json={"question": "年假有几天？"},
@@ -146,6 +152,10 @@ async def test_documents_and_questions_are_isolated_by_owner(
     assert document_response.json()["error"]["code"] == "DOCUMENT_NOT_FOUND"
     assert reprocess_response.status_code == 404
     assert reprocess_response.json()["error"]["code"] == "DOCUMENT_NOT_FOUND"
+    assert list_response.status_code == 404
+    assert list_response.json()["error"]["code"] == "KNOWLEDGE_BASE_NOT_FOUND"
+    assert delete_response.status_code == 404
+    assert delete_response.json()["error"]["code"] == "DOCUMENT_NOT_FOUND"
     assert question_response.status_code == 404
     assert question_response.json()["error"]["code"] == "KNOWLEDGE_BASE_NOT_FOUND"
     assert permission_context.rag_service.calls == []
