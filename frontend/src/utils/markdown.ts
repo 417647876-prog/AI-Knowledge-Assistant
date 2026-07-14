@@ -6,11 +6,7 @@ const safeProtocols = new Set(['http:', 'https:', 'mailto:'])
 
 export function renderSafeMarkdown(source: string): string {
   const template = document.createElement('template')
-  const markdownSource = source.replace(
-    /\]\(\s*(?:javascript|vbscript|data)\s*:[^)]*\)/gi,
-    ']',
-  )
-  template.innerHTML = DOMPurify.sanitize(markdown.render(markdownSource))
+  template.innerHTML = DOMPurify.sanitize(markdown.render(source))
 
   for (const link of template.content.querySelectorAll('a[href]')) {
     const href = link.getAttribute('href') ?? ''

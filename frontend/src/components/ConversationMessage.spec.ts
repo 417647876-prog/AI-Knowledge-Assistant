@@ -62,7 +62,8 @@ describe('ConversationMessage', () => {
     }) })
     await flushPromises()
 
-    expect(wrapper.html()).not.toContain('onerror')
+    expect(wrapper.find('.markdown-body img').exists()).toBe(false)
+    expect(wrapper.find('.markdown-body [onerror]').exists()).toBe(false)
     expect(wrapper.find('[data-test="citations"]').text()).toContain('员工手册.txt')
     expect(wrapper.find('[data-test="citations"]').text()).toContain('相关度 0.91')
   })

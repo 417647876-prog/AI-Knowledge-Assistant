@@ -21,7 +21,7 @@ describe('renderSafeMarkdown', () => {
 
     expect(template.content.querySelector('img')).toBeNull()
     expect(template.content.querySelector('[onerror]')).toBeNull()
-    expect(html).not.toContain('javascript:')
+    expect(template.content.querySelector('a[href^="javascript:"]')).toBeNull()
   })
 
   it('为外部链接添加安全属性', () => {
@@ -35,5 +35,11 @@ describe('renderSafeMarkdown', () => {
     const html = renderSafeMarkdown('```csharp\nList<string> values = [];\n```')
 
     expect(html).toContain('List&lt;string&gt; values = [];')
+  })
+
+  it('保留围栏代码中的危险链接文本', () => {
+    const html = renderSafeMarkdown('```text\n](javascript:alert(1))\n```')
+
+    expect(html).toContain('](javascript:alert(1))')
   })
 })
