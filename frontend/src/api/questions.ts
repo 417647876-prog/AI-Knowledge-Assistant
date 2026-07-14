@@ -35,7 +35,10 @@ export async function* streamQuestion(
   }
 
   for await (const raw of parseSse(response.body)) {
-    if (!questionEventNames.has(raw.event as QuestionStreamEvent['event'])) continue
+    if (!questionEventNames.has(raw.event as QuestionStreamEvent['event'])) {
+      console.debug('Ignored unknown question stream event', raw.event)
+      continue
+    }
 
     let data: unknown
     try {

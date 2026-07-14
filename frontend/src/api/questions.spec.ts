@@ -20,12 +20,14 @@ async function read(content: string) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('streamQuestion', () => {
-  it('ignores unknown events and yields known events', async () => {
+  it('logs unknown events and continues yielding known events', async () => {
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined)
     const events = await read(
       'event: progress\ndata: {}\n\nevent: token\ndata: {"delta":"回答"}\n\nevent: done\ndata: {"request_id":"r","citations":[],"retrieved_chunk_count":0,"timings":{"rewrite_ms":0,"retrieval_ms":0,"generation_ms":0,"total_ms":0}}\n\n',
     )
 
     expect(events.map((item) => item.event)).toEqual(['token', 'done'])
+    expect(debug).toHaveBeenCalledWith('Ignored unknown question stream event', 'progress')
   })
 
   it('rejects invalid JSON payloads', async () => {
