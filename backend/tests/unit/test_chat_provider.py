@@ -95,6 +95,7 @@ async def test_openai_provider_reads_streaming_deltas_and_done() -> None:
 @pytest.mark.asyncio
 async def test_openai_provider_skips_null_and_empty_streaming_deltas() -> None:
     body = (
+        'data: {"choices":[{"delta":null}]}\n\n'
         'data: {"choices":[{"delta":{"content":null}}]}\n\n'
         'data: {"choices":[{"delta":{"content":""}}]}\n\n'
         'data: {"choices":[{"delta":{"content":"答案"}}]}\n\n'
@@ -150,16 +151,20 @@ async def test_stream_wraps_http_503_without_leaking_api_key() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_wraps_invalid_provider_payload_structure() -> None:
+async def test_stream_stops_reading_after_done() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text='data: {"choices":[{"delta":null}]}\n\n')
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"choices":[{"delta":{"content":"答案"}}]}\n\n'
+                "data: [DONE]\n\n"
+                "data: not-json\n\n"
+            ),
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = OpenAICompatibleChatProvider(
             client=client, base_url="https://chat.example", api_key="secret", model="model"
         )
-        with pytest.raises(AppError) as captured:
-            _ = [item async for item in provider.stream("system", "user")]
 
-    assert captured.value.code == "CHAT_PROVIDER_ERROR"
-    assert "secret" not in captured.value.message
+        assert [item async for item in provider.stream("system", "user")] == ["答案"]

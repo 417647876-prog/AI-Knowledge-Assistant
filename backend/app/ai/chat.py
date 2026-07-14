@@ -89,7 +89,12 @@ class OpenAICompatibleChatProvider:
                     if data == "[DONE]":
                         return
                     payload = json.loads(data)
-                    delta = payload["choices"][0]["delta"].get("content")
+                    delta = payload["choices"][0]["delta"]
+                    if delta is None:
+                        continue
+                    if not isinstance(delta, dict):
+                        raise TypeError("invalid stream delta")
+                    delta = delta.get("content")
                     if delta is not None:
                         if not isinstance(delta, str):
                             raise TypeError("invalid stream delta")
