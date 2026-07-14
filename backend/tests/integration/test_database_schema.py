@@ -195,16 +195,20 @@ def test_ingestion_job_created_at_migration_backfills_existing_jobs(
                     "AND column_name='created_at'"
                 )
             )
-            index_columns = connection.execute(
-                text(
-                    "SELECT a.attname FROM pg_class i "
-                    "JOIN pg_index ix ON ix.indexrelid=i.oid "
-                    "JOIN pg_attribute a ON a.attrelid=ix.indrelid "
-                    "AND a.attnum=ANY(ix.indkey) "
-                    "WHERE i.relname='ix_ingestion_jobs_document_id_created_at' "
-                    "ORDER BY array_position(ix.indkey, a.attnum)"
+            index_columns = (
+                connection.execute(
+                    text(
+                        "SELECT a.attname FROM pg_class i "
+                        "JOIN pg_index ix ON ix.indexrelid=i.oid "
+                        "JOIN pg_attribute a ON a.attrelid=ix.indrelid "
+                        "AND a.attnum=ANY(ix.indkey) "
+                        "WHERE i.relname='ix_ingestion_jobs_document_id_created_at' "
+                        "ORDER BY array_position(ix.indkey, a.attnum)"
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
         assert created_at == started_at
         assert is_nullable == "NO"

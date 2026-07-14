@@ -139,9 +139,7 @@ async def test_documents_and_questions_are_isolated_by_owner(
     list_response = await permission_context.bob_client.get(
         f"/api/v1/knowledge-bases/{knowledge_base_id}/documents"
     )
-    delete_response = await permission_context.bob_client.delete(
-        f"/api/v1/documents/{document_id}"
-    )
+    delete_response = await permission_context.bob_client.delete(f"/api/v1/documents/{document_id}")
     question_response = await permission_context.bob_client.post(
         f"/api/v1/knowledge-bases/{knowledge_base_id}/questions",
         json={"question": "年假有几天？"},
