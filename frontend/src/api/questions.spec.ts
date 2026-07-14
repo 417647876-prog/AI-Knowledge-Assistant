@@ -45,4 +45,20 @@ describe('streamQuestion', () => {
 
     expect(events[0]?.event).toBe('error')
   })
+
+  it('stops after done and does not yield later tokens', async () => {
+    const events = await read(
+      'event: done\ndata: {"request_id":"r","citations":[],"retrieved_chunk_count":0,"timings":{"rewrite_ms":0,"retrieval_ms":0,"generation_ms":0,"total_ms":0}}\n\nevent: token\ndata: {"delta":"不应输出"}\n\n',
+    )
+
+    expect(events.map((item) => item.event)).toEqual(['done'])
+  })
+
+  it('stops after error and does not yield later terminal or token events', async () => {
+    const events = await read(
+      'event: error\ndata: {"code":"X","message":"失败","request_id":"r"}\n\nevent: done\ndata: {"request_id":"r","citations":[],"retrieved_chunk_count":0,"timings":{"rewrite_ms":0,"retrieval_ms":0,"generation_ms":0,"total_ms":0}}\n\nevent: token\ndata: {"delta":"不应输出"}\n\n',
+    )
+
+    expect(events.map((item) => item.event)).toEqual(['error'])
+  })
 })

@@ -34,7 +34,6 @@ export async function* streamQuestion(
     throw new ApiError(0, 'STREAM_UNAVAILABLE', '浏览器无法读取流式回答。')
   }
 
-  let terminal = false
   for await (const raw of parseSse(response.body)) {
     if (!questionEventNames.has(raw.event as QuestionStreamEvent['event'])) continue
 
@@ -47,8 +46,8 @@ export async function* streamQuestion(
 
     const event = { event: raw.event, data } as QuestionStreamEvent
     yield event
-    if (event.event === 'done' || event.event === 'error') terminal = true
+    if (event.event === 'done' || event.event === 'error') return
   }
 
-  if (!terminal) throw new ApiError(0, 'STREAM_INTERRUPTED', '回答连接意外中断。')
+  throw new ApiError(0, 'STREAM_INTERRUPTED', '回答连接意外中断。')
 }
