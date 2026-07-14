@@ -6,7 +6,7 @@ import pytest
 from app.ai.chat import FakeChatProvider, OpenAICompatibleChatProvider
 from app.ai.embeddings import FakeEmbeddingProvider
 from app.ai.rewrite import ChatQuestionRewriter, FakeQuestionRewriter
-from app.api.v1.questions import get_rag_service
+from app.api.v1.questions import get_question_rewriter, get_rag_service
 from app.core.config import Settings
 from app.rag.schemas import RetrievedChunk
 
@@ -29,10 +29,15 @@ def _chunk() -> RetrievedChunk:
 
 @pytest.mark.asyncio
 async def test_rag_service_factory_uses_fake_rewriter_and_keeps_answer_path_available() -> None:
+    question_rewriter = await get_question_rewriter(
+        settings=Settings(_env_file=None, embedding_provider="fake", chat_provider="fake"),
+        chat_provider=FakeChatProvider(),
+    )
     service = await get_rag_service(
         session=FakeSession(),
         embedding_provider=FakeEmbeddingProvider(dimensions=512),
         chat_provider=FakeChatProvider(answer="员工可享受五天年假。[1]"),
+        question_rewriter=question_rewriter,
         settings=Settings(_env_file=None, embedding_provider="fake", chat_provider="fake"),
     )
 
@@ -57,16 +62,22 @@ async def test_rag_service_factory_wraps_real_chat_provider_for_question_rewriti
             api_key="test-key",
             model="chat-model",
         )
+        settings = Settings(
+            _env_file=None,
+            embedding_provider="fake",
+            chat_provider="deepseek",
+            chat_api_key="test-key",
+        )
+        question_rewriter = await get_question_rewriter(
+            settings=settings,
+            chat_provider=chat_provider,
+        )
         service = await get_rag_service(
             session=FakeSession(),
             embedding_provider=FakeEmbeddingProvider(dimensions=512),
             chat_provider=chat_provider,
-            settings=Settings(
-                _env_file=None,
-                embedding_provider="fake",
-                chat_provider="deepseek",
-                chat_api_key="test-key",
-            ),
+            question_rewriter=question_rewriter,
+            settings=settings,
         )
 
     assert isinstance(service._question_rewriter, ChatQuestionRewriter)
