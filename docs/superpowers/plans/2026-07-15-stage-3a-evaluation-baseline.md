@@ -332,6 +332,6 @@ Remove-Item Env:RUN_DATABASE_TESTS
 记录 30 条数据分类数量、基线报告路径、四条验证命令结果和提交标识；将 3A 标为 `已完成`，
 将 3B Task 1 标为下一步，等待切换到计划指定模型后再开始。
 
-- [ ] **Step 4：提交**
+- [x] **Step 4：提交**
 
 提交：`git commit -m "docs: 完成阶段3A评估基线验收"`
