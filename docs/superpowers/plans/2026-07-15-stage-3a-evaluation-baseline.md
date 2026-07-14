@@ -94,7 +94,7 @@ class EvaluationReport(BaseModel):
 def load_evaluation_cases(path: Path) -> list[EvaluationCase]: ...
 ```
 
-- [ ] **Step 1：先写加载成功、重复 ID、空文件和非法 JSON 的失败测试**
+- [x] **Step 1：先写加载成功、重复 ID、空文件和非法 JSON 的失败测试**
 
 ```python
 def test_load_evaluation_cases_rejects_duplicate_ids(tmp_path: Path) -> None:
@@ -108,13 +108,13 @@ def test_load_evaluation_cases_rejects_duplicate_ids(tmp_path: Path) -> None:
         load_evaluation_cases(path)
 ```
 
-- [ ] **Step 2：运行测试，确认因模块不存在而失败**
+- [x] **Step 2：运行测试，确认因模块不存在而失败**
 
 运行：`Set-Location backend; uv run pytest tests/unit/test_evaluation_dataset.py -q`
 
 预期：`FAIL`，错误包含 `No module named 'app.evaluation'`。
 
-- [ ] **Step 3：实现严格逐行加载和唯一 ID 校验**
+- [x] **Step 3：实现严格逐行加载和唯一 ID 校验**
 
 ```python
 def load_evaluation_cases(path: Path) -> list[EvaluationCase]:
@@ -133,11 +133,11 @@ def load_evaluation_cases(path: Path) -> list[EvaluationCase]:
     return cases
 ```
 
-- [ ] **Step 4：建立 30 条数据并校验分类数量**
+- [x] **Step 4：建立 30 条数据并校验分类数量**
 
 固定分布：`keyword=6`、`semantic=8`、`refusal=6`、`multi_turn=6`、`interference=4`。文件来源限定为现有 `01-年假制度.txt` 至 `05-远程办公指南.pdf`；拒答案例的 `expected_sources=[]` 且 `should_refuse=true`。
 
-- [ ] **Step 5：运行单元测试并提交**
+- [x] **Step 5：运行单元测试并提交**
 
 运行：`uv run pytest tests/unit/test_evaluation_dataset.py -q`
 
