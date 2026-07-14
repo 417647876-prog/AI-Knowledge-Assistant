@@ -262,6 +262,7 @@ git commit -m "feat: 增加多轮问题改写边界"
 - 输入：系统提示词和用户提示词。
 - 输出：`StreamingChatProvider.stream(...) -> AsyncIterator[str]`。
 - 后续依赖：任务 4 逐个消费 `delta`；供应商错误继续映射为 `CHAT_PROVIDER_ERROR`。
+- 生命周期约定：提供者在自己的异步生成器结束或被 `aclose()` 时退出 `httpx` 响应上下文；消费层必须在 `finally` 中显式调用迭代器的 `aclose()`。任务 4 负责关闭聊天流，任务 5 负责关闭 RAG 流，保证客户端断连时端到端释放连接。
 
 - [ ] **步骤 1：写流式正常、分片和异常测试**
 
@@ -271,6 +272,12 @@ git commit -m "feat: 增加多轮问题改写边界"
 async def test_fake_chat_provider_streams_configured_tokens() -> None:
     provider = FakeChatProvider(tokens=["答案", "。[1]"])
     assert [item async for item in provider.stream("system", "user")] == ["答案", "。[1]"]
+
+
+@pytest.mark.asyncio
+async def test_fake_chat_provider_respects_an_explicit_empty_token_list() -> None:
+    provider = FakeChatProvider(answer="不应输出", tokens=[])
+    assert [item async for item in provider.stream("system", "user")] == []
 
 
 @pytest.mark.asyncio
@@ -337,7 +344,7 @@ class FakeChatProvider:
         tokens: list[str] | None = None,
     ) -> None:
         self._answer = answer
-        self._tokens = tokens or [answer]
+        self._tokens = tokens if tokens is not None else [answer]
 
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
         return self._answer
@@ -388,6 +395,7 @@ class FakeChatProvider:
 ```
 
 同时让现有 `generate()` 调用 `_payload(..., stream=False)`，避免普通与流式请求体重复。
+在流式测试中再加入 `delta.content` 为 `null`、空字符串以及 HTTP `503` 三种输入，断言前两种不产生 token，后者抛出不含密钥的 `CHAT_PROVIDER_ERROR`。
 
 - [ ] **步骤 4：运行聊天提供者全部测试**
 
@@ -738,10 +746,16 @@ class RagService:
         system_prompt, user_prompt = build_rag_prompt(standalone, chunks)
         tracker = CitationTracker(chunks)
         generation_started = perf_counter()
-        async for delta in self._chat_provider.stream(system_prompt, user_prompt):
-            yield StreamEvent("token", {"delta": delta})
-            for citation in tracker.feed(delta):
-                yield StreamEvent("citation", citation_payload(citation))
+        chat_stream = self._chat_provider.stream(system_prompt, user_prompt)
+        try:
+            async for delta in chat_stream:
+                yield StreamEvent("token", {"delta": delta})
+                for citation in tracker.feed(delta):
+                    yield StreamEvent("citation", citation_payload(citation))
+        finally:
+            close = getattr(chat_stream, "aclose", None)
+            if close is not None:
+                await close()
         generation_ms = _elapsed_ms(generation_started)
         yield StreamEvent("done", {
             "citations": [citation_payload(item) for item in tracker.finish()],
