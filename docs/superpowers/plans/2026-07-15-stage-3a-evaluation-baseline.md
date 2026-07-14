@@ -172,7 +172,7 @@ def refusal_is_correct(*, should_refuse: bool, refused: bool) -> bool: ...
 def percentile(values: list[float], quantile: float) -> float: ...
 ```
 
-- [ ] **Step 1：写命中、未命中、多相关来源和空期望集合测试**
+- [x] **Step 1：写命中、未命中、多相关来源和空期望集合测试**
 
 ```python
 def test_recall_and_mrr_use_ranked_sources() -> None:
@@ -185,11 +185,11 @@ def test_recall_and_mrr_use_ranked_sources() -> None:
     assert reciprocal_rank_at_k(expected, actual, 3) == 0.5
 ```
 
-- [ ] **Step 2：确认失败后实现纯函数**
+- [x] **Step 2：确认失败后实现纯函数**
 
 匹配条件固定为文件名相等且 `contains` 出现在片段内容中。空期望集合用于拒答样本，检索 Recall 和 MRR 返回 `1.0` 当且仅当实际结果也为空，否则返回 `0.0`。`k < 1` 必须抛出 `ValueError`。
 
-- [ ] **Step 3：验证边界并提交**
+- [x] **Step 3：验证边界并提交**
 
 运行：`uv run pytest tests/unit/test_evaluation_metrics.py -q`
 
