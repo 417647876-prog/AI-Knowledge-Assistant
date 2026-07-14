@@ -49,7 +49,7 @@
 def build_search_text(text: str) -> str: ...
 ```
 
-- [ ] **Step 1：写中文双字、ASCII 单词、数字和重复 Token 测试**
+- [x] **Step 1：写中文双字、ASCII 单词、数字和重复 Token 测试**
 
 ```python
 def test_build_search_text_handles_chinese_codes_and_words() -> None:
@@ -60,11 +60,11 @@ def test_build_search_text_handles_chinese_codes_and_words() -> None:
     ]
 ```
 
-- [ ] **Step 2：实现确定性扫描**
+- [x] **Step 2：实现确定性扫描**
 
 规则：连续 ASCII 字母数字归一为小写单词；连续中文生成相邻重叠双字，只有一个汉字时保留单字；标点和空白仅作分隔；按首次出现顺序去重；空文本返回空字符串。
 
-- [ ] **Step 3：验证并提交**
+- [x] **Step 3：验证并提交**
 
 运行：`uv run pytest tests/unit/test_search_tokens.py -q`
 
@@ -95,13 +95,13 @@ search_vector: Mapped[Any] = mapped_column(
 )
 ```
 
-- [ ] **Step 1：先写元数据、迁移后字段和入库 Token 测试**
-- [ ] **Step 2：迁移增加字段和索引**
+- [x] **Step 1：先写元数据、迁移后字段和入库 Token 测试**
+- [x] **Step 2：迁移增加字段和索引**
 
 迁移操作顺序固定为：增加非空 `search_text`（临时 server default 空串）→ 增加持久化生成列 `search_vector` → 创建 `ix_document_chunks_search_vector` GIN 索引 → 保留空串 server default 以兼容直接构造的旧测试数据。
 
-- [ ] **Step 3：入库时写 `search_text=build_search_text(chunk.content)`**
-- [ ] **Step 4：验证升级、降级和重处理**
+- [x] **Step 3：入库时写 `search_text=build_search_text(chunk.content)`**
+- [x] **Step 4：验证升级、降级和重处理**
 
 运行：`uv run alembic upgrade head`
 
@@ -111,7 +111,7 @@ search_vector: Mapped[Any] = mapped_column(
 
 预期：升级与降级成功；新入库片段有 `search_text`；旧片段保持可查询且可通过重处理补齐。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 提交：`git commit -m "feat: 为文档片段增加全文检索索引"`
 
