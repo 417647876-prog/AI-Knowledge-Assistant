@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -90,6 +92,22 @@ async def test_openai_provider_reads_streaming_deltas_and_done() -> None:
             model="chat-model",
         )
         assert [item async for item in provider.stream("system", "user")] == ["答案", "。[1]"]
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_disables_deepseek_thinking_by_default() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["thinking"] == {"type": "disabled"}
+        return httpx.Response(200, text="data: [DONE]\n\n")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleChatProvider(
+            client=client,
+            base_url="https://chat.example",
+            api_key="private-key",
+            model="chat-model",
+        )
+        assert [item async for item in provider.stream("system", "user")] == []
 
 
 @pytest.mark.asyncio
