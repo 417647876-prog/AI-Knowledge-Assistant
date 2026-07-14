@@ -12,21 +12,21 @@ import {
 const makeRounds = (count: number): ConversationMessage[] => Array.from({ length: count }, (_, index) => {
   const number = index + 1
   return [
-    { id: `question-${number}`, kind: 'user' as const, content: `问题 ${number}`, createdAt: 'now' },
+    { id: `question-${number}`, kind: 'user' as const, content: `question ${number}`, createdAt: 'now' },
     {
       id: `answer-${number}`, kind: 'assistant' as const, questionId: `question-${number}`,
-      content: `答案 ${number}`, createdAt: 'now', status: 'completed' as const, phase: null,
+      content: `answer ${number}`, createdAt: 'now', status: 'completed' as const, phase: null,
       citations: [], standaloneQuestion: null, retrievedChunkCount: null, timings: null,
       errorCode: null, requestId: null,
     },
   ]
 }).flat()
 
-const makeRound = (name: string, status: AssistantStatus) => [
-  { id: `question-${name}`, kind: 'user' as const, content: `问题 ${name}`, createdAt: 'now' },
+const makeRound = (name: string, status: AssistantStatus): ConversationMessage[] => [
+  { id: `question-${name}`, kind: 'user' as const, content: `question ${name}`, createdAt: 'now' },
   {
     id: `answer-${name}`, kind: 'assistant' as const, questionId: `question-${name}`,
-    content: `答案 ${name}`, createdAt: 'now', status, phase: null,
+    content: `answer ${name}`, createdAt: 'now', status, phase: null,
     citations: [], standaloneQuestion: null, retrievedChunkCount: null, timings: null,
     errorCode: null, requestId: null,
   },
@@ -35,19 +35,53 @@ const makeRound = (name: string, status: AssistantStatus) => [
 describe('conversation storage', () => {
   beforeEach(() => sessionStorage.clear())
 
-  it('uses user and knowledge base in the session key and trims to twenty rounds', () => {
+  it('keeps each knowledge base independent for the same user', () => {
     expect(conversationStorageKey('u-1', 'kb-1')).not.toBe(conversationStorageKey('u-2', 'kb-1'))
-    expect(trimConversation(makeRounds(21)).filter((item) => item.kind === 'user')).toHaveLength(20)
+    const kb1Messages = makeRounds(1)
+    const kb2Messages = makeRounds(2)
+
+    saveConversation('u-1', 'kb-1', kb1Messages)
+    saveConversation('u-1', 'kb-2', kb2Messages)
+
+    expect(loadConversation('u-1', 'kb-1')).toEqual(kb1Messages)
+    expect(loadConversation('u-1', 'kb-2')).toEqual(kb2Messages)
   })
 
-  it('builds at most six completed pairs after the last divider', () => {
+  it('trims twenty-one rounds from question two and retains trailing messages', () => {
+    const messages = [
+      ...makeRounds(21),
+      { id: 'post-question-21-divider', kind: 'divider' as const, createdAt: 'now' },
+    ]
+
+    const trimmed = trimConversation(messages)
+
+    expect(trimmed[0]).toMatchObject({ id: 'question-2', content: 'question 2' })
+    expect(trimmed).toContainEqual(expect.objectContaining({ id: 'answer-21', content: 'answer 21' }))
+    expect(trimmed).toContainEqual(expect.objectContaining({ id: 'post-question-21-divider' }))
+    expect(trimmed).not.toContainEqual(expect.objectContaining({ id: 'question-1' }))
+    expect(trimmed).not.toContainEqual(expect.objectContaining({ id: 'answer-1' }))
+  })
+
+  it('builds the final six completed pairs after the last divider', () => {
     const messages = makeRounds(8)
     messages.splice(4, 0, { id: 'divider', kind: 'divider' as const, createdAt: 'now' })
 
     const history = buildHistory(messages)
 
-    expect(history).toHaveLength(12)
-    expect(history[0]).toEqual({ role: 'user', content: '问题 3' })
+    expect(history).toEqual([
+      { role: 'user', content: 'question 3' },
+      { role: 'assistant', content: 'answer 3' },
+      { role: 'user', content: 'question 4' },
+      { role: 'assistant', content: 'answer 4' },
+      { role: 'user', content: 'question 5' },
+      { role: 'assistant', content: 'answer 5' },
+      { role: 'user', content: 'question 6' },
+      { role: 'assistant', content: 'answer 6' },
+      { role: 'user', content: 'question 7' },
+      { role: 'assistant', content: 'answer 7' },
+      { role: 'user', content: 'question 8' },
+      { role: 'assistant', content: 'answer 8' },
+    ])
   })
 
   it('excludes stopped and failed assistants from history', () => {
@@ -56,13 +90,32 @@ describe('conversation storage', () => {
       ...makeRound('two', 'stopped'),
       ...makeRound('three', 'failed'),
     ])).toEqual([
-      { role: 'user', content: '问题 one' },
-      { role: 'assistant', content: '答案 one' },
+      { role: 'user', content: 'question one' },
+      { role: 'assistant', content: 'answer one' },
     ])
   })
 
-  it('builds history only from messages before the specified question', () => {
-    expect(buildHistory(makeRounds(8), 'question-7')).toHaveLength(12)
+  it('builds history from questions one through six before the specified question', () => {
+    const history = buildHistory(makeRounds(8), 'question-7')
+
+    expect(history).toEqual([
+      { role: 'user', content: 'question 1' },
+      { role: 'assistant', content: 'answer 1' },
+      { role: 'user', content: 'question 2' },
+      { role: 'assistant', content: 'answer 2' },
+      { role: 'user', content: 'question 3' },
+      { role: 'assistant', content: 'answer 3' },
+      { role: 'user', content: 'question 4' },
+      { role: 'assistant', content: 'answer 4' },
+      { role: 'user', content: 'question 5' },
+      { role: 'assistant', content: 'answer 5' },
+      { role: 'user', content: 'question 6' },
+      { role: 'assistant', content: 'answer 6' },
+    ])
+    expect(history).not.toContainEqual(expect.objectContaining({ content: 'question 7' }))
+    expect(history).not.toContainEqual(expect.objectContaining({ content: 'answer 7' }))
+    expect(history).not.toContainEqual(expect.objectContaining({ content: 'question 8' }))
+    expect(history).not.toContainEqual(expect.objectContaining({ content: 'answer 8' }))
   })
 
   it('restores an interrupted stream as stopped after a refresh', () => {
