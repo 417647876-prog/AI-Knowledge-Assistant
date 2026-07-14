@@ -274,16 +274,19 @@ uv run python -m scripts.evaluate_rag `
   --output reports/stage3a-vector-baseline.json
 ```
 
-- [ ] **Step 1：写参数解析、脱敏错误和报告 schema 测试**
-- [ ] **Step 2：实现 `--mode vector`，拒绝未知模式**
+- [x] **Step 1：写参数解析、脱敏错误和报告 schema 测试**
+- [x] **Step 2：实现 `--mode vector`，拒绝未知模式**
 
 报告固定包含：`schema_version`、`mode`、`dataset_sha256`、`top_k`、`case_count`、`recall_at_5`、`mrr_at_5`、`citation_hit_rate`、`refusal_accuracy`、`latency_p50_ms`、`latency_p95_ms`、`environment`、`cases`。不得写数据库 URL、模型 Key 或完整认证信息。
 
-- [ ] **Step 3：增加显式数据库集成测试**
+- [x] **Step 3：增加显式数据库集成测试**
 
 测试创建临时用户、知识库、文档和向量片段，验证其他知识库高分片段不会进入评估结果，最后按 owner 删除临时数据。
 
 - [ ] **Step 4：运行验证**
+
+已完成普通单测、显式 PostgreSQL 集成测试、Ruff 和 CLI 帮助验证；正式基线报告待提供
+`EVALUATION_KNOWLEDGE_BASE_ID` 后生成，不能用临时测试知识库替代。
 
 运行：`uv run pytest tests/unit/test_evaluate_rag_script.py -q`
 
