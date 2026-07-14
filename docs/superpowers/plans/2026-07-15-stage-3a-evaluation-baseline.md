@@ -283,7 +283,7 @@ uv run python -m scripts.evaluate_rag `
 
 测试创建临时用户、知识库、文档和向量片段，验证其他知识库高分片段不会进入评估结果，最后按 owner 删除临时数据。
 
-- [ ] **Step 4：运行验证**
+- [x] **Step 4：运行验证**
 
 已完成普通单测、显式 PostgreSQL 集成测试、Ruff、CLI 帮助和 Windows `psycopg` 事件循环验证；
 正式基线报告待提供覆盖评估数据集的知识库 UUID 后生成，不能用临时测试知识库替代。
@@ -294,7 +294,7 @@ uv run python -m scripts.evaluate_rag `
 
 预期：全部通过；报告目录只跟踪 `.gitkeep`，生成的 `*.json` 被忽略。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 提交：`git commit -m "feat: 输出纯向量检索基线"`
 
