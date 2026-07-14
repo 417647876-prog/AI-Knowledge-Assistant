@@ -285,8 +285,8 @@ uv run python -m scripts.evaluate_rag `
 
 - [ ] **Step 4：运行验证**
 
-已完成普通单测、显式 PostgreSQL 集成测试、Ruff 和 CLI 帮助验证；正式基线报告待提供
-`EVALUATION_KNOWLEDGE_BASE_ID` 后生成，不能用临时测试知识库替代。
+已完成普通单测、显式 PostgreSQL 集成测试、Ruff、CLI 帮助和 Windows `psycopg` 事件循环验证；
+正式基线报告待提供覆盖评估数据集的知识库 UUID 后生成，不能用临时测试知识库替代。
 
 运行：`uv run pytest tests/unit/test_evaluate_rag_script.py -q`
 

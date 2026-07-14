@@ -1,3 +1,4 @@
+import asyncio
 import json
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from scripts.evaluate_rag import (
     format_safe_error,
     parse_args,
     run_evaluation,
+    run_evaluation_command,
     write_report,
 )
 
@@ -206,3 +208,47 @@ def test_format_safe_error_does_not_echo_connection_or_api_secret() -> None:
 
     assert secret not in message
     assert "RuntimeError" in message
+
+
+def test_run_evaluation_command_uses_selector_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed_loop: asyncio.AbstractEventLoop | None = None
+    settings = Settings(embedding_provider="fake", chat_provider="fake")
+
+    async def fake_run_from_args(*args, **kwargs) -> EvaluationReport:
+        nonlocal observed_loop
+        observed_loop = asyncio.get_running_loop()
+        return EvaluationReport(
+            mode="vector",
+            dataset_sha256="a" * 64,
+            top_k=5,
+            case_count=1,
+            recall_at_5=1.0,
+            mrr_at_5=1.0,
+            citation_hit_rate=1.0,
+            refusal_accuracy=1.0,
+            latency_p50_ms=1.0,
+            latency_p95_ms=1.0,
+            environment={},
+            cases=[],
+        )
+
+    monkeypatch.setattr("scripts.evaluate_rag.run_from_args", fake_run_from_args)
+
+    report = run_evaluation_command(
+        parse_args(
+            [
+                "--dataset",
+                "tests/fixtures/evaluation/stage3.jsonl",
+                "--knowledge-base-id",
+                str(uuid4()),
+                "--mode",
+                "vector",
+                "--output",
+                "reports/baseline.json",
+            ]
+        ),
+        settings,
+    )
+
+    assert report.mode == "vector"
+    assert isinstance(observed_loop, asyncio.SelectorEventLoop)

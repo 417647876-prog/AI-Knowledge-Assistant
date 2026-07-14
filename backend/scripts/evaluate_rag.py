@@ -13,6 +13,7 @@ from app.api.v1.questions import (
     get_question_rewriter,
 )
 from app.core.config import Settings, get_settings
+from app.core.event_loop import new_event_loop
 from app.db.session import session_factory
 from app.evaluation.dataset import load_evaluation_cases
 from app.evaluation.runner import EvaluationAnswerer, EvaluationRetriever, evaluate_cases
@@ -139,10 +140,16 @@ async def run_from_args(args: argparse.Namespace, settings: Settings) -> Evaluat
         await embedding_dependency.aclose()
 
 
+def run_evaluation_command(args: argparse.Namespace, settings: Settings) -> EvaluationReport:
+    """使用 psycopg 在 Windows 支持的 SelectorEventLoop 运行评估。"""
+    with asyncio.Runner(loop_factory=new_event_loop) as runner:
+        return runner.run(run_from_args(args, settings))
+
+
 def main(arguments: list[str] | None = None) -> None:
     args = parse_args(arguments)
     try:
-        report = asyncio.run(run_from_args(args, get_settings()))
+        report = run_evaluation_command(args, get_settings())
         write_report(report, args.output)
     except Exception as error:
         raise SystemExit(format_safe_error(error)) from None
