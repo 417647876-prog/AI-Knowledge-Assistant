@@ -66,6 +66,20 @@ def test_parse_args_accepts_vector_baseline_inputs() -> None:
     assert args.mode == "vector"
     assert args.output.name == "stage3a-vector-baseline.json"
 
+    hybrid_args = parse_args(
+        [
+            "--dataset",
+            "tests/fixtures/evaluation/stage3.jsonl",
+            "--knowledge-base-id",
+            str(knowledge_base_id),
+            "--mode",
+            "hybrid",
+            "--output",
+            "reports/stage3b-hybrid.json",
+        ]
+    )
+    assert hybrid_args.mode == "hybrid"
+
 
 def test_parse_args_rejects_unknown_mode_and_top_k_below_five() -> None:
     knowledge_base_id = uuid4()
@@ -79,7 +93,7 @@ def test_parse_args_rejects_unknown_mode_and_top_k_below_five() -> None:
     ]
 
     with pytest.raises(SystemExit):
-        parse_args([*required_args, "--mode", "hybrid"])
+        parse_args([*required_args, "--mode", "rerank"])
     with pytest.raises(SystemExit):
         parse_args([*required_args, "--mode", "vector", "--top-k", "4"])
 
@@ -171,9 +185,10 @@ async def test_run_evaluation_loads_dataset_and_sets_safe_environment(tmp_path) 
         retriever=StubRetriever(chunk),
         answerer=StubAnswerer(),
         top_k=5,
+        mode="hybrid",
     )
 
-    assert report.mode == "vector"
+    assert report.mode == "hybrid"
     assert report.case_count == 1
     assert report.environment["embedding_provider"] == "fake"
     assert report.cases[0].retrieved_files == ["员工手册.docx"]

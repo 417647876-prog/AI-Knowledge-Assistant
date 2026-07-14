@@ -1,4 +1,3 @@
-import asyncio
 from uuid import UUID
 
 from app.rag.contracts import Retriever
@@ -34,10 +33,8 @@ class HybridRetriever:
             "top_k": top_k,
             "score_threshold": score_threshold,
         }
-        vector_chunks, keyword_chunks = await asyncio.gather(
-            self._vector.search(**search_arguments),
-            self._keyword.search(**search_arguments),
-        )
+        vector_chunks = await self._vector.search(**search_arguments)
+        keyword_chunks = await self._keyword.search(**search_arguments)
         return rrf_fuse(
             [vector_chunks, keyword_chunks],
             top_k=top_k,
