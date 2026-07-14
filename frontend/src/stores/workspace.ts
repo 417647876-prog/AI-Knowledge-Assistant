@@ -8,16 +8,13 @@ import {
   uploadDocument,
 } from '../api/documents'
 import { createKnowledgeBase as createRequest, listKnowledgeBases } from '../api/knowledgeBases'
-import { askQuestion } from '../api/questions'
 import type { CreateKnowledgeBaseInput } from '../api/knowledgeBases'
-import type { DocumentTask, KnowledgeBase, QuestionResponse } from '../types/api'
+import type { DocumentTask, KnowledgeBase } from '../types/api'
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   const knowledgeBases = ref<KnowledgeBase[]>([])
   const activeKnowledgeBaseId = ref<string | null>(null)
   const documents = ref<Record<string, DocumentTask[]>>({})
-  const answer = ref<QuestionResponse | null>(null)
-  const asking = ref(false)
   const loadingKnowledgeBases = ref(false)
   const loadingDocuments = ref(false)
   const activeKnowledgeBase = computed(() =>
@@ -57,8 +54,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     knowledgeBases.value = []
     activeKnowledgeBaseId.value = null
     documents.value = {}
-    answer.value = null
-    asking.value = false
     loadingKnowledgeBases.value = false
     loadingDocuments.value = false
     documentLoadSequence += 1
@@ -85,7 +80,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (operationGeneration !== generation) return created
     knowledgeBases.value.push(created)
     activeKnowledgeBaseId.value = created.id
-    answer.value = null
     return created
   }
 
@@ -118,7 +112,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   function selectKnowledgeBase(id: string) {
     activeKnowledgeBaseId.value = id
-    answer.value = null
   }
 
   async function uploadAndTrackDocument(file: File) {
@@ -152,25 +145,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     )
   }
 
-  async function submitQuestion(question: string) {
-    const operationGeneration = generation
-    const knowledgeBaseId = activeKnowledgeBaseId.value
-    if (!knowledgeBaseId) throw new Error('请先选择知识库。')
-    asking.value = true
-    try {
-      const result = await askQuestion(knowledgeBaseId, question.trim(), 5)
-      if (operationGeneration === generation && activeKnowledgeBaseId.value === knowledgeBaseId)
-        answer.value = result
-      return result
-    } finally {
-      if (operationGeneration === generation) asking.value = false
-    }
-  }
-
   return {
-    knowledgeBases, activeKnowledgeBaseId, documents, answer, asking, loadingKnowledgeBases, loadingDocuments,
+    knowledgeBases, activeKnowledgeBaseId, documents, loadingKnowledgeBases, loadingDocuments,
     activeKnowledgeBase, activeDocuments, loadKnowledgeBases, createKnowledgeBase,
     selectKnowledgeBase, loadDocuments, uploadAndTrackDocument, reprocessDocument, deleteDocument,
-    submitQuestion, reset,
+    reset,
   }
 })

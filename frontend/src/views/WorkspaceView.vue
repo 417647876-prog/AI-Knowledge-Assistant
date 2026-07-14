@@ -5,8 +5,12 @@ import DocumentTable from '../components/DocumentTable.vue'
 import DocumentUpload from '../components/DocumentUpload.vue'
 import KnowledgeBaseSidebar from '../components/KnowledgeBaseSidebar.vue'
 import QuestionPanel from '../components/QuestionPanel.vue'
+import { useAuthStore } from '../stores/auth'
+import { useConversationsStore } from '../stores/conversations'
 import { useWorkspaceStore } from '../stores/workspace'
 
+const auth = useAuthStore()
+const conversations = useConversationsStore()
 const store = useWorkspaceStore()
 const knowledgeBaseLoadError = ref<string | null>(null)
 const documentLoadError = ref<string | null>(null)
@@ -34,6 +38,14 @@ async function loadDocuments() {
 watch(() => store.activeKnowledgeBaseId, (knowledgeBaseId) => {
   if (knowledgeBaseId) void loadDocuments()
 }, { immediate: true })
+
+watch(
+  [() => auth.user?.id, () => store.activeKnowledgeBaseId],
+  ([userId, knowledgeBaseId]) => {
+    if (userId && knowledgeBaseId) conversations.activate(userId, knowledgeBaseId)
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
