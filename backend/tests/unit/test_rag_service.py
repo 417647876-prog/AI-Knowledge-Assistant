@@ -2,6 +2,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.ai.contracts import ConversationMessage
 from app.ai.embeddings import FakeEmbeddingProvider
 from app.core.exceptions import AppError
 from app.rag.schemas import RetrievedChunk
@@ -36,6 +37,30 @@ class CountingChatProvider:
         return self.answer
 
 
+class RecordingRewriter:
+    def __init__(self, result: str) -> None:
+        self.result = result
+        self.calls: list[tuple[list[ConversationMessage], str]] = []
+
+    async def rewrite(self, history: list[ConversationMessage], question: str) -> str:
+        self.calls.append((history, question))
+        return self.result
+
+
+class StreamingCountingChatProvider(CountingChatProvider):
+    def __init__(self, answer: str, tokens: list[str]) -> None:
+        super().__init__(answer)
+        self.tokens = tokens
+        self.stream_closed = False
+
+    async def stream(self, system_prompt: str, user_prompt: str):
+        try:
+            for token in self.tokens:
+                yield token
+        finally:
+            self.stream_closed = True
+
+
 def _chunk() -> RetrievedChunk:
     return RetrievedChunk(
         chunk_id=uuid4(),
@@ -57,6 +82,7 @@ async def test_answer_retrieves_generates_and_maps_real_citations() -> None:
         embedding_provider=FakeEmbeddingProvider(dimensions=512),
         retriever=retriever,
         chat_provider=chat,
+        question_rewriter=RecordingRewriter("不应调用"),
         score_threshold=0.55,
     )
     knowledge_base_id = uuid4()
@@ -83,6 +109,7 @@ async def test_answer_refuses_without_chunks_and_does_not_call_chat() -> None:
         embedding_provider=FakeEmbeddingProvider(dimensions=512),
         retriever=StubRetriever([]),
         chat_provider=chat,
+        question_rewriter=RecordingRewriter("不应调用"),
         score_threshold=0.55,
     )
 
@@ -102,6 +129,7 @@ async def test_answer_rejects_missing_knowledge_base() -> None:
         embedding_provider=FakeEmbeddingProvider(dimensions=512),
         retriever=retriever,
         chat_provider=CountingChatProvider("unused"),
+        question_rewriter=RecordingRewriter("不应调用"),
         score_threshold=0.55,
     )
 
@@ -110,3 +138,88 @@ async def test_answer_rejects_missing_knowledge_base() -> None:
 
     assert error.value.code == "KNOWLEDGE_BASE_NOT_FOUND"
     assert retriever.calls == []
+
+
+@pytest.mark.asyncio
+async def test_stream_rewrites_retrieves_generates_citations_and_timings() -> None:
+    chunk = _chunk()
+    rewriter = RecordingRewriter("向量检索有什么缺点？")
+    chat = StreamingCountingChatProvider("unused", ["答案 [", "1]"])
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever([chunk]),
+        chat_provider=chat,
+        question_rewriter=rewriter,
+        score_threshold=0.55,
+    )
+    history = [
+        ConversationMessage(role="user", content="介绍向量检索"),
+        ConversationMessage(role="assistant", content="它使用向量相似度"),
+    ]
+
+    events = [item async for item in service.stream_answer(uuid4(), "它的缺点？", 5, history)]
+
+    assert [item.event for item in events] == [
+        "status",
+        "rewrite",
+        "status",
+        "retrieval",
+        "status",
+        "token",
+        "token",
+        "citation",
+        "done",
+    ]
+    assert events[1].data["standalone_question"] == "向量检索有什么缺点？"
+    assert events[3].data["retrieved_chunk_count"] == 1
+    assert events[-1].data["timings"].keys() == {
+        "rewrite_ms",
+        "retrieval_ms",
+        "generation_ms",
+        "total_ms",
+    }
+    assert rewriter.calls == [(history, "它的缺点？")]
+
+
+@pytest.mark.asyncio
+async def test_stream_without_history_skips_rewriter_and_uses_zero_ms() -> None:
+    rewriter = RecordingRewriter("不应调用")
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever([]),
+        chat_provider=StreamingCountingChatProvider("", []),
+        question_rewriter=rewriter,
+        score_threshold=0.55,
+    )
+
+    events = [item async for item in service.stream_answer(uuid4(), "首问", 5, [])]
+
+    assert events[0].event == "rewrite"
+    assert events[0].data == {"standalone_question": "首问", "elapsed_ms": 0}
+    assert "rewriting" not in [item.data.get("phase") for item in events]
+    assert rewriter.calls == []
+    assert [item.data.get("delta") for item in events if item.event == "token"] == [
+        "未找到足够依据，无法根据当前知识库回答该问题。"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_closing_service_stream_closes_chat_stream() -> None:
+    chat = StreamingCountingChatProvider("unused", ["一", "二"])
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever([_chunk()]),
+        chat_provider=chat,
+        question_rewriter=RecordingRewriter("问题"),
+        score_threshold=0.55,
+    )
+    stream = service.stream_answer(uuid4(), "问题", 5, [])
+    while (await anext(stream)).event != "token":
+        pass
+
+    await stream.aclose()
+
+    assert chat.stream_closed is True

@@ -8,13 +8,11 @@ vi.mock('../api/documents', () => ({
   deleteDocument: vi.fn(), listDocuments: vi.fn(), pollDocumentStatus: vi.fn(),
   reprocessDocument: vi.fn(), uploadDocument: vi.fn(),
 }))
-vi.mock('../api/questions', () => ({ askQuestion: vi.fn() }))
 
 import { createKnowledgeBase, listKnowledgeBases } from '../api/knowledgeBases'
 import {
   deleteDocument, listDocuments, pollDocumentStatus, reprocessDocument, uploadDocument,
 } from '../api/documents'
-import { askQuestion } from '../api/questions'
 import { ApiError } from '../api/client'
 import type { DocumentTask } from '../types/api'
 import { useWorkspaceStore } from './workspace'
@@ -33,18 +31,12 @@ describe('workspace knowledge bases', () => {
       document_id: 'doc-1', job_id: 'job-1', file_name: '员工手册.txt', status: 'ready',
       error_code: null, error_message: null,
     }] }
-    store.answer = {
-      answer: '答案', citations: [], retrieved_chunk_count: 1, request_id: 'req-1',
-    }
-    store.asking = true
 
     store.reset()
 
     expect(store.knowledgeBases).toEqual([])
     expect(store.activeKnowledgeBaseId).toBeNull()
     expect(store.documents).toEqual({})
-    expect(store.answer).toBeNull()
-    expect(store.asking).toBe(false)
   })
 
   it('ignores an old-session knowledge base response after reset', async () => {
@@ -239,21 +231,15 @@ describe('workspace knowledge bases', () => {
     expect(store.activeKnowledgeBaseId).toBe('kb-2')
   })
 
-  it('新建并切换知识库时清空旧答案', async () => {
+  it('新建知识库后切换到新知识库', async () => {
     vi.mocked(createKnowledgeBase).mockResolvedValue({
       id: 'kb-2', name: '研发规范', description: null,
       owner_id: 'u-1', owner_username: 'alice',
     })
     const store = useWorkspaceStore()
-    store.answer = {
-      answer: '旧知识库答案', citations: [],
-      retrieved_chunk_count: 1, request_id: 'req-old',
-    }
-
     await store.createKnowledgeBase({ name: '研发规范', description: null })
 
     expect(store.activeKnowledgeBaseId).toBe('kb-2')
-    expect(store.answer).toBeNull()
   })
 
   it('tracks an uploaded document until ready', async () => {
@@ -301,51 +287,4 @@ describe('workspace knowledge bases', () => {
     })
   })
 
-  it('保存问答结果并在完成后清除加载状态', async () => {
-    const result = {
-      answer: '员工有 5 天年假。[1]', citations: [],
-      retrieved_chunk_count: 1, request_id: 'req-1',
-    }
-    vi.mocked(askQuestion).mockResolvedValue(result)
-    const store = useWorkspaceStore()
-    store.activeKnowledgeBaseId = 'kb-1'
-
-    await store.submitQuestion('  有多少天年假？  ')
-
-    expect(askQuestion).toHaveBeenCalledWith('kb-1', '有多少天年假？', 5)
-    expect(store.answer).toEqual(result)
-    expect(store.asking).toBe(false)
-  })
-
-  it('问答失败时也会清除加载状态', async () => {
-    vi.mocked(askQuestion).mockRejectedValue(new Error('服务异常'))
-    const store = useWorkspaceStore()
-    store.activeKnowledgeBaseId = 'kb-1'
-
-    await expect(store.submitQuestion('问题')).rejects.toThrow('服务异常')
-
-    expect(store.asking).toBe(false)
-  })
-
-  it('切换知识库后忽略旧知识库尚未返回的问答结果', async () => {
-    let resolveQuestion!: (result: {
-      answer: string; citations: []; retrieved_chunk_count: number; request_id: string
-    }) => void
-    vi.mocked(askQuestion).mockReturnValue(new Promise((resolve) => {
-      resolveQuestion = resolve
-    }))
-    const store = useWorkspaceStore()
-    store.activeKnowledgeBaseId = 'kb-a'
-
-    const pending = store.submitQuestion('A 库问题')
-    store.selectKnowledgeBase('kb-b')
-    resolveQuestion({
-      answer: 'A 库答案', citations: [],
-      retrieved_chunk_count: 1, request_id: 'req-a',
-    })
-    await pending
-
-    expect(store.activeKnowledgeBaseId).toBe('kb-b')
-    expect(store.answer).toBeNull()
-  })
 })

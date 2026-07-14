@@ -94,7 +94,7 @@ class EvaluationReport(BaseModel):
 def load_evaluation_cases(path: Path) -> list[EvaluationCase]: ...
 ```
 
-- [ ] **Step 1：先写加载成功、重复 ID、空文件和非法 JSON 的失败测试**
+- [x] **Step 1：先写加载成功、重复 ID、空文件和非法 JSON 的失败测试**
 
 ```python
 def test_load_evaluation_cases_rejects_duplicate_ids(tmp_path: Path) -> None:
@@ -108,13 +108,13 @@ def test_load_evaluation_cases_rejects_duplicate_ids(tmp_path: Path) -> None:
         load_evaluation_cases(path)
 ```
 
-- [ ] **Step 2：运行测试，确认因模块不存在而失败**
+- [x] **Step 2：运行测试，确认因模块不存在而失败**
 
 运行：`Set-Location backend; uv run pytest tests/unit/test_evaluation_dataset.py -q`
 
 预期：`FAIL`，错误包含 `No module named 'app.evaluation'`。
 
-- [ ] **Step 3：实现严格逐行加载和唯一 ID 校验**
+- [x] **Step 3：实现严格逐行加载和唯一 ID 校验**
 
 ```python
 def load_evaluation_cases(path: Path) -> list[EvaluationCase]:
@@ -133,11 +133,11 @@ def load_evaluation_cases(path: Path) -> list[EvaluationCase]:
     return cases
 ```
 
-- [ ] **Step 4：建立 30 条数据并校验分类数量**
+- [x] **Step 4：建立 30 条数据并校验分类数量**
 
 固定分布：`keyword=6`、`semantic=8`、`refusal=6`、`multi_turn=6`、`interference=4`。文件来源限定为现有 `01-年假制度.txt` 至 `05-远程办公指南.pdf`；拒答案例的 `expected_sources=[]` 且 `should_refuse=true`。
 
-- [ ] **Step 5：运行单元测试并提交**
+- [x] **Step 5：运行单元测试并提交**
 
 运行：`uv run pytest tests/unit/test_evaluation_dataset.py -q`
 
@@ -172,7 +172,7 @@ def refusal_is_correct(*, should_refuse: bool, refused: bool) -> bool: ...
 def percentile(values: list[float], quantile: float) -> float: ...
 ```
 
-- [ ] **Step 1：写命中、未命中、多相关来源和空期望集合测试**
+- [x] **Step 1：写命中、未命中、多相关来源和空期望集合测试**
 
 ```python
 def test_recall_and_mrr_use_ranked_sources() -> None:
@@ -185,11 +185,11 @@ def test_recall_and_mrr_use_ranked_sources() -> None:
     assert reciprocal_rank_at_k(expected, actual, 3) == 0.5
 ```
 
-- [ ] **Step 2：确认失败后实现纯函数**
+- [x] **Step 2：确认失败后实现纯函数**
 
 匹配条件固定为文件名相等且 `contains` 出现在片段内容中。空期望集合用于拒答样本，检索 Recall 和 MRR 返回 `1.0` 当且仅当实际结果也为空，否则返回 `0.0`。`k < 1` 必须抛出 `ValueError`。
 
-- [ ] **Step 3：验证边界并提交**
+- [x] **Step 3：验证边界并提交**
 
 运行：`uv run pytest tests/unit/test_evaluation_metrics.py -q`
 
@@ -205,6 +205,7 @@ def test_recall_and_mrr_use_ranked_sources() -> None:
 
 **文件：**
 
+- 修改：`backend/app/evaluation/schemas.py`
 - 新建：`backend/app/evaluation/runner.py`
 - 新建：`backend/tests/unit/test_evaluation_runner.py`
 
@@ -226,21 +227,26 @@ async def evaluate_cases(
     *, cases: list[EvaluationCase], knowledge_base_id: UUID,
     embedding_provider: EmbeddingProvider, retriever: EvaluationRetriever,
     answerer: EvaluationAnswerer, top_k: int, score_threshold: float,
+    mode: Literal["vector", "hybrid", "rerank", "rewrite"] = "vector",
+    environment: dict[str, str] | None = None,
 ) -> EvaluationReport: ...
 ```
 
-- [ ] **Step 1：用 Stub Retriever 写顺序、参数和耗时非负测试**
-- [ ] **Step 2：确认失败后实现逐案例 Embedding 与检索**
+Runner 对校验后的案例按固定 JSON 表示计算 `dataset_sha256`，并把 `mode` 和脱敏后的
+`environment` 写入报告。这样单元测试不依赖数据集文件路径，CLI 仍能输出可复现元数据。
+
+- [x] **Step 1：用 Stub Retriever 写顺序、参数和耗时非负测试**
+- [x] **Step 2：确认失败后实现逐案例 Embedding 与检索**
 
 Runner 使用 `time.perf_counter()` 记录检索链路耗时。检索指标使用 Retriever 的完整候选；引用和拒答指标使用 `EvaluationAnswerer` 返回的 `QuestionAnswer`。相同文件的多个片段保持原排名，相关性由“文件名 + 关键文本”共同判断。3A 的 Answerer 使用 Fake ChatProvider，真实 Chat 模型不进入普通测试。
 
-- [ ] **Step 3：运行评估模块测试**
+- [x] **Step 3：运行评估模块测试**
 
 运行：`uv run pytest tests/unit/test_evaluation_dataset.py tests/unit/test_evaluation_metrics.py tests/unit/test_evaluation_runner.py -q`
 
 预期：全部通过且无网络访问。
 
-- [ ] **Step 4：提交**
+- [x] **Step 4：提交**
 
 提交：`git commit -m "feat: 增加可复现检索评估Runner"`
 
@@ -268,16 +274,19 @@ uv run python -m scripts.evaluate_rag `
   --output reports/stage3a-vector-baseline.json
 ```
 
-- [ ] **Step 1：写参数解析、脱敏错误和报告 schema 测试**
-- [ ] **Step 2：实现 `--mode vector`，拒绝未知模式**
+- [x] **Step 1：写参数解析、脱敏错误和报告 schema 测试**
+- [x] **Step 2：实现 `--mode vector`，拒绝未知模式**
 
 报告固定包含：`schema_version`、`mode`、`dataset_sha256`、`top_k`、`case_count`、`recall_at_5`、`mrr_at_5`、`citation_hit_rate`、`refusal_accuracy`、`latency_p50_ms`、`latency_p95_ms`、`environment`、`cases`。不得写数据库 URL、模型 Key 或完整认证信息。
 
-- [ ] **Step 3：增加显式数据库集成测试**
+- [x] **Step 3：增加显式数据库集成测试**
 
 测试创建临时用户、知识库、文档和向量片段，验证其他知识库高分片段不会进入评估结果，最后按 owner 删除临时数据。
 
-- [ ] **Step 4：运行验证**
+- [x] **Step 4：运行验证**
+
+已完成普通单测、显式 PostgreSQL 集成测试、Ruff、CLI 帮助和 Windows `psycopg` 事件循环验证；
+正式基线报告待提供覆盖评估数据集的知识库 UUID 后生成，不能用临时测试知识库替代。
 
 运行：`uv run pytest tests/unit/test_evaluate_rag_script.py -q`
 
@@ -285,7 +294,7 @@ uv run python -m scripts.evaluate_rag `
 
 预期：全部通过；报告目录只跟踪 `.gitkeep`，生成的 `*.json` 被忽略。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 提交：`git commit -m "feat: 输出纯向量检索基线"`
 
@@ -300,7 +309,7 @@ uv run python -m scripts.evaluate_rag `
 - 修改：`docs/阶段3执行进度.md`
 - 修改：`README.md`
 
-- [ ] **Step 1：运行完整质量门**
+- [x] **Step 1：运行完整质量门**
 
 ```powershell
 Set-Location backend
@@ -314,14 +323,15 @@ Remove-Item Env:RUN_DATABASE_TESTS
 
 预期：全部通过。
 
-- [ ] **Step 2：Sol 只审查阶段 diff、接口和失败回退**
+- [x] **Step 2：Sol 只审查阶段 diff、接口和失败回退**
 
 运行：`git diff (git merge-base HEAD main)..HEAD -- backend/app/evaluation backend/scripts/evaluate_rag.py backend/tests docs README.md`
 
-- [ ] **Step 3：更新看板证据**
+- [x] **Step 3：更新看板证据**
 
-记录 30 条数据分类数量、基线报告路径、四条验证命令结果和提交标识；将 3A 标为 `已完成`，将 3B Task 1 标为 `进行中`。
+记录 30 条数据分类数量、基线报告路径、四条验证命令结果和提交标识；将 3A 标为 `已完成`，
+将 3B Task 1 标为下一步，等待切换到计划指定模型后再开始。
 
-- [ ] **Step 4：提交**
+- [x] **Step 4：提交**
 
 提交：`git commit -m "docs: 完成阶段3A评估基线验收"`

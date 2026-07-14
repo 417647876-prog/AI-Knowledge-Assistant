@@ -1,4 +1,16 @@
-from typing import Protocol
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Literal, Protocol
+
+
+@dataclass(frozen=True)
+class ConversationMessage:
+    role: Literal["user", "assistant"]
+    content: str
+
+    def __post_init__(self) -> None:
+        if self.role not in ("user", "assistant"):
+            raise ValueError("role 必须是 'user' 或 'assistant'")
 
 
 class EmbeddingProvider(Protocol):
@@ -9,3 +21,11 @@ class EmbeddingProvider(Protocol):
 
 class ChatProvider(Protocol):
     async def generate(self, system_prompt: str, user_prompt: str) -> str: ...
+
+
+class StreamingChatProvider(ChatProvider, Protocol):
+    def stream(self, system_prompt: str, user_prompt: str) -> AsyncIterator[str]: ...
+
+
+class QuestionRewriter(Protocol):
+    async def rewrite(self, history: list[ConversationMessage], question: str) -> str: ...
