@@ -33,6 +33,7 @@ export interface AssistantMessage {
   phase: 'rewriting' | 'retrieving' | 'generating' | null
   citations: Citation[]
   standaloneQuestion: string | null
+  rewriteUsedFallback?: boolean
   retrievedChunkCount: number | null
   timings: StreamTimings | null
   errorCode: string | null
@@ -49,7 +50,14 @@ export type ConversationMessage = UserMessage | AssistantMessage | DividerMessag
 
 export type QuestionStreamEvent =
   | { event: 'status'; data: { phase: 'rewriting' | 'retrieving' | 'generating' } }
-  | { event: 'rewrite'; data: { standalone_question: string; elapsed_ms: number } }
+  | {
+      event: 'rewrite'
+      data: {
+        standalone_question: string
+        elapsed_ms: number
+        used_fallback: boolean
+      }
+    }
   | { event: 'retrieval'; data: { retrieved_chunk_count: number; elapsed_ms: number } }
   | { event: 'token'; data: { delta: string } }
   | { event: 'citation'; data: Citation }

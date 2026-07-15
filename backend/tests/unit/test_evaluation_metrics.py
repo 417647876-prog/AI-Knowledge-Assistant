@@ -2,7 +2,9 @@ from uuid import uuid4
 
 import pytest
 
+from app.evaluation import metrics
 from app.evaluation.metrics import (
+    ceiling_aware_target,
     citation_hit_rate,
     percentile,
     recall_at_k,
@@ -80,3 +82,58 @@ def test_percentile_uses_linear_interpolation() -> None:
 def test_percentile_rejects_invalid_inputs(values: list[float], quantile: float) -> None:
     with pytest.raises(ValueError):
         percentile(values, quantile)
+
+
+@pytest.mark.parametrize(
+    ("baseline", "required_gain", "expected"),
+    [
+        (0.50, 0.15, 0.65),
+        (0.93, 0.15, 1.00),
+        (1.00, 0.15, 1.00),
+        (0.93, 0.05, 0.98),
+    ],
+)
+def test_ceiling_aware_target_never_exceeds_one(
+    baseline: float,
+    required_gain: float,
+    expected: float,
+) -> None:
+    assert ceiling_aware_target(baseline, required_gain) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("baseline", "required_gain"),
+    [(-0.01, 0.05), (1.01, 0.05), (0.50, -0.01), (0.50, 1.01)],
+)
+def test_ceiling_aware_target_rejects_invalid_ratios(
+    baseline: float,
+    required_gain: float,
+) -> None:
+    with pytest.raises(ValueError):
+        ceiling_aware_target(baseline, required_gain)
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate", "expected"),
+    [
+        (0.8, 0.84, 0.05),
+        (0.8, 0.8, 0.0),
+        (0.8, 0.72, -0.1),
+        (0.0, 0.0, 0.0),
+        (0.0, 0.2, 1.0),
+    ],
+)
+def test_relative_gain(baseline: float, candidate: float, expected: float) -> None:
+    assert metrics.relative_gain(baseline, candidate) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate"),
+    [(-0.1, 0.5), (0.5, 1.1)],
+)
+def test_relative_gain_rejects_invalid_metric(
+    baseline: float,
+    candidate: float,
+) -> None:
+    with pytest.raises(ValueError, match="0 到 1"):
+        metrics.relative_gain(baseline, candidate)

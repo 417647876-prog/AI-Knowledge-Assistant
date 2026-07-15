@@ -2,7 +2,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.evaluation.runner import evaluate_cases
+from app.evaluation.runner import EvaluationAnswerResult, evaluate_cases
 from app.evaluation.schemas import EvaluationCase, ExpectedSource
 from app.rag.schemas import Citation, QuestionAnswer, RetrievedChunk
 
@@ -46,12 +46,41 @@ class StubAnswerer:
     def __init__(self, answer: QuestionAnswer) -> None:
         self.answer = answer
         self.case_ids: list[str] = []
+        self.retrieval_questions: list[str] = []
 
     async def answer_case(
-        self, *, knowledge_base_id: UUID, case: EvaluationCase, top_k: int
+        self,
+        *,
+        knowledge_base_id: UUID,
+        case: EvaluationCase,
+        retrieval_question: str,
+        top_k: int,
     ) -> QuestionAnswer:
         self.case_ids.append(case.id)
+        self.retrieval_questions.append(retrieval_question)
         return self.answer
+
+
+class FinalRetrievalAnswerer(StubAnswerer):
+    def __init__(self, answer: QuestionAnswer, chunks: list[RetrievedChunk]) -> None:
+        super().__init__(answer)
+        self.chunks = chunks
+        self.final_retrieval_questions: list[str] = []
+
+    async def answer_case_with_retrieval(
+        self,
+        *,
+        knowledge_base_id: UUID,
+        case: EvaluationCase,
+        retrieval_question: str,
+        top_k: int,
+    ) -> EvaluationAnswerResult:
+        self.final_retrieval_questions.append(retrieval_question)
+        return EvaluationAnswerResult(
+            answer=self.answer,
+            retrieved_chunks=self.chunks,
+            retrieval_latency_ms=12.5,
+        )
 
 
 class SequentialRetriever(StubRetriever):
@@ -83,13 +112,30 @@ class SequentialAnswerer:
     def __init__(self, answers: list[QuestionAnswer]) -> None:
         self.answers = answers
         self.case_ids: list[str] = []
+        self.retrieval_questions: list[str] = []
 
     async def answer_case(
-        self, *, knowledge_base_id: UUID, case: EvaluationCase, top_k: int
+        self,
+        *,
+        knowledge_base_id: UUID,
+        case: EvaluationCase,
+        retrieval_question: str,
+        top_k: int,
     ) -> QuestionAnswer:
         answer_index = len(self.case_ids)
         self.case_ids.append(case.id)
+        self.retrieval_questions.append(retrieval_question)
         return self.answers[answer_index]
+
+
+class StubQueryResolver:
+    def __init__(self, resolved_question: str) -> None:
+        self.resolved_question = resolved_question
+        self.case_ids: list[str] = []
+
+    async def resolve(self, case: EvaluationCase) -> str:
+        self.case_ids.append(case.id)
+        return self.resolved_question
 
 
 def make_chunk(*, file_name: str, content: str) -> RetrievedChunk:
@@ -147,10 +193,13 @@ async def test_evaluate_cases_runs_single_case_with_stable_metadata() -> None:
         }
     ]
     assert answerer.case_ids == ["keyword-001"]
+    assert answerer.retrieval_questions == ["试用期多久？"]
     assert report.mode == "vector"
     assert len(report.dataset_sha256) == 64
     assert report.environment == {"embedding_provider": "fake"}
     assert report.case_count == 1
+    assert report.cases[0].category == "keyword"
+    assert report.cases[0].citation_hit_rate == 1.0
     assert report.recall_at_5 == 1.0
     assert report.mrr_at_5 == 1.0
     assert report.citation_hit_rate == 1.0
@@ -207,6 +256,7 @@ async def test_evaluate_cases_preserves_case_and_retrieval_order_in_summary() ->
 
     assert embedding_provider.queries == ["我有几天年假？", "公司食堂今天吃什么？"]
     assert answerer.case_ids == ["semantic-001", "refusal-001"]
+    assert answerer.retrieval_questions == ["我有几天年假？", "公司食堂今天吃什么？"]
     assert [result.case_id for result in report.cases] == ["semantic-001", "refusal-001"]
     assert report.cases[0].retrieved_files == ["年假制度.txt", "年假制度.txt"]
     assert report.recall_at_5 == 1.0
@@ -214,6 +264,45 @@ async def test_evaluate_cases_preserves_case_and_retrieval_order_in_summary() ->
     assert report.citation_hit_rate == 1.0
     assert report.refusal_accuracy == 1.0
     assert report.latency_p95_ms >= report.latency_p50_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_evaluate_cases_resolves_once_and_uses_same_retrieval_question() -> None:
+    case = EvaluationCase(
+        id="multi-turn-001",
+        category="multi_turn",
+        question="它呢？",
+        expected_sources=[ExpectedSource(file_name="制度.txt", contains="五天")],
+    )
+    raw_chunk = make_chunk(file_name="错误.txt", content="无关内容。")
+    final_chunk = make_chunk(file_name="制度.txt", content="年假为五天。")
+    embedding_provider = StubEmbeddingProvider()
+    retriever = StubRetriever([raw_chunk])
+    answerer = FinalRetrievalAnswerer(
+        QuestionAnswer(answer="五天。", citations=[], retrieved_chunk_count=1),
+        [final_chunk],
+    )
+    resolver = StubQueryResolver("年假有几天？")
+
+    report = await evaluate_cases(
+        cases=[case],
+        knowledge_base_id=uuid4(),
+        embedding_provider=embedding_provider,
+        retriever=retriever,
+        answerer=answerer,
+        query_resolver=resolver,
+        top_k=5,
+        score_threshold=0.5,
+        mode="rewrite",
+    )
+
+    assert resolver.case_ids == ["multi-turn-001"]
+    assert embedding_provider.queries == []
+    assert retriever.calls == []
+    assert answerer.retrieval_questions == []
+    assert answerer.final_retrieval_questions == ["年假有几天？"]
+    assert report.cases[0].retrieved_files == ["制度.txt"]
+    assert report.mode == "rewrite"
 
 
 @pytest.mark.asyncio
