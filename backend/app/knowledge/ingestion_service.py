@@ -1,8 +1,9 @@
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.contracts import EmbeddingProvider
@@ -11,7 +12,7 @@ from app.db.models.document import Document
 from app.db.models.document_chunk import DocumentChunk
 from app.db.models.document_job import DocumentJob
 from app.db.models.knowledge_base import KnowledgeBase
-from app.jobs.repository import LeaseLostError, update_job_stage
+from app.jobs.repository import LeaseLostError
 from app.knowledge.chunking import RecursiveTextChunker, TextChunk
 from app.knowledge.parsers.registry import ParserRegistry
 from app.knowledge.search_tokens import build_search_text
@@ -50,7 +51,7 @@ class IngestionService:
         )
         file_path = self._stored_file_path(document.stored_file_name)
         parser = self._parser_registry.get_parser(document.file_extension)
-        sections = parser.parse(file_path)
+        sections = await asyncio.to_thread(parser.parse, file_path)
 
         await self._checkpoint(
             document_id=document_id,
@@ -120,15 +121,38 @@ class IngestionService:
             )
             assert job is not None and document is not None
             if stage is not None:
-                stage_updated = await update_job_stage(
-                    self._session,
-                    job_id=job.id,
-                    lease_token=lease_token,
-                    stage=stage,
-                    now=datetime.now(UTC),
+                stage_result = await self._session.execute(
+                    update(DocumentJob)
+                    .where(
+                        DocumentJob.id == job.id,
+                        DocumentJob.status == "processing",
+                        DocumentJob.lease_token == lease_token,
+                        DocumentJob.lease_expires_at >= func.clock_timestamp(),
+                    )
+                    .values(stage=stage)
                 )
-                if not stage_updated:
+                if stage_result.rowcount != 1:
                     raise LeaseLostError("更新任务阶段时租约已失效")
+                document_status = "parsing" if stage == "parse" else "embedding"
+                document_result = await self._session.execute(
+                    update(Document)
+                    .where(Document.id == document_id)
+                    .values(status=document_status)
+                )
+                if document_result.rowcount != 1:
+                    raise LeaseLostError("更新文档阶段时资源已失效")
+                stage_fence = await self._session.execute(
+                    update(DocumentJob)
+                    .where(
+                        DocumentJob.id == job.id,
+                        DocumentJob.status == "processing",
+                        DocumentJob.lease_token == lease_token,
+                        DocumentJob.lease_expires_at >= func.clock_timestamp(),
+                    )
+                    .values(stage=stage)
+                )
+                if stage_fence.rowcount != 1:
+                    raise LeaseLostError("提交文档阶段时租约已失效")
                 await self._session.commit()
             else:
                 await self._session.rollback()
@@ -202,10 +226,24 @@ class IngestionService:
             document.status = "ready"
             document.error_code = None
             document.error_message = None
-            job.stage = "store"
-            job.chunk_count = len(chunks)
-            job.error_code = None
-            job.error_message = None
+            await self._session.flush()
+            final_fence = await self._session.execute(
+                update(DocumentJob)
+                .where(
+                    DocumentJob.id == job_id,
+                    DocumentJob.status == "processing",
+                    DocumentJob.lease_token == lease_token,
+                    DocumentJob.lease_expires_at >= func.clock_timestamp(),
+                )
+                .values(
+                    stage="store",
+                    chunk_count=len(chunks),
+                    error_code=None,
+                    error_message=None,
+                )
+            )
+            if final_fence.rowcount != 1:
+                raise LeaseLostError("最终存储提交前任务租约已失效")
             await self._session.commit()
             return len(chunks)
         except Exception:

@@ -21,7 +21,7 @@ from app.jobs.repository import (
     record_worker_heartbeat,
     renew_lease,
 )
-from app.jobs.service import sanitize_failure
+from app.jobs.service import is_retryable_error, sanitize_failure
 from app.knowledge.background import process_ingest_document
 
 logger = logging.getLogger(__name__)
@@ -157,7 +157,10 @@ async def run_worker_iteration(
             logger.warning("Worker 完成任务时租约已失效", extra={"job_id": str(lease.job_id)})
     except asyncio.CancelledError:
         raise
-    except (LeaseLostError, SQLAlchemyError):
+    except LeaseLostError:
+        logger.warning("Worker 处理结果因租约失效被丢弃", extra={"job_id": str(lease.job_id)})
+        return True
+    except SQLAlchemyError:
         raise
     except Exception as error:
         if isinstance(error, JobExecutionError):
@@ -165,7 +168,7 @@ async def run_worker_iteration(
             retryable = error.retryable
         elif isinstance(error, AppError):
             code, message = sanitize_failure(error.code, error.message)
-            retryable = False
+            retryable = is_retryable_error(code)
         else:
             code, message, retryable = "JOB_PROCESSING_ERROR", "任务处理失败。", False
         logger.error(

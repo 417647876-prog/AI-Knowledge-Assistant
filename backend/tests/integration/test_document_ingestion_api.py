@@ -1,16 +1,18 @@
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
 import httpx
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.embeddings import FakeEmbeddingProvider
 from app.core.config import get_settings
+from app.core.exceptions import AppError
 from app.core.security import create_access_token, hash_password
 from app.db.models import USER_ROLE, Document, DocumentJob, KnowledgeBase, User
 from app.db.session import session_factory
@@ -282,3 +284,103 @@ async def test_file_write_failure_leaves_no_database_record_or_partial_file(
             select(Document.id).where(Document.knowledge_base_id == knowledge_base["id"])
         )
     assert persisted is None
+
+
+@pytest.mark.asyncio
+async def test_file_write_cleanup_failure_does_not_mask_stable_upload_error(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    authenticated_client: httpx.AsyncClient,
+) -> None:
+    settings = get_settings()
+    previous_upload_directory = settings.upload_directory
+    settings.upload_directory = tmp_path
+    try:
+        knowledge_base = (
+            await authenticated_client.post(
+                "/api/v1/knowledge-bases",
+                json={"name": f"cleanup failure {uuid4()}"},
+            )
+        ).json()
+
+        def fail_write(path: Path, _content: bytes) -> int:
+            path.touch()
+            raise OSError("simulated disk failure")
+
+        def fail_unlink(_path: Path, *, missing_ok: bool = False) -> None:
+            raise OSError("simulated cleanup failure")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "write_bytes", fail_write)
+            patch.setattr(Path, "unlink", fail_unlink)
+            response = await authenticated_client.post(
+                f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents",
+                files={"file": ("new.txt", "new file", "text/plain")},
+            )
+    finally:
+        settings.upload_directory = previous_upload_directory
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "DOCUMENT_UPLOAD_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_transient_embedding_failure_retries_with_configured_backoff_then_exhausts(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    authenticated_client: httpx.AsyncClient,
+) -> None:
+    settings = get_settings()
+    previous_directory = settings.upload_directory
+    previous_provider = settings.embedding_provider
+    previous_attempts = settings.job_max_attempts
+    previous_backoff = settings.job_retry_backoff_seconds
+    settings.upload_directory = tmp_path
+    settings.embedding_provider = "fake"
+    settings.job_max_attempts = 2
+    settings.job_retry_backoff_seconds = (7, 19)
+
+    async def timeout(_provider, _texts):
+        raise AppError(code="MODEL_TIMEOUT", message="upstream timeout", status_code=502)
+
+    monkeypatch.setattr(FakeEmbeddingProvider, "embed_documents", timeout)
+    try:
+        knowledge_base = (
+            await authenticated_client.post(
+                "/api/v1/knowledge-bases",
+                json={"name": f"retry test {uuid4()}"},
+            )
+        ).json()
+        response = await authenticated_client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents",
+            files={"file": ("retry.txt", "retry content", "text/plain")},
+        )
+        job_id = response.json()["job_id"]
+
+        assert await _run_worker_once(settings, "retry-worker-1")
+        async with session_factory() as session:
+            waiting_job = await session.get(DocumentJob, job_id)
+            assert waiting_job is not None
+            assert waiting_job.status == "retry_wait"
+            assert waiting_job.heartbeat_at is not None
+            assert waiting_job.run_after == waiting_job.heartbeat_at + timedelta(seconds=7)
+            await session.execute(
+                update(DocumentJob)
+                .where(DocumentJob.id == waiting_job.id)
+                .values(run_after=datetime.now(UTC) - timedelta(seconds=1))
+            )
+            await session.commit()
+
+        assert await _run_worker_once(settings, "retry-worker-2")
+        async with session_factory() as session:
+            failed_job = await session.get(DocumentJob, job_id)
+            failed_document = await session.get(Document, response.json()["document_id"])
+        assert failed_job is not None
+        assert failed_job.status == "failed"
+        assert failed_job.attempt_count == 2
+        assert failed_document is not None and failed_document.status == "failed"
+    finally:
+        settings.upload_directory = previous_directory
+        settings.embedding_provider = previous_provider
+        settings.job_max_attempts = previous_attempts
+        settings.job_retry_backoff_seconds = previous_backoff

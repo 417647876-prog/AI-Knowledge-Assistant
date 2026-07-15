@@ -111,7 +111,10 @@ async def upload_document(
     try:
         stored_file.write_bytes(content)
     except OSError as error:
-        stored_file.unlink(missing_ok=True)
+        try:
+            stored_file.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("清理写入失败的上传文件失败", extra={"file": stored_file_name})
         raise AppError(
             code="DOCUMENT_UPLOAD_FAILED",
             message="文档上传失败，请稍后重试。",

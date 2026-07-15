@@ -8,7 +8,9 @@ import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import Settings
+from app.core.exceptions import AppError
 from app.jobs.contracts import JobLease
+from app.jobs.repository import LeaseLostError
 from app.worker import health as worker_health
 from app.worker import main as worker_main
 
@@ -191,6 +193,66 @@ async def test_worker_cancels_processor_when_heartbeat_loses_lease(
 
 
 @pytest.mark.asyncio
+async def test_worker_iteration_treats_processor_lease_loss_as_completed_iteration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _lease()
+    complete = AsyncMock()
+    fail = AsyncMock()
+    monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=lease))
+    monkeypatch.setattr(worker_main, "complete_job", complete)
+    monkeypatch.setattr(worker_main, "fail_job", fail)
+    monkeypatch.setattr(worker_main, "renew_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    async def loses_lease(_lease: JobLease) -> int:
+        raise LeaseLostError("late result")
+
+    processed = await worker_main.run_worker_iteration(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None),
+        worker_id="worker-a",
+        process_job=loses_lease,
+    )
+
+    assert processed is True
+    complete.assert_not_awaited()
+    fail.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_continues_after_processor_lease_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _lease()
+    stop = asyncio.Event()
+    attempts = 0
+    monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=lease))
+    monkeypatch.setattr(worker_main, "complete_job", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker_main, "fail_job", AsyncMock())
+    monkeypatch.setattr(worker_main, "renew_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    async def process(_lease: JobLease) -> int:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise LeaseLostError("reclaimed")
+        stop.set()
+        return 1
+
+    await worker_main.run_worker(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None),
+        worker_id="worker-a",
+        process_job=process,
+        stop_event=stop,
+    )
+
+    assert attempts == 2
+
+
+@pytest.mark.asyncio
 async def test_worker_records_only_sanitized_generic_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -281,6 +343,32 @@ async def test_worker_passes_configured_retry_backoff_to_repository(
         process_job=raises_timeout,
     )
 
+    assert fail.await_args.kwargs["retry_backoff_seconds"] == (7, 19)
+
+
+@pytest.mark.asyncio
+async def test_worker_retries_transient_embedding_app_error_with_configured_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _lease()
+    fail = AsyncMock(return_value="retry_wait")
+    monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=lease))
+    monkeypatch.setattr(worker_main, "fail_job", fail)
+    monkeypatch.setattr(worker_main, "renew_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    async def timeout(_lease: JobLease) -> int:
+        raise AppError(code="MODEL_TIMEOUT", message="upstream timeout", status_code=502)
+
+    await worker_main.run_worker_iteration(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None, job_retry_backoff_seconds=(7, 19)),
+        worker_id="worker-a",
+        process_job=timeout,
+    )
+
+    assert fail.await_args.kwargs["code"] == "MODEL_TIMEOUT"
+    assert fail.await_args.kwargs["retryable"] is True
     assert fail.await_args.kwargs["retry_backoff_seconds"] == (7, 19)
 
 

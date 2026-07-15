@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -7,7 +8,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, delete, func, select, text
+from sqlalchemy import create_engine, delete, event, func, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -107,6 +108,12 @@ class WorkerStopped(RuntimeError):
 class StoppingEmbeddingProvider(ConstantEmbeddingProvider):
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
         raise WorkerStopped("worker exited after parsing")
+
+
+class SlowTextParser:
+    def parse(self, file_path):
+        time.sleep(0.3)
+        return TextParser().parse(file_path)
 
 
 async def _seed_and_claim(
@@ -340,3 +347,93 @@ async def test_deleted_document_is_not_written_back_by_worker(
                 select(DocumentChunk.id).where(DocumentChunk.document_id == document.id)
             )
         ) is None
+
+
+@pytest.mark.asyncio
+async def test_document_status_tracks_blocked_parsing_and_embedding_stages(
+    tmp_path, recovery_session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    document, _job, lease = await _seed_and_claim(recovery_session_factory, tmp_path)
+    provider = BlockingEmbeddingProvider(0.8)
+    async with recovery_session_factory() as session:
+        service = IngestionService(
+            session=session,
+            upload_directory=tmp_path,
+            parser_registry=ParserRegistry({".txt": SlowTextParser()}),
+            chunker=RecursiveTextChunker(chunk_size=10, chunk_overlap=2),
+            embedding_provider=provider,
+            embedding_dimensions=512,
+        )
+        processing = asyncio.create_task(
+            service.process(
+                document_id=document.id,
+                job_id=lease.job_id,
+                lease_token=lease.lease_token,
+            )
+        )
+        await asyncio.sleep(0.05)
+        async with recovery_session_factory() as observer:
+            parsing_document = await observer.get(Document, document.id)
+        assert parsing_document is not None and parsing_document.status == "parsing"
+
+        await provider.started.wait()
+        async with recovery_session_factory() as observer:
+            embedding_document = await observer.get(Document, document.id)
+        assert embedding_document is not None and embedding_document.status == "embedding"
+        provider.release.set()
+        await processing
+
+
+@pytest.mark.asyncio
+async def test_final_database_time_fence_rolls_back_after_lease_expires_during_flush(
+    tmp_path, recovery_session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    document, _job, lease = await _seed_and_claim(
+        recovery_session_factory, tmp_path, lease_seconds=3
+    )
+    async with recovery_session_factory.begin() as session:
+        persisted_document = await session.get(Document, document.id)
+        assert persisted_document is not None
+        persisted_document.status = "ready"
+        session.add(
+            DocumentChunk(
+                document_id=document.id,
+                knowledge_base_id=document.knowledge_base_id,
+                chunk_index=0,
+                content="old chunk",
+                content_hash="f" * 64,
+                extra_metadata={},
+                embedding=[0.0] * 512,
+                search_text="old chunk",
+            )
+        )
+
+    engine = recovery_session_factory.kw["bind"]
+
+    def expire_during_chunk_flush(
+        _connection, _cursor, statement, _parameters, _context, _executemany
+    ) -> None:
+        if "INSERT INTO document_chunks" in statement:
+            time.sleep(3.2)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", expire_during_chunk_flush)
+    try:
+        with pytest.raises(LeaseLostError):
+            await _process(
+                recovery_session_factory,
+                tmp_path,
+                lease,
+                ConstantEmbeddingProvider(0.9),
+            )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", expire_during_chunk_flush)
+
+    async with recovery_session_factory() as session:
+        unchanged_document = await session.get(Document, document.id)
+        chunks = (
+            await session.scalars(
+                select(DocumentChunk).where(DocumentChunk.document_id == document.id)
+            )
+        ).all()
+    assert unchanged_document is not None and unchanged_document.status == "embedding"
+    assert [chunk.content for chunk in chunks] == ["old chunk"]
