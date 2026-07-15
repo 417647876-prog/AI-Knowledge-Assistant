@@ -1,6 +1,7 @@
 import hashlib
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from statistics import fmean
 from time import perf_counter
 from typing import Literal, Protocol
@@ -21,6 +22,13 @@ _METRIC_K = 5
 EvaluationMode = Literal["vector", "hybrid", "rerank", "rewrite"]
 
 
+@dataclass(frozen=True)
+class EvaluationAnswerResult:
+    answer: QuestionAnswer
+    retrieved_chunks: list[RetrievedChunk]
+    retrieval_latency_ms: float
+
+
 class EvaluationRetriever(Protocol):
     async def search(
         self,
@@ -37,6 +45,10 @@ class EvaluationAnswerer(Protocol):
     async def answer_case(
         self, *, knowledge_base_id: UUID, case: EvaluationCase, top_k: int
     ) -> QuestionAnswer: ...
+
+    async def answer_case_with_retrieval(
+        self, *, knowledge_base_id: UUID, case: EvaluationCase, top_k: int
+    ) -> EvaluationAnswerResult: ...
 
 
 def _dataset_sha256(cases: Sequence[EvaluationCase]) -> str:
@@ -70,22 +82,31 @@ async def evaluate_cases(
     citation_scores: list[float] = []
 
     for case in cases:
-        started_at = perf_counter()
-        query_embedding = await embedding_provider.embed_query(case.question)
-        chunks = await retriever.search(
-            knowledge_base_id=knowledge_base_id,
-            query=case.question,
-            query_embedding=query_embedding,
-            top_k=top_k,
-            score_threshold=score_threshold,
-        )
-        latency_ms = max(0.0, (perf_counter() - started_at) * 1000)
-
-        answer = await answerer.answer_case(
-            knowledge_base_id=knowledge_base_id,
-            case=case,
-            top_k=top_k,
-        )
+        if mode == "rerank":
+            final_result = await answerer.answer_case_with_retrieval(
+                knowledge_base_id=knowledge_base_id,
+                case=case,
+                top_k=top_k,
+            )
+            chunks = final_result.retrieved_chunks
+            answer = final_result.answer
+            latency_ms = max(0.0, final_result.retrieval_latency_ms)
+        else:
+            started_at = perf_counter()
+            query_embedding = await embedding_provider.embed_query(case.question)
+            chunks = await retriever.search(
+                knowledge_base_id=knowledge_base_id,
+                query=case.question,
+                query_embedding=query_embedding,
+                top_k=top_k,
+                score_threshold=score_threshold,
+            )
+            latency_ms = max(0.0, (perf_counter() - started_at) * 1000)
+            answer = await answerer.answer_case(
+                knowledge_base_id=knowledge_base_id,
+                case=case,
+                top_k=top_k,
+            )
         refused = answer.retrieved_chunk_count == 0 and not answer.citations
         refusal_correct = refusal_is_correct(
             should_refuse=case.should_refuse,

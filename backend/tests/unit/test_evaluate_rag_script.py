@@ -4,7 +4,9 @@ from uuid import uuid4
 
 import pytest
 
+from app.ai.rerankers import FakeRerankerProvider
 from app.core.config import Settings
+from app.core.exceptions import AppError
 from app.evaluation.schemas import CaseResult, EvaluationCase, EvaluationReport
 from app.rag.schemas import QuestionAnswer, RetrievedChunk
 from app.rag.service import RagService
@@ -21,18 +23,47 @@ from scripts.evaluate_rag import (
 
 
 class StubEmbeddingProvider:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
     async def embed_query(self, text: str) -> list[float]:
+        self.queries.append(text)
         return [0.1, 0.2]
 
 
 class StubRetriever:
-    def __init__(self, chunk: RetrievedChunk) -> None:
-        self._chunk = chunk
+    def __init__(self, chunks: RetrievedChunk | list[RetrievedChunk]) -> None:
+        self._chunks = chunks if isinstance(chunks, list) else [chunks]
         self.calls: list[dict[str, object]] = []
 
     async def search(self, **kwargs) -> list[RetrievedChunk]:
         self.calls.append(kwargs)
-        return [self._chunk]
+        return self._chunks
+
+
+class StubSession:
+    async def get(self, model, key):
+        return object()
+
+
+class StubChatProvider:
+    async def generate(self, system_prompt: str, user_prompt: str) -> str:
+        return "重排后的答案。[1]"
+
+
+class SlowReranker:
+    async def rerank(self, query: str, documents: list[str]) -> list[float]:
+        await asyncio.sleep(0.05)
+        return [1.0 for _ in documents]
+
+
+class FailingReranker:
+    async def rerank(self, query: str, documents: list[str]) -> list[float]:
+        raise AppError(
+            code="RERANKER_PROVIDER_ERROR",
+            message="重排序失败。",
+            status_code=502,
+        )
 
 
 class StubAnswerer:
@@ -231,6 +262,150 @@ async def test_run_evaluation_loads_dataset_and_sets_safe_environment(tmp_path) 
     assert report.case_count == 1
     assert report.environment["embedding_provider"] == "fake"
     assert report.cases[0].retrieved_files == ["员工手册.docx"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_evaluation_metrics_use_final_reranked_order(tmp_path) -> None:
+    dataset = tmp_path / "cases.jsonl"
+    dataset.write_text(
+        '{"id":"semantic-001","category":"semantic","question":"年假有几天？",'
+        '"expected_sources":[{"file_name":"正确.md","contains":"五天年假"}]}\n',
+        encoding="utf-8",
+    )
+    wrong = RetrievedChunk(
+        chunk_id=uuid4(),
+        document_id=uuid4(),
+        file_name="错误.md",
+        content="年假需要提前申请。",
+        relevance_score=0.9,
+    )
+    correct = RetrievedChunk(
+        chunk_id=uuid4(),
+        document_id=uuid4(),
+        file_name="正确.md",
+        content="员工享有五天年假。",
+        relevance_score=0.8,
+    )
+    embedding_provider = StubEmbeddingProvider()
+    retriever = StubRetriever([wrong, correct])
+    service = RagService(
+        session=StubSession(),
+        embedding_provider=embedding_provider,
+        retriever=retriever,
+        chat_provider=StubChatProvider(),
+        question_rewriter=object(),
+        score_threshold=0.55,
+        reranker=FakeRerankerProvider(scores=[0.1, 0.9]),
+        candidate_k=20,
+        reranker_allow_fallback=False,
+    )
+
+    report = await run_evaluation(
+        dataset=dataset,
+        knowledge_base_id=uuid4(),
+        settings=Settings(embedding_provider="fake", chat_provider="fake"),
+        embedding_provider=embedding_provider,
+        retriever=retriever,
+        answerer=RagServiceEvaluationAnswerer(service),
+        top_k=5,
+        mode="rerank",
+    )
+
+    assert report.cases[0].retrieved_files == ["正确.md", "错误.md"]
+    assert report.cases[0].citation_files == ["正确.md"]
+    assert report.mrr_at_5 == 1.0
+    assert len(retriever.calls) == 1
+    assert retriever.calls[0]["top_k"] == 20
+    assert embedding_provider.queries == ["年假有几天？"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_evaluation_latency_includes_reranker(tmp_path) -> None:
+    dataset = tmp_path / "cases.jsonl"
+    dataset.write_text(
+        '{"id":"keyword-001","category":"keyword","question":"密码几位？",'
+        '"expected_sources":[{"file_name":"安全.md","contains":"十二位"}]}\n',
+        encoding="utf-8",
+    )
+    chunk = RetrievedChunk(
+        chunk_id=uuid4(),
+        document_id=uuid4(),
+        file_name="安全.md",
+        content="密码至少十二位。",
+        relevance_score=0.9,
+    )
+    embedding_provider = StubEmbeddingProvider()
+    retriever = StubRetriever(chunk)
+    service = RagService(
+        session=StubSession(),
+        embedding_provider=embedding_provider,
+        retriever=retriever,
+        chat_provider=StubChatProvider(),
+        question_rewriter=object(),
+        score_threshold=0.55,
+        reranker=SlowReranker(),
+        candidate_k=20,
+        reranker_allow_fallback=False,
+    )
+
+    report = await run_evaluation(
+        dataset=dataset,
+        knowledge_base_id=uuid4(),
+        settings=Settings(embedding_provider="fake", chat_provider="fake"),
+        embedding_provider=embedding_provider,
+        retriever=retriever,
+        answerer=RagServiceEvaluationAnswerer(service),
+        top_k=5,
+        mode="rerank",
+    )
+
+    assert report.latency_p50_ms >= 40
+    assert report.latency_p95_ms >= 40
+
+
+@pytest.mark.asyncio
+async def test_rerank_evaluation_strict_provider_error_stops_single_retrieval(tmp_path) -> None:
+    dataset = tmp_path / "cases.jsonl"
+    dataset.write_text(
+        '{"id":"keyword-001","category":"keyword","question":"密码几位？",'
+        '"expected_sources":[{"file_name":"安全.md","contains":"十二位"}]}\n',
+        encoding="utf-8",
+    )
+    chunk = RetrievedChunk(
+        chunk_id=uuid4(),
+        document_id=uuid4(),
+        file_name="安全.md",
+        content="密码至少十二位。",
+        relevance_score=0.9,
+    )
+    embedding_provider = StubEmbeddingProvider()
+    retriever = StubRetriever(chunk)
+    service = RagService(
+        session=StubSession(),
+        embedding_provider=embedding_provider,
+        retriever=retriever,
+        chat_provider=StubChatProvider(),
+        question_rewriter=object(),
+        score_threshold=0.55,
+        reranker=FailingReranker(),
+        candidate_k=20,
+        reranker_allow_fallback=False,
+    )
+
+    with pytest.raises(AppError, match="重排序失败"):
+        await run_evaluation(
+            dataset=dataset,
+            knowledge_base_id=uuid4(),
+            settings=Settings(embedding_provider="fake", chat_provider="fake"),
+            embedding_provider=embedding_provider,
+            retriever=retriever,
+            answerer=RagServiceEvaluationAnswerer(service),
+            top_k=5,
+            mode="rerank",
+        )
+
+    assert len(retriever.calls) == 1
+    assert embedding_provider.queries == ["密码几位？"]
 
 
 @pytest.mark.asyncio

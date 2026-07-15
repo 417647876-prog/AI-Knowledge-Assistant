@@ -19,7 +19,7 @@ from app.rag.citations import map_citations
 from app.rag.contracts import Retriever
 from app.rag.prompt import build_rag_prompt
 from app.rag.reranking import rerank_chunks
-from app.rag.schemas import QuestionAnswer
+from app.rag.schemas import QuestionAnswer, RetrievedChunk
 from app.rag.streaming import CitationTracker, StreamEvent, citation_payload
 
 NO_EVIDENCE_ANSWER = "未找到足够依据，无法根据当前知识库回答该问题。"
@@ -95,10 +95,9 @@ class RagService:
             )
             return chunks[:top_k]
 
-    async def answer(self, knowledge_base_id: UUID, question: str, top_k: int) -> QuestionAnswer:
-        await self._ensure_knowledge_base(knowledge_base_id)
-        question = question.strip()
-        chunks = await self._retrieve(knowledge_base_id, question, top_k)
+    async def _answer_from_chunks(
+        self, question: str, chunks: list[RetrievedChunk]
+    ) -> QuestionAnswer:
         if not chunks:
             return QuestionAnswer(
                 answer=NO_EVIDENCE_ANSWER,
@@ -112,6 +111,21 @@ class RagService:
             citations=map_citations(answer, chunks),
             retrieved_chunk_count=len(chunks),
         )
+
+    async def answer_with_retrieval(
+        self, knowledge_base_id: UUID, question: str, top_k: int
+    ) -> tuple[QuestionAnswer, list[RetrievedChunk], float]:
+        await self._ensure_knowledge_base(knowledge_base_id)
+        question = question.strip()
+        retrieval_started = perf_counter()
+        chunks = await self._retrieve(knowledge_base_id, question, top_k)
+        retrieval_latency_ms = max(0.0, (perf_counter() - retrieval_started) * 1000)
+        answer = await self._answer_from_chunks(question, chunks)
+        return answer, chunks, retrieval_latency_ms
+
+    async def answer(self, knowledge_base_id: UUID, question: str, top_k: int) -> QuestionAnswer:
+        answer, _, _ = await self.answer_with_retrieval(knowledge_base_id, question, top_k)
+        return answer
 
     async def stream_answer(
         self,

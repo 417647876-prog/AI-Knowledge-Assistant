@@ -20,6 +20,7 @@ from app.db.session import session_factory
 from app.evaluation.dataset import load_evaluation_cases
 from app.evaluation.runner import (
     EvaluationAnswerer,
+    EvaluationAnswerResult,
     EvaluationMode,
     EvaluationRetriever,
     evaluate_cases,
@@ -39,6 +40,20 @@ class RagServiceEvaluationAnswerer:
         self, *, knowledge_base_id: UUID, case: EvaluationCase, top_k: int
     ) -> QuestionAnswer:
         return await self._service.answer(knowledge_base_id, case.question, top_k)
+
+    async def answer_case_with_retrieval(
+        self, *, knowledge_base_id: UUID, case: EvaluationCase, top_k: int
+    ) -> EvaluationAnswerResult:
+        answer, chunks, retrieval_latency_ms = await self._service.answer_with_retrieval(
+            knowledge_base_id,
+            case.question,
+            top_k,
+        )
+        return EvaluationAnswerResult(
+            answer=answer,
+            retrieved_chunks=chunks,
+            retrieval_latency_ms=retrieval_latency_ms,
+        )
 
 
 def _top_k_at_least_five(value: str) -> int:

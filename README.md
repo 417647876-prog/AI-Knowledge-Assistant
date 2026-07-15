@@ -63,6 +63,10 @@ Recall@5 必须达到 `min(100%, 纯向量关键词 Recall@5 + 10 个百分点)`
 fallback，避免模型失败时静默生成非重排报告。固定 30 条数据的 CPU 实测使用
 `candidate_k=20`、`BAAI/bge-reranker-base`：
 
+rerank 报告通过单次最终链路计算：embedding → hybrid candidate_k → BGE → Top K；检索文件、
+Recall/MRR、引用都来自最终重排结果，CPU P50/P95 覆盖 embedding、候选检索与 reranker，
+不再使用独立的 raw hybrid Top5 计时。
+
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
 Set-Location backend
@@ -78,8 +82,8 @@ uv run python -m scripts.evaluate_rag `
 
 | 模式 | MRR@5 | 引用命中率 | CPU P50 | CPU P95 |
 |---|---:|---:|---:|---:|
-| 3B hybrid | 93.33% | 93.33% | 17.89 ms | 23.84 ms |
-| 3C rerank | 93.33% | 93.33% | 17.42 ms | 29.39 ms |
+| 3B hybrid | 93.33% | 93.33% | 15.20 ms | 18.12 ms |
+| 3C rerank | 93.33% | 93.33% | 62.77 ms | 106.07 ms |
 
 MRR@5 相对提升为 0.00%，未达到至少 5% 的质量门；引用命中率未下降。28 条案例在 3B
 已经排名第一，`refusal-03` 的单个误召回无法仅靠排序剔除，`multi-turn-06` 则没有候选可供
