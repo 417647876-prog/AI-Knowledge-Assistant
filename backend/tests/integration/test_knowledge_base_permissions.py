@@ -14,6 +14,7 @@ from app.core.security import create_access_token, hash_password
 from app.db.models import ADMIN_ROLE, USER_ROLE, KnowledgeBase, RefreshSession, User
 from app.db.session import session_factory
 from app.main import create_app
+from tests.database_cleanup import delete_owned_knowledge_bases
 
 pytestmark = [
     pytest.mark.integration,
@@ -97,7 +98,7 @@ async def permission_context() -> AsyncIterator[KnowledgeBasePermissionContext]:
             await client.aclose()
         user_ids = [user.id for user in users]
         async with session_factory.begin() as session:
-            await session.execute(delete(KnowledgeBase).where(KnowledgeBase.owner_id.in_(user_ids)))
+            await delete_owned_knowledge_bases(session, user_ids)
             await session.execute(
                 delete(RefreshSession).where(RefreshSession.user_id.in_(user_ids))
             )

@@ -15,10 +15,10 @@ class DocumentChunk(TimestampMixin, Base):
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     document_id: Mapped[UUID] = mapped_column(
-        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey("documents.id"), nullable=False, index=True
     )
     knowledge_base_id: Mapped[UUID] = mapped_column(
-        ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey("knowledge_bases.id"), nullable=False, index=True
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)

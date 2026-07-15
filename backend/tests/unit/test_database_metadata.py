@@ -2,24 +2,26 @@ from dataclasses import fields
 from typing import get_args
 
 from sqlalchemy import CHAR, CheckConstraint, Index, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 
 from app.db.base import Base
 from app.db.models import (
     ADMIN_ROLE,
     USER_ROLE,
+    AuditEvent,
     Document,
     DocumentChunk,
     DocumentJob,
     KnowledgeBase,
     RefreshSession,
+    SupportAccessGrant,
     User,
     WorkerHeartbeat,
 )
 from app.jobs.contracts import JobLease, JobStatus, JobType
 
 
-def test_metadata_contains_seven_core_tables() -> None:
+def test_metadata_contains_private_lifecycle_tables() -> None:
     assert set(Base.metadata.tables) == {
         "knowledge_bases",
         "documents",
@@ -28,6 +30,8 @@ def test_metadata_contains_seven_core_tables() -> None:
         "worker_heartbeats",
         "users",
         "refresh_sessions",
+        "support_access_grants",
+        "audit_events",
     }
     assert KnowledgeBase.__tablename__ == "knowledge_bases"
     assert Document.__tablename__ == "documents"
@@ -36,6 +40,8 @@ def test_metadata_contains_seven_core_tables() -> None:
     assert WorkerHeartbeat.__tablename__ == "worker_heartbeats"
     assert User.__tablename__ == "users"
     assert RefreshSession.__tablename__ == "refresh_sessions"
+    assert SupportAccessGrant.__tablename__ == "support_access_grants"
+    assert AuditEvent.__tablename__ == "audit_events"
 
 
 def test_auth_models_enforce_unique_identity_and_ownership() -> None:
@@ -65,7 +71,19 @@ def test_user_normalizes_username_and_exports_roles() -> None:
     assert (ADMIN_ROLE, USER_ROLE) == ("admin", "user")
 
 
-def test_document_duplicate_constraint_is_scoped_to_knowledge_base() -> None:
+def test_private_resources_declare_lifecycle_and_uploader_contract() -> None:
+    assert {"deleted_at", "purge_after"}.issubset(KnowledgeBase.__table__.c.keys())
+    assert {"uploaded_by_user_id", "deleted_at", "purge_after"}.issubset(
+        Document.__table__.c.keys()
+    )
+    assert Document.__table__.c.uploaded_by_user_id.nullable is False
+    assert len(Document.__table__.c.uploaded_by_user_id.foreign_keys) == 1
+
+    knowledge_base_foreign_key = next(iter(Document.__table__.c.knowledge_base_id.foreign_keys))
+    assert knowledge_base_foreign_key.ondelete != "CASCADE"
+
+
+def test_document_duplicate_constraint_only_applies_to_active_documents() -> None:
     constraints = [
         constraint
         for constraint in Document.__table__.constraints
@@ -73,7 +91,57 @@ def test_document_duplicate_constraint_is_scoped_to_knowledge_base() -> None:
     ]
     column_sets = [{column.name for column in item.columns} for item in constraints]
 
-    assert {"knowledge_base_id", "file_hash"} in column_sets
+    assert {"knowledge_base_id", "file_hash"} not in column_sets
+
+    index = next(
+        item
+        for item in Document.__table__.indexes
+        if item.name == "uq_documents_active_knowledge_base_file_hash"
+    )
+    assert index.unique is True
+    assert {column.name for column in index.columns} == {"knowledge_base_id", "file_hash"}
+    assert str(index.dialect_options["postgresql"]["where"]) == "deleted_at IS NULL"
+
+
+def test_support_grant_is_read_only_and_has_safe_validity_constraints() -> None:
+    columns = SupportAccessGrant.__table__.c
+    assert {
+        "knowledge_base_id",
+        "owner_user_id",
+        "admin_user_id",
+        "access_level",
+        "expires_at",
+        "revoked_at",
+        "created_at",
+        "last_used_at",
+    }.issubset(columns.keys())
+    assert columns.access_level.default.arg == "read_only"
+    assert columns.access_level.server_default.arg == "read_only"
+
+    checks = [
+        str(constraint.sqltext)
+        for constraint in SupportAccessGrant.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    ]
+    assert "access_level = 'read_only'" in checks
+    assert "owner_user_id <> admin_user_id" in checks
+    assert "expires_at > created_at" in checks
+
+
+def test_audit_event_keeps_resource_identity_without_business_foreign_key() -> None:
+    columns = AuditEvent.__table__.c
+    assert {
+        "actor_user_id",
+        "action",
+        "resource_type",
+        "resource_id",
+        "result",
+        "security_summary",
+        "request_id",
+        "created_at",
+    }.issubset(columns.keys())
+    assert len(columns.resource_id.foreign_keys) == 0
+    assert isinstance(columns.security_summary.type, JSONB)
 
 
 def test_document_chunk_embedding_is_512_dimensions() -> None:

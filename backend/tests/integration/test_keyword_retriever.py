@@ -13,6 +13,7 @@ from app.db.models.user import USER_ROLE, User
 from app.db.session import session_factory
 from app.knowledge.search_tokens import build_search_text
 from app.rag.keyword_retriever import KeywordRetriever
+from tests.database_cleanup import delete_owned_knowledge_bases
 
 pytestmark = [
     pytest.mark.integration,
@@ -38,13 +39,14 @@ async def knowledge_base_owner() -> AsyncIterator[User]:
         yield user
     finally:
         async with session_factory.begin() as session:
-            await session.execute(delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id))
+            await delete_owned_knowledge_bases(session, [user.id])
             await session.execute(delete(User).where(User.id == user.id))
 
 
-async def _add_document(session, knowledge_base_id: UUID, name: str) -> Document:
+async def _add_document(session, knowledge_base_id: UUID, uploader_id: UUID, name: str) -> Document:
     document = Document(
         knowledge_base_id=knowledge_base_id,
+        uploaded_by_user_id=uploader_id,
         original_file_name=name,
         stored_file_name=f"{uuid4()}.txt",
         content_type="text/plain",
@@ -82,8 +84,12 @@ async def test_search_matches_exact_code_and_isolates_knowledge_base(
         other = KnowledgeBase(name=f"其他关键词库-{uuid4()}", owner_id=knowledge_base_owner.id)
         session.add_all([target, other])
         await session.flush()
-        target_document = await _add_document(session, target.id, "员工手册.txt")
-        other_document = await _add_document(session, other.id, "其他资料.txt")
+        target_document = await _add_document(
+            session, target.id, knowledge_base_owner.id, "员工手册.txt"
+        )
+        other_document = await _add_document(
+            session, other.id, knowledge_base_owner.id, "其他资料.txt"
+        )
         exact = _chunk(
             chunk_id=UUID(int=2),
             document=target_document,
@@ -131,7 +137,9 @@ async def test_search_ranks_stably_and_applies_top_k(knowledge_base_owner: User)
         )
         session.add(knowledge_base)
         await session.flush()
-        document = await _add_document(session, knowledge_base.id, "VPN制度.txt")
+        document = await _add_document(
+            session, knowledge_base.id, knowledge_base_owner.id, "VPN制度.txt"
+        )
         shared = _chunk(
             chunk_id=UUID(int=14),
             document=document,
@@ -191,7 +199,9 @@ async def test_search_filters_candidates_with_too_little_query_token_coverage(
         )
         session.add(knowledge_base)
         await session.flush()
-        document = await _add_document(session, knowledge_base.id, "差旅制度.txt")
+        document = await _add_document(
+            session, knowledge_base.id, knowledge_base_owner.id, "差旅制度.txt"
+        )
         strong_match = _chunk(
             chunk_id=UUID(int=21),
             document=document,

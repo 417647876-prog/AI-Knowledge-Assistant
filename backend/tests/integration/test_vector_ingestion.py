@@ -20,6 +20,7 @@ from app.knowledge.ingestion_service import IngestionService
 from app.knowledge.parsers.registry import ParserRegistry
 from app.knowledge.parsers.text import TextParser
 from app.knowledge.search_tokens import build_search_text
+from tests.database_cleanup import delete_owned_knowledge_bases
 
 pytestmark = [
     pytest.mark.integration,
@@ -45,7 +46,7 @@ async def knowledge_base_owner() -> AsyncIterator[User]:
         yield user
     finally:
         async with session_factory.begin() as session:
-            await session.execute(delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id))
+            await delete_owned_knowledge_bases(session, [user.id])
             await session.execute(delete(User).where(User.id == user.id))
 
 
@@ -62,6 +63,7 @@ async def test_process_stores_vectors_and_is_safe_to_retry(
         await session.flush()
         document = Document(
             knowledge_base_id=knowledge_base.id,
+            uploaded_by_user_id=knowledge_base_owner.id,
             original_file_name="制度.txt",
             stored_file_name=stored_name,
             content_type="text/plain",

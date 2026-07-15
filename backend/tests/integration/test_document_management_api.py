@@ -16,6 +16,7 @@ from app.db.models import USER_ROLE, DocumentChunk, DocumentJob, KnowledgeBase, 
 from app.db.models.document import Document
 from app.db.session import session_factory
 from app.main import create_app
+from tests.database_cleanup import delete_owned_knowledge_bases
 
 pytestmark = [
     pytest.mark.integration,
@@ -54,9 +55,7 @@ async def document_management_context() -> AsyncIterator[DocumentManagementConte
             yield DocumentManagementContext(user=user, client=client)
         finally:
             async with session_factory.begin() as session:
-                await session.execute(
-                    delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id)
-                )
+                await delete_owned_knowledge_bases(session, [user.id])
                 await session.execute(delete(User).where(User.id == user.id))
 
 
@@ -77,6 +76,7 @@ async def _create_document(
         await session.flush()
         document = Document(
             knowledge_base_id=knowledge_base.id,
+            uploaded_by_user_id=owner_id,
             original_file_name=file_name,
             stored_file_name=stored_file_name,
             content_type="text/plain",

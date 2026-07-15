@@ -141,6 +141,7 @@ async def _seed_and_claim(
         await session.flush()
         document = Document(
             knowledge_base_id=knowledge_base.id,
+            uploaded_by_user_id=user.id,
             original_file_name="制度.txt",
             stored_file_name=stored_name,
             content_type="text/plain",
@@ -334,6 +335,7 @@ async def test_deleted_document_is_not_written_back_by_worker(
     processing = asyncio.create_task(_process(recovery_session_factory, tmp_path, lease, provider))
     await provider.started.wait()
     async with recovery_session_factory.begin() as session:
+        await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
         await session.execute(delete(Document).where(Document.id == document.id))
 
     provider.release.set()

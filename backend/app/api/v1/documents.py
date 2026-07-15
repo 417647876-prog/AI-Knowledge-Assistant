@@ -16,7 +16,7 @@ from app.authorization.service import (
 )
 from app.core.config import get_settings
 from app.core.exceptions import AppError
-from app.db.models import Document, DocumentJob, User
+from app.db.models import Document, DocumentChunk, DocumentJob, User
 from app.db.session import get_session
 from app.jobs.repository import enqueue_job
 
@@ -122,6 +122,7 @@ async def upload_document(
         ) from error
     document = Document(
         knowledge_base_id=knowledge_base_id,
+        uploaded_by_user_id=current_user.id,
         original_file_name=file.filename or "upload",
         stored_file_name=stored_file_name,
         content_type=file.content_type or "application/octet-stream",
@@ -265,6 +266,7 @@ async def delete_document(
             status_code=500,
         )
     try:
+        await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
         await session.execute(
             delete(DocumentJob).where(
                 DocumentJob.job_type == "ingest_document",

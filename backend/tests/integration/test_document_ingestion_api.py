@@ -14,11 +14,12 @@ from app.ai.embeddings import FakeEmbeddingProvider
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.security import create_access_token, hash_password
-from app.db.models import USER_ROLE, Document, DocumentJob, KnowledgeBase, User
+from app.db.models import USER_ROLE, Document, DocumentJob, User
 from app.db.session import session_factory
 from app.knowledge import background
 from app.main import create_app
 from app.worker.main import run_worker_iteration
+from tests.database_cleanup import delete_owned_knowledge_bases
 
 pytestmark = [
     pytest.mark.integration,
@@ -51,9 +52,7 @@ async def authenticated_client() -> AsyncIterator[httpx.AsyncClient]:
             yield client
         finally:
             async with session_factory.begin() as session:
-                await session.execute(
-                    delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id)
-                )
+                await delete_owned_knowledge_bases(session, [user.id])
                 await session.execute(delete(User).where(User.id == user.id))
 
 

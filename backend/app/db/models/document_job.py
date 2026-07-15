@@ -60,7 +60,7 @@ class DocumentJob(Base):
     )
     knowledge_base_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+        ForeignKey("knowledge_bases.id"),
         nullable=False,
     )
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
