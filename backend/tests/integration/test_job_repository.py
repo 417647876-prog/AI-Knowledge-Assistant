@@ -32,6 +32,8 @@ pytestmark = [
     ),
 ]
 
+TEST_RUN_AFTER = datetime(2000, 1, 1, tzinfo=UTC)
+
 
 @pytest.fixture
 def temporary_database_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
@@ -109,6 +111,7 @@ async def _enqueue(
             owner_user_id=ids["user_id"],
             knowledge_base_id=ids["knowledge_base_id"],
             max_attempts=max_attempts,
+            run_after=TEST_RUN_AFTER,
         )
         await session.flush()
         return job.id

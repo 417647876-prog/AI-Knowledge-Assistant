@@ -217,6 +217,45 @@ async def test_worker_records_only_sanitized_generic_error(
     assert fail.await_args.kwargs["retryable"] is False
 
 
+@pytest.mark.parametrize(
+    ("raised_code", "repository_code"),
+    [
+        ("DOCUMENT_CORRUPTED", "DOCUMENT_CORRUPTED"),
+        ("UNKNOWN_PROVIDER_FAILURE", "JOB_PROCESSING_ERROR"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_worker_routes_retry_requested_permanent_error_through_repository_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    raised_code: str,
+    repository_code: str,
+) -> None:
+    lease = _lease()
+    fail = AsyncMock(return_value="failed")
+    monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=lease))
+    monkeypatch.setattr(worker_main, "fail_job", fail)
+    monkeypatch.setattr(worker_main, "renew_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    async def raises_permanent(_lease: JobLease) -> int:
+        raise worker_main.JobExecutionError(
+            code=raised_code,
+            message="不应被持久化的第三方正文",
+            retryable=True,
+        )
+
+    await worker_main.run_worker_iteration(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None),
+        worker_id="worker-a",
+        process_job=raises_permanent,
+    )
+
+    fail.assert_awaited_once()
+    assert fail.await_args.kwargs["code"] == repository_code
+    assert fail.await_args.kwargs["retryable"] is True
+
+
 @pytest.mark.asyncio
 async def test_empty_worker_loop_waits_poll_interval_and_stops(
     monkeypatch: pytest.MonkeyPatch,
