@@ -1,0 +1,293 @@
+import asyncio
+import sys
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.core.config import Settings
+from app.jobs.contracts import JobLease
+from app.worker import health as worker_health
+from app.worker import main as worker_main
+
+
+def _lease() -> JobLease:
+    now = datetime.now(UTC)
+    return JobLease(
+        job_id=uuid4(),
+        job_type="ingest_document",
+        resource_type="document",
+        resource_id=uuid4(),
+        owner_user_id=uuid4(),
+        knowledge_base_id=uuid4(),
+        attempt_number=1,
+        lease_token=uuid4(),
+        lease_expires_at=now + timedelta(seconds=120),
+    )
+
+
+class _Session:
+    def __init__(self) -> None:
+        self.commit = AsyncMock()
+        self.rollback = AsyncMock()
+
+    async def __aenter__(self) -> "_Session":
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+
+class _SessionFactory:
+    def __init__(self) -> None:
+        self.sessions: list[_Session] = []
+
+    def __call__(self) -> _Session:
+        session = _Session()
+        self.sessions.append(session)
+        return session
+
+
+@pytest.mark.asyncio
+async def test_worker_iteration_claims_at_most_one_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    lease = _lease()
+    claim = AsyncMock(return_value=lease)
+    complete = AsyncMock(return_value=True)
+    process = AsyncMock(return_value=7)
+    monkeypatch.setattr(worker_main, "claim_next_job", claim)
+    monkeypatch.setattr(worker_main, "complete_job", complete)
+    monkeypatch.setattr(worker_main, "renew_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    processed = await worker_main.run_worker_iteration(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None),
+        worker_id="worker-a",
+        process_job=process,
+    )
+
+    assert processed is True
+    claim.assert_awaited_once()
+    process.assert_awaited_once_with(lease)
+    complete.assert_awaited_once()
+    assert complete.await_args.kwargs["lease_token"] == lease.lease_token
+
+
+@pytest.mark.asyncio
+async def test_empty_iteration_does_not_call_processor(monkeypatch: pytest.MonkeyPatch) -> None:
+    process = AsyncMock()
+    monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=None))
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    processed = await worker_main.run_worker_iteration(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None),
+        worker_id="worker-a",
+        process_job=process,
+    )
+
+    assert processed is False
+    process.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_renews_lease_in_an_independent_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _lease()
+    stop = asyncio.Event()
+    renew = AsyncMock(return_value=True)
+    record = AsyncMock()
+    monkeypatch.setattr(worker_main, "renew_lease", renew)
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", record)
+
+    async def wait_once(_stop: asyncio.Event, _seconds: float) -> bool:
+        stop.set()
+        return False
+
+    factory = _SessionFactory()
+    healthy = await worker_main.heartbeat_lease(
+        session_factory=factory,
+        lease=lease,
+        worker_id="worker-a",
+        lease_seconds=120,
+        heartbeat_seconds=15,
+        stop_event=stop,
+        wait_for_stop=wait_once,
+    )
+
+    assert len(factory.sessions) == 1
+    renew.assert_awaited_once()
+    record.assert_awaited_once()
+    factory.sessions[0].commit.assert_awaited_once()
+    assert healthy is True
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_database_error_marks_lease_lost_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _lease()
+    stop = asyncio.Event()
+    monkeypatch.setattr(
+        worker_main,
+        "renew_lease",
+        AsyncMock(side_effect=SQLAlchemyError("postgresql://secret")),
+    )
+
+    async def run_now(_stop: asyncio.Event, _seconds: float) -> bool:
+        return False
+
+    healthy = await worker_main.heartbeat_lease(
+        session_factory=_SessionFactory(),
+        lease=lease,
+        worker_id="worker-a",
+        lease_seconds=120,
+        heartbeat_seconds=15,
+        stop_event=stop,
+        wait_for_stop=run_now,
+    )
+
+    assert healthy is False
+
+
+@pytest.mark.asyncio
+async def test_worker_cancels_processor_when_heartbeat_loses_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _lease()
+    canceled = asyncio.Event()
+    monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=lease))
+    monkeypatch.setattr(worker_main, "heartbeat_lease", AsyncMock(return_value=False))
+    complete = AsyncMock()
+    fail = AsyncMock()
+    monkeypatch.setattr(worker_main, "complete_job", complete)
+    monkeypatch.setattr(worker_main, "fail_job", fail)
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    async def long_process(_lease: JobLease) -> int:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            canceled.set()
+        return 0
+
+    processed = await asyncio.wait_for(
+        worker_main.run_worker_iteration(
+            session_factory=_SessionFactory(),
+            settings=Settings(_env_file=None),
+            worker_id="worker-a",
+            process_job=long_process,
+        ),
+        timeout=0.2,
+    )
+
+    assert processed is True
+    assert canceled.is_set()
+    complete.assert_not_awaited()
+    fail.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_worker_records_only_sanitized_generic_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _lease()
+    fail = AsyncMock(return_value="retry_wait")
+    monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=lease))
+    monkeypatch.setattr(worker_main, "fail_job", fail)
+    monkeypatch.setattr(worker_main, "renew_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    async def raises_secret(_lease: JobLease) -> int:
+        raise RuntimeError("postgresql://user:pass@db/private response body=secret")
+
+    processed = await worker_main.run_worker_iteration(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None),
+        worker_id="worker-a",
+        process_job=raises_secret,
+    )
+
+    assert processed is True
+    assert fail.await_args.kwargs["code"] == "JOB_PROCESSING_ERROR"
+    assert fail.await_args.kwargs["message"] == "任务处理失败。"
+    assert fail.await_args.kwargs["retryable"] is False
+
+
+@pytest.mark.asyncio
+async def test_empty_worker_loop_waits_poll_interval_and_stops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = asyncio.Event()
+    monkeypatch.setattr(worker_main, "run_worker_iteration", AsyncMock(return_value=False))
+    waits: list[float] = []
+
+    async def stop_after_wait(_stop: asyncio.Event, seconds: float) -> bool:
+        waits.append(seconds)
+        stop.set()
+        return True
+
+    await worker_main.run_worker(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None),
+        worker_id="worker-a",
+        process_job=AsyncMock(),
+        stop_event=stop,
+        wait_for_stop=stop_after_wait,
+    )
+
+    assert waits == [2]
+
+
+@pytest.mark.asyncio
+async def test_health_check_uses_own_worker_heartbeat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fresh = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        worker_health,
+        "get_settings",
+        lambda: Settings(_env_file=None, worker_id="worker-a"),
+    )
+    monkeypatch.setattr(worker_health, "session_factory", _SessionFactory())
+    monkeypatch.setattr(worker_health, "worker_heartbeat_is_fresh", fresh)
+
+    healthy = await worker_health.check_health(max_age_seconds=60)
+
+    assert healthy is True
+    assert fresh.await_args.kwargs["worker_id"] == "worker-a"
+    assert fresh.await_args.kwargs["max_age_seconds"] == 60
+
+
+@pytest.mark.asyncio
+async def test_health_check_returns_false_when_database_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenFactory:
+        def __call__(self) -> _Session:
+            raise worker_health.SQLAlchemyError("database unavailable")
+
+    monkeypatch.setattr(worker_health, "session_factory", BrokenFactory())
+
+    assert await worker_health.check_health(max_age_seconds=60) is False
+
+
+@pytest.mark.asyncio
+async def test_default_processor_fails_closed_until_handler_is_registered() -> None:
+    with pytest.raises(worker_main.JobExecutionError) as captured:
+        await worker_main.process_job(_lease())
+
+    assert captured.value.code == "JOB_HANDLER_UNAVAILABLE"
+    assert captured.value.retryable is False
+
+
+def test_health_cli_returns_one_for_stale_heartbeat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["app.worker.health", "--max-age-seconds", "60"])
+    monkeypatch.setattr(worker_health, "check_health", AsyncMock(return_value=False))
+
+    assert worker_health.main() == 1

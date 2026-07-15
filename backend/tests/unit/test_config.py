@@ -1,3 +1,5 @@
+import socket
+
 import pytest
 from pydantic import ValidationError
 
@@ -109,6 +111,22 @@ def test_settings_use_authentication_defaults() -> None:
     assert settings.access_token_expire_minutes == 15
     assert settings.refresh_token_expire_days == 7
     assert settings.refresh_cookie_secure is False
+
+
+def test_settings_use_worker_runtime_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.worker_poll_seconds == 2
+    assert settings.job_lease_seconds == 120
+    assert settings.worker_heartbeat_seconds == 15
+    assert settings.job_max_attempts == 3
+    assert settings.job_retry_backoff_seconds == (30, 120)
+
+
+def test_settings_default_worker_id_is_stable_for_the_host() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.worker_id == socket.gethostname()
 
 
 def test_production_settings_require_jwt_secret_key() -> None:

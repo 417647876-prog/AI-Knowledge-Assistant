@@ -1,3 +1,4 @@
+import socket
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -47,6 +48,13 @@ class Settings(BaseSettings):
     rag_reranker_allow_fallback: bool = True
     rag_reranker_min_score: float | None = Field(default=None, allow_inf_nan=False)
 
+    worker_id: str = Field(default_factory=socket.gethostname, min_length=1, max_length=255)
+    worker_poll_seconds: float = Field(default=2, gt=0)
+    job_lease_seconds: int = Field(default=120, gt=0)
+    worker_heartbeat_seconds: float = Field(default=15, gt=0)
+    job_max_attempts: int = Field(default=3, gt=0)
+    job_retry_backoff_seconds: tuple[int, int] = (30, 120)
+
     jwt_secret_key: str = "development-only-change-me-please-32-chars"
     jwt_algorithm: Literal["HS256"] = "HS256"
     jwt_issuer: str = "ai-knowledge-assistant"
@@ -71,6 +79,10 @@ class Settings(BaseSettings):
             raise ValueError("rag_top_k_default 不能大于 rag_top_k_max")
         if self.rag_candidate_k < self.rag_top_k_default:
             raise ValueError("rag_candidate_k 不能小于 rag_top_k_default")
+        if self.worker_heartbeat_seconds >= self.job_lease_seconds:
+            raise ValueError("worker_heartbeat_seconds 必须小于 job_lease_seconds")
+        if any(delay <= 0 for delay in self.job_retry_backoff_seconds):
+            raise ValueError("job_retry_backoff_seconds 必须全部大于 0")
         if self.app_env == "production":
             if self.jwt_secret_key == "development-only-change-me-please-32-chars":
                 raise ValueError("生产环境必须配置 JWT_SECRET_KEY")
