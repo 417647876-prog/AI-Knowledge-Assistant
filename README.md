@@ -55,7 +55,35 @@ RRF 融合，以及 `vector`/`hybrid` 可回退配置。默认仍使用纯向量
 关键词分类的纯向量 Recall@5 已经是 100%，因此 3B 使用上限感知质量门：混合检索的关键词
 Recall@5 必须达到 `min(100%, 纯向量关键词 Recall@5 + 10 个百分点)`，同时总体 Recall@5、
 引用命中率和拒答准确率均不得低于纯向量。混合检索保持关键词 Recall@5 为 100%，四项总体
-指标均由 83.33% 提升到 93.33%，阶段 3B 已通过验收。阶段 3C 仍未开始。
+指标均由 83.33% 提升到 93.33%，阶段 3B 已通过验收。
+
+## 阶段 3C 重排序验收状态
+
+评估 CLI 的 `--mode rerank` 会使用 hybrid 检索取得候选，启用本地 BGE 重排序，并关闭
+fallback，避免模型失败时静默生成非重排报告。固定 30 条数据的 CPU 实测使用
+`candidate_k=20`、`BAAI/bge-reranker-base`：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Set-Location backend
+$env:EVALUATION_KNOWLEDGE_BASE_ID = "知识库 UUID"
+$env:EMBEDDING_DEVICE = "cpu"
+$env:RAG_RERANKER_DEVICE = "cpu"
+uv run python -m scripts.evaluate_rag `
+  --dataset tests/fixtures/evaluation/stage3.jsonl `
+  --knowledge-base-id $env:EVALUATION_KNOWLEDGE_BASE_ID `
+  --mode rerank `
+  --output reports/stage3c-rerank.json
+```
+
+| 模式 | MRR@5 | 引用命中率 | CPU P50 | CPU P95 |
+|---|---:|---:|---:|---:|
+| 3B hybrid | 93.33% | 93.33% | 17.89 ms | 23.84 ms |
+| 3C rerank | 93.33% | 93.33% | 17.42 ms | 29.39 ms |
+
+MRR@5 相对提升为 0.00%，未达到至少 5% 的质量门；引用命中率未下降。28 条案例在 3B
+已经排名第一，`refusal-03` 的单个误召回无法仅靠排序剔除，`multi-turn-06` 则没有候选可供
+重排。因此 3C Task 5 尚未完成，3D 保持阻塞，不得据此结果继续执行。
 
 ## 本地启动
 

@@ -11,6 +11,7 @@ from app.api.v1.questions import (
     build_retriever,
     get_question_chat_provider,
     get_question_embedding_provider,
+    get_question_reranker,
     get_question_rewriter,
 )
 from app.core.config import Settings, get_settings
@@ -56,15 +57,33 @@ def parse_args(arguments: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--knowledge-base-id", type=UUID, required=True, help="目标知识库 UUID")
     parser.add_argument(
         "--mode",
-        choices=["vector", "hybrid"],
+        choices=["vector", "hybrid", "rerank"],
         required=True,
-        help="选择纯向量或混合检索",
+        help="选择纯向量、混合检索或本地重排序",
     )
     parser.add_argument("--output", type=Path, required=True, help="JSON 报告输出路径")
     parser.add_argument(
         "--top-k", type=_top_k_at_least_five, default=5, help="检索候选数量，至少为 5"
     )
     return parser.parse_args(arguments)
+
+
+def build_evaluation_settings(settings: Settings, mode: EvaluationMode) -> Settings:
+    """把评估模式转换为可复现的检索与重排序配置。"""
+    if mode == "rerank":
+        return settings.model_copy(
+            update={
+                "rag_retrieval_mode": "hybrid",
+                "rag_reranker_provider": "local",
+                "rag_reranker_allow_fallback": False,
+            }
+        )
+    return settings.model_copy(
+        update={
+            "rag_retrieval_mode": mode,
+            "rag_reranker_provider": "disabled",
+        }
+    )
 
 
 def build_safe_environment(settings: Settings) -> dict[str, str]:
@@ -79,6 +98,12 @@ def build_safe_environment(settings: Settings) -> dict[str, str]:
         "rag_score_threshold": str(settings.rag_score_threshold),
         "rag_retrieval_mode": settings.rag_retrieval_mode,
         "rag_rrf_rank_constant": str(settings.rag_rrf_rank_constant),
+        "rag_reranker_provider": settings.rag_reranker_provider,
+        "rag_reranker_model": settings.rag_reranker_model,
+        "rag_reranker_device": settings.rag_reranker_device,
+        "rag_reranker_batch_size": str(settings.rag_reranker_batch_size),
+        "rag_candidate_k": str(settings.rag_candidate_k),
+        "rag_reranker_allow_fallback": str(settings.rag_reranker_allow_fallback),
     }
 
 
@@ -123,13 +148,14 @@ async def run_evaluation(
 
 
 async def run_from_args(args: argparse.Namespace, settings: Settings) -> EvaluationReport:
-    evaluation_settings = settings.model_copy(update={"rag_retrieval_mode": args.mode})
-    embedding_dependency = get_question_embedding_provider(settings)
-    chat_dependency = get_question_chat_provider(settings)
+    evaluation_settings = build_evaluation_settings(settings, args.mode)
+    embedding_dependency = get_question_embedding_provider(evaluation_settings)
+    chat_dependency = get_question_chat_provider(evaluation_settings)
     try:
         embedding_provider = await anext(embedding_dependency)
         chat_provider = await anext(chat_dependency)
-        question_rewriter = await get_question_rewriter(settings, chat_provider)
+        question_rewriter = await get_question_rewriter(evaluation_settings, chat_provider)
+        reranker = get_question_reranker(evaluation_settings)
         async with session_factory() as session:
             retriever = build_retriever(session, evaluation_settings)
             service = RagService(
@@ -139,6 +165,9 @@ async def run_from_args(args: argparse.Namespace, settings: Settings) -> Evaluat
                 chat_provider=chat_provider,
                 question_rewriter=question_rewriter,
                 score_threshold=evaluation_settings.rag_score_threshold,
+                reranker=reranker,
+                candidate_k=evaluation_settings.rag_candidate_k,
+                reranker_allow_fallback=evaluation_settings.rag_reranker_allow_fallback,
             )
             return await run_evaluation(
                 dataset=args.dataset,

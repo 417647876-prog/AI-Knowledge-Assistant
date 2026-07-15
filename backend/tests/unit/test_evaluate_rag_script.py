@@ -10,6 +10,7 @@ from app.rag.schemas import QuestionAnswer, RetrievedChunk
 from app.rag.service import RagService
 from scripts.evaluate_rag import (
     RagServiceEvaluationAnswerer,
+    build_evaluation_settings,
     build_safe_environment,
     format_safe_error,
     parse_args,
@@ -83,6 +84,20 @@ def test_parse_args_accepts_vector_baseline_inputs() -> None:
     )
     assert hybrid_args.mode == "hybrid"
 
+    rerank_args = parse_args(
+        [
+            "--dataset",
+            "tests/fixtures/evaluation/stage3.jsonl",
+            "--knowledge-base-id",
+            str(knowledge_base_id),
+            "--mode",
+            "rerank",
+            "--output",
+            "reports/stage3c-rerank.json",
+        ]
+    )
+    assert rerank_args.mode == "rerank"
+
 
 def test_parse_args_rejects_unknown_mode_and_top_k_below_five() -> None:
     knowledge_base_id = uuid4()
@@ -96,7 +111,7 @@ def test_parse_args_rejects_unknown_mode_and_top_k_below_five() -> None:
     ]
 
     with pytest.raises(SystemExit):
-        parse_args([*required_args, "--mode", "rerank"])
+        parse_args([*required_args, "--mode", "rewrite"])
     with pytest.raises(SystemExit):
         parse_args([*required_args, "--mode", "vector", "--top-k", "4"])
 
@@ -161,6 +176,27 @@ def test_write_report_uses_schema_and_excludes_configuration_secrets(tmp_path) -
     assert database_url not in serialized
     assert embedding_key not in serialized
     assert chat_key not in serialized
+
+
+def test_safe_environment_records_reranker_candidate_count_and_model() -> None:
+    settings = Settings(
+        rag_reranker_provider="local",
+        rag_reranker_model="BAAI/bge-reranker-base",
+        rag_candidate_k=20,
+    )
+
+    environment = build_safe_environment(settings)
+
+    assert environment["rag_candidate_k"] == "20"
+    assert environment["rag_reranker_model"] == "BAAI/bge-reranker-base"
+
+
+def test_rerank_mode_uses_hybrid_candidates_and_strict_local_reranker() -> None:
+    settings = build_evaluation_settings(Settings(), "rerank")
+
+    assert settings.rag_retrieval_mode == "hybrid"
+    assert settings.rag_reranker_provider == "local"
+    assert settings.rag_reranker_allow_fallback is False
 
 
 @pytest.mark.asyncio

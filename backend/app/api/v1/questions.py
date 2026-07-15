@@ -180,8 +180,8 @@ async def get_rag_service(
     embedding_provider: Annotated[EmbeddingProvider, Depends(get_question_embedding_provider)],
     chat_provider: Annotated[StreamingChatProvider, Depends(get_question_chat_provider)],
     question_rewriter: Annotated[QuestionRewriter, Depends(get_question_rewriter)],
-    reranker: Annotated[RerankerProvider | None, Depends(get_question_reranker)],
     settings: Annotated[Settings, Depends(get_settings)],
+    reranker: Annotated[RerankerProvider | None, Depends(get_question_reranker)] = None,
 ) -> RagService:
     return RagService(
         session=session,
