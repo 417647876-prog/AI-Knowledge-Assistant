@@ -10,8 +10,8 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine, make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.engine import Connection, Engine, make_url
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.core.config import Settings, get_settings
 
@@ -70,6 +70,41 @@ def _assert_backend_waiting_for_lock(engine: Engine, backend_pid: int) -> None:
     raise AssertionError(f"数据库连接 {backend_pid} 未进入锁等待状态")
 
 
+def _assert_another_backend_is_waiting_for_lock(engine: Engine) -> None:
+    deadline = monotonic() + 5
+    while monotonic() < deadline:
+        with engine.connect() as connection:
+            waiting_backend_count = connection.scalar(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE datname=current_database() AND pid<>pg_backend_pid() "
+                    "AND wait_event_type='Lock'"
+                )
+            )
+        if waiting_backend_count:
+            return
+        sleep(0.02)
+    raise AssertionError("未观察到迁移连接进入锁等待状态")
+
+
+def _assert_backend_is_waiting_for_statement_lock(engine: Engine, statement_fragment: str) -> None:
+    deadline = monotonic() + 5
+    while monotonic() < deadline:
+        with engine.connect() as connection:
+            waiting_backend_count = connection.scalar(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE datname=current_database() AND pid<>pg_backend_pid() "
+                    "AND wait_event_type='Lock' AND query ILIKE :query_pattern"
+                ),
+                {"query_pattern": f"%{statement_fragment}%"},
+            )
+        if waiting_backend_count:
+            return
+        sleep(0.02)
+    raise AssertionError(f"未观察到语句 {statement_fragment!r} 进入锁等待状态")
+
+
 def _insert_legacy_private_data(engine) -> dict[str, object]:
     ids: dict[str, object] = {
         "owner_id": uuid4(),
@@ -107,6 +142,34 @@ def _insert_legacy_private_data(engine) -> dict[str, object]:
             ids,
         )
     return ids
+
+
+def _write_new_lifecycle_state(
+    connection: Connection, ids: dict[str, object], new_state: str
+) -> None:
+    if new_state == "recycled_knowledge_base":
+        connection.execute(
+            text(
+                "UPDATE knowledge_bases SET deleted_at=clock_timestamp() "
+                "WHERE id=:knowledge_base_id"
+            ),
+            ids,
+        )
+    elif new_state == "recycled_document":
+        connection.execute(
+            text("UPDATE documents SET deleted_at=clock_timestamp() WHERE id=:document_id"),
+            ids,
+        )
+    else:
+        connection.execute(
+            text(
+                "INSERT INTO support_access_grants "
+                "(id, knowledge_base_id, owner_user_id, admin_user_id, expires_at) "
+                "VALUES (:grant_id, :knowledge_base_id, :owner_id, :admin_id, "
+                "clock_timestamp()+interval '30 minutes')"
+            ),
+            {**ids, "grant_id": uuid4()},
+        )
 
 
 def test_upgrade_backfills_uploader_and_replaces_global_document_uniqueness(
@@ -745,6 +808,133 @@ def test_empty_lifecycle_schema_supports_downgrade_and_reupgrade(
                 "20260716_07"
             )
     finally:
+        engine.dispose()
+        get_settings.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "new_state", ["recycled_knowledge_base", "recycled_document", "active_grant"]
+)
+def test_downgrade_rechecks_new_state_after_waiting_for_concurrent_writer(
+    temporary_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    new_state: str,
+) -> None:
+    config = _alembic_config(temporary_database_url, monkeypatch)
+    engine = create_engine(temporary_database_url)
+    writer_connection = None
+    writer_transaction = None
+    downgrade_future = None
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        command.upgrade(config, "20260716_06")
+        ids = _insert_legacy_private_data(engine)
+        command.upgrade(config, "20260716_07")
+        writer_connection = engine.connect()
+        writer_transaction = writer_connection.begin()
+        writer_connection.execute(text("SET LOCAL statement_timeout = '15s'"))
+        _write_new_lifecycle_state(writer_connection, ids, new_state)
+
+        downgrade_future = executor.submit(command.downgrade, config, "20260716_06")
+        _assert_another_backend_is_waiting_for_lock(engine)
+        writer_transaction.commit()
+
+        with pytest.raises(RuntimeError, match="不能无损降级"):
+            downgrade_future.result(timeout=15)
+        with engine.connect() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
+                "20260716_07"
+            )
+            if new_state == "recycled_knowledge_base":
+                state_exists = connection.scalar(
+                    text(
+                        "SELECT deleted_at IS NOT NULL FROM knowledge_bases "
+                        "WHERE id=:knowledge_base_id"
+                    ),
+                    ids,
+                )
+            elif new_state == "recycled_document":
+                state_exists = connection.scalar(
+                    text("SELECT deleted_at IS NOT NULL FROM documents WHERE id=:document_id"),
+                    ids,
+                )
+            else:
+                state_exists = connection.scalar(
+                    text("SELECT count(*)=1 FROM support_access_grants")
+                )
+            assert state_exists is True
+    finally:
+        if writer_transaction is not None and writer_transaction.is_active:
+            writer_transaction.rollback()
+        if writer_connection is not None:
+            writer_connection.close()
+        if downgrade_future is not None and not downgrade_future.done():
+            try:
+                downgrade_future.result(timeout=15)
+            except Exception:
+                pass
+        executor.shutdown(wait=True, cancel_futures=True)
+        engine.dispose()
+        get_settings.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "new_state", ["recycled_knowledge_base", "recycled_document", "active_grant"]
+)
+def test_downgrade_holds_lifecycle_locks_until_destructive_schema_changes_finish(
+    temporary_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    new_state: str,
+) -> None:
+    config = _alembic_config(temporary_database_url, monkeypatch)
+    engine = create_engine(temporary_database_url)
+    blocker_connection = None
+    blocker_transaction = None
+    downgrade_future = None
+    writer_future = None
+    writer_backend_pid: Queue[int] = Queue()
+    executor = ThreadPoolExecutor(max_workers=2)
+    try:
+        command.upgrade(config, "20260716_06")
+        ids = _insert_legacy_private_data(engine)
+        command.upgrade(config, "20260716_07")
+        blocker_connection = engine.connect()
+        blocker_transaction = blocker_connection.begin()
+        blocker_connection.execute(text("LOCK TABLE audit_events IN ACCESS SHARE MODE"))
+
+        downgrade_future = executor.submit(command.downgrade, config, "20260716_06")
+        _assert_backend_is_waiting_for_statement_lock(engine, "audit_events")
+
+        def write_new_state() -> None:
+            with engine.begin() as connection:
+                connection.execute(text("SET LOCAL lock_timeout = '10s'"))
+                connection.execute(text("SET LOCAL statement_timeout = '15s'"))
+                writer_backend_pid.put(connection.scalar(text("SELECT pg_backend_pid()")))
+                _write_new_lifecycle_state(connection, ids, new_state)
+
+        writer_future = executor.submit(write_new_state)
+        _assert_backend_waiting_for_lock(engine, writer_backend_pid.get(timeout=5))
+        blocker_transaction.commit()
+
+        downgrade_future.result(timeout=15)
+        with pytest.raises(SQLAlchemyError):
+            writer_future.result(timeout=15)
+        with engine.connect() as connection:
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
+                "20260716_06"
+            )
+    finally:
+        if blocker_transaction is not None and blocker_transaction.is_active:
+            blocker_transaction.rollback()
+        if blocker_connection is not None:
+            blocker_connection.close()
+        for future in (downgrade_future, writer_future):
+            if future is not None and not future.done():
+                try:
+                    future.result(timeout=15)
+                except Exception:
+                    pass
+        executor.shutdown(wait=True, cancel_futures=True)
         engine.dispose()
         get_settings.cache_clear()
 

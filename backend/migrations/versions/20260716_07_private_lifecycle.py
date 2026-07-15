@@ -389,6 +389,12 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     connection = op.get_bind()
+    connection.execute(
+        sa.text(
+            "LOCK TABLE knowledge_bases, documents, support_access_grants "
+            "IN SHARE ROW EXCLUSIVE MODE"
+        )
+    )
     recycle_state_count = connection.scalar(
         sa.text(
             "SELECT "
