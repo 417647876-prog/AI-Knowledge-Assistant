@@ -82,9 +82,11 @@ async def test_rag_service_factory_wires_reranker_settings_without_database() ->
             _env_file=None,
             rag_candidate_k=12,
             rag_reranker_allow_fallback=False,
+            rag_reranker_min_score=-0.25,
         ),
     )
 
     assert service._reranker is reranker
     assert service._candidate_k == 12
     assert service._reranker_allow_fallback is False
+    assert service._reranker_min_score == -0.25

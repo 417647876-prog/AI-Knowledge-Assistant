@@ -18,7 +18,7 @@ from app.db.models.knowledge_base import KnowledgeBase
 from app.rag.citations import map_citations
 from app.rag.contracts import Retriever
 from app.rag.prompt import build_rag_prompt
-from app.rag.reranking import rerank_chunks
+from app.rag.reranking import accept_reranked_chunks, rerank_chunks
 from app.rag.schemas import QuestionAnswer, RetrievedChunk
 from app.rag.streaming import CitationTracker, StreamEvent, citation_payload
 
@@ -43,6 +43,7 @@ class RagService:
         reranker: RerankerProvider | None = None,
         candidate_k: int = 20,
         reranker_allow_fallback: bool = True,
+        reranker_min_score: float | None = None,
     ) -> None:
         self._session = session
         self._embedding_provider = embedding_provider
@@ -53,6 +54,7 @@ class RagService:
         self._reranker = reranker
         self._candidate_k = candidate_k
         self._reranker_allow_fallback = reranker_allow_fallback
+        self._reranker_min_score = reranker_min_score
 
     async def _ensure_knowledge_base(self, knowledge_base_id: UUID) -> None:
         if await self._session.get(KnowledgeBase, knowledge_base_id) is None:
@@ -76,12 +78,29 @@ class RagService:
             return chunks
 
         try:
-            return await rerank_chunks(
+            reranked_chunks = await rerank_chunks(
                 self._reranker,
                 query=question,
                 chunks=chunks,
                 top_k=min(top_k, len(chunks)),
             )
+            accepted_chunks = accept_reranked_chunks(
+                reranked_chunks,
+                min_score=self._reranker_min_score,
+            )
+            if len(accepted_chunks) < len(reranked_chunks):
+                logger.info(
+                    "Reranker 接受门已过滤低分候选。",
+                    extra={
+                        "reranker_provider": type(self._reranker).__name__,
+                        "reranker_min_score": self._reranker_min_score,
+                        "candidate_count": len(reranked_chunks),
+                        "accepted_count": len(accepted_chunks),
+                        "rejected_count": len(reranked_chunks) - len(accepted_chunks),
+                        "request_id": get_request_id(),
+                    },
+                )
+            return accepted_chunks
         except AppError as error:
             if error.code != "RERANKER_PROVIDER_ERROR" or not self._reranker_allow_fallback:
                 raise

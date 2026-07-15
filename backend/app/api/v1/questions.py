@@ -193,6 +193,7 @@ async def get_rag_service(
         reranker=reranker,
         candidate_k=settings.rag_candidate_k,
         reranker_allow_fallback=settings.rag_reranker_allow_fallback,
+        reranker_min_score=settings.rag_reranker_min_score,
     )
 
 

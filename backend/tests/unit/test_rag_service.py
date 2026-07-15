@@ -321,6 +321,54 @@ async def test_enabled_reranker_retrieves_candidates_reorders_and_limits_top_k()
 
 
 @pytest.mark.asyncio
+async def test_reranker_acceptance_gate_keeps_only_qualified_chunks() -> None:
+    chunks = [_chunk(), _chunk(), _chunk()]
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever(chunks),
+        chat_provider=CountingChatProvider("答案。[1]"),
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=StubReranker(scores=[0.8, 0.49, -1.0]),
+        candidate_k=3,
+        reranker_allow_fallback=False,
+        reranker_min_score=0.5,
+    )
+
+    answer, final_chunks, _ = await service.answer_with_retrieval(uuid4(), "年假", 3)
+
+    assert [item.relevance_score for item in final_chunks] == [0.8]
+    assert answer.retrieved_chunk_count == 1
+
+
+@pytest.mark.asyncio
+async def test_successful_low_score_rerank_refuses_without_fallback_or_chat() -> None:
+    chunks = [_chunk(), _chunk()]
+    chat = CountingChatProvider("不应该被调用")
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever(chunks),
+        chat_provider=chat,
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=StubReranker(scores=[-2.0, -3.0]),
+        candidate_k=2,
+        reranker_allow_fallback=True,
+        reranker_min_score=0.0,
+    )
+
+    answer, final_chunks, _ = await service.answer_with_retrieval(uuid4(), "无关问题", 2)
+
+    assert final_chunks == []
+    assert answer.answer == "未找到足够依据，无法根据当前知识库回答该问题。"
+    assert answer.citations == []
+    assert answer.retrieved_chunk_count == 0
+    assert chat.call_count == 0
+
+
+@pytest.mark.asyncio
 async def test_strict_reranker_failure_is_propagated() -> None:
     error = AppError(
         code="RERANKER_PROVIDER_ERROR",
@@ -436,6 +484,41 @@ async def test_stream_uses_enabled_reranker_order_and_top_k() -> None:
         str(chunks[2].document_id),
     ]
     assert events[-1].data["retrieved_chunk_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_successful_low_score_rerank_refuses_without_chat() -> None:
+    chunks = [_chunk(), _chunk()]
+    chat = StreamingCountingChatProvider("不应该被调用", ["不应该生成"])
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever(chunks),
+        chat_provider=chat,
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=StubReranker(scores=[-2.0, -3.0]),
+        candidate_k=2,
+        reranker_allow_fallback=True,
+        reranker_min_score=0.0,
+    )
+
+    events = [item async for item in service.stream_answer(uuid4(), "无关问题", 2, [])]
+
+    assert [item.event for item in events] == [
+        "rewrite",
+        "status",
+        "retrieval",
+        "token",
+        "done",
+    ]
+    assert events[1].data == {"phase": "retrieving"}
+    assert events[2].data["retrieved_chunk_count"] == 0
+    assert events[3].data == {"delta": "未找到足够依据，无法根据当前知识库回答该问题。"}
+    assert events[4].data["citations"] == []
+    assert events[4].data["retrieved_chunk_count"] == 0
+    assert events[4].data["timings"]["generation_ms"] == 0
+    assert chat.call_count == 0
 
 
 @pytest.mark.asyncio
