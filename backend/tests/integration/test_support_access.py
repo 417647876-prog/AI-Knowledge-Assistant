@@ -224,6 +224,24 @@ async def _events(*request_ids: str) -> list[AuditEvent]:
         )
 
 
+async def _wait_for_support_lock(*, locker_pid: int, timeout_seconds: float = 3.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while asyncio.get_running_loop().time() < deadline:
+        async with session_factory() as observer:
+            waiting = await observer.scalar(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity "
+                    "WHERE pid <> :locker_pid AND wait_event_type = 'Lock' "
+                    "AND query LIKE '%support_access_grants%')"
+                ),
+                {"locker_pid": locker_pid},
+            )
+        if waiting:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("support request did not enter a database lock wait")
+
+
 @pytest.mark.asyncio
 async def test_owner_creates_lists_and_revokes_grant_with_transactional_audit(
     support_context: SupportContext,
@@ -376,6 +394,92 @@ async def test_grant_never_authorizes_ordinary_read_write_or_rag_routes(
     assert stream_question.status_code == 404
     assert stream_question.headers["content-type"].startswith("application/json")
     assert deleted.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path_factory",
+    [
+        lambda context: f"/api/v1/support/knowledge-bases/{context.knowledge_base_id}",
+        lambda context: f"/api/v1/support/knowledge-bases/{context.knowledge_base_id}/documents",
+        lambda context: f"/api/v1/support/documents/{context.document_id}",
+    ],
+    ids=["knowledge-base", "document-list", "document"],
+)
+async def test_support_read_revalidates_expiry_after_grant_lock_wait(
+    support_context: SupportContext, path_factory
+) -> None:
+    created = await _create_grant(support_context)
+    assert created.status_code == 201
+    grant_id = UUID(created.json()["id"])
+
+    async with session_factory() as locker:
+        transaction = await locker.begin()
+        locker_pid = await locker.scalar(text("SELECT pg_backend_pid()"))
+        expires_at = await locker.scalar(
+            text(
+                "UPDATE support_access_grants "
+                "SET expires_at = clock_timestamp() + interval '500 milliseconds' "
+                "WHERE id=:grant_id RETURNING expires_at"
+            ),
+            {"grant_id": grant_id},
+        )
+        request_task = asyncio.create_task(
+            support_context.admin_client.get(
+                path_factory(support_context),
+                headers={"X-Request-ID": "support-expired-during-lock"},
+            )
+        )
+        try:
+            await _wait_for_support_lock(locker_pid=locker_pid)
+            while True:
+                async with session_factory() as observer:
+                    expired = await observer.scalar(
+                        select(text("clock_timestamp() > :expires_at")),
+                        {"expires_at": expires_at},
+                    )
+                if expired:
+                    break
+                await asyncio.sleep(0.02)
+        finally:
+            await transaction.commit()
+
+    response = await asyncio.wait_for(request_task, timeout=3.0)
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_concurrent_support_reads_never_move_last_used_at_backwards(
+    support_context: SupportContext,
+) -> None:
+    created = await _create_grant(support_context)
+    assert created.status_code == 201
+    grant_id = UUID(created.json()["id"])
+    async with session_factory.begin() as session:
+        marker = await session.scalar(
+            text(
+                "UPDATE support_access_grants "
+                "SET last_used_at = clock_timestamp() + interval '1 hour' "
+                "WHERE id=:grant_id RETURNING last_used_at"
+            ),
+            {"grant_id": grant_id},
+        )
+
+    first, second = await asyncio.gather(
+        support_context.admin_client.get(
+            f"/api/v1/support/knowledge-bases/{support_context.knowledge_base_id}"
+        ),
+        support_context.admin_client.get(
+            f"/api/v1/support/documents/{support_context.document_id}"
+        ),
+    )
+
+    assert first.status_code == second.status_code == 200
+    async with session_factory() as session:
+        last_used_at = await session.scalar(
+            select(SupportAccessGrant.last_used_at).where(SupportAccessGrant.id == grant_id)
+        )
+    assert last_used_at >= marker
 
 
 @pytest.mark.asyncio

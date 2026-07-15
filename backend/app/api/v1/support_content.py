@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
 from app.authorization.support_service import (
-    get_database_now,
     get_supported_document,
     get_supported_knowledge_base,
 )
@@ -50,10 +49,7 @@ async def get_support_knowledge_base(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> SupportKnowledgeBaseResponse:
-    now = await get_database_now(session)
-    knowledge_base = await get_supported_knowledge_base(
-        session, current_user, knowledge_base_id, now
-    )
+    knowledge_base = await get_supported_knowledge_base(session, current_user, knowledge_base_id)
     response = SupportKnowledgeBaseResponse(
         id=knowledge_base.id,
         name=knowledge_base.name,
@@ -72,8 +68,7 @@ async def list_support_documents(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> SupportDocumentListResponse:
-    now = await get_database_now(session)
-    await get_supported_knowledge_base(session, current_user, knowledge_base_id, now)
+    await get_supported_knowledge_base(session, current_user, knowledge_base_id)
     documents = (
         await session.scalars(
             select(Document)
@@ -97,8 +92,7 @@ async def get_support_document(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> SupportDocumentResponse:
-    now = await get_database_now(session)
-    document = await get_supported_document(session, current_user, document_id, now)
+    document = await get_supported_document(session, current_user, document_id)
     response = SupportDocumentResponse.model_validate(document)
     await session.commit()
     return response

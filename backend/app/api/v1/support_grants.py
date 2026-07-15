@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
@@ -127,8 +127,13 @@ async def create_support_grant(
                 security_summary={"access_level": "read_only"},
             )
             await session.flush()
-    except DBAPIError as error:
-        if getattr(error.orig, "sqlstate", None) not in {"23P01", "40P01"}:
+    except IntegrityError as error:
+        diagnostics = getattr(error.orig, "diag", None)
+        if (
+            getattr(error.orig, "sqlstate", None) != "23P01"
+            or getattr(diagnostics, "constraint_name", None)
+            != "ex_support_access_grants_unrevoked_period"
+        ):
             raise
         await _audit_management_denial(
             current_user=current_user,

@@ -22,17 +22,13 @@ async def get_database_now(session: AsyncSession) -> datetime:
     return now
 
 
-def _active_grant_conditions(
-    *, knowledge_base_id: UUID, admin_user_id: UUID, now: datetime
-) -> tuple[object, ...]:
+def _active_grant_conditions(*, knowledge_base_id: UUID, admin_user_id: UUID) -> tuple[object, ...]:
     return (
         SupportAccessGrant.knowledge_base_id == knowledge_base_id,
         SupportAccessGrant.admin_user_id == admin_user_id,
         SupportAccessGrant.owner_user_id == KnowledgeBase.owner_id,
         SupportAccessGrant.access_level == "read_only",
         SupportAccessGrant.revoked_at.is_(None),
-        SupportAccessGrant.created_at <= now,
-        SupportAccessGrant.expires_at > now,
         KnowledgeBase.deleted_at.is_(None),
     )
 
@@ -55,11 +51,41 @@ async def _record_access_denied(
     )
 
 
+async def _consume_locked_grant(
+    session: AsyncSession,
+    *,
+    current_admin: User,
+    grant: SupportAccessGrant,
+    resource_type: str,
+    resource_id: UUID,
+) -> None:
+    now = await get_database_now(session)
+    if grant.created_at > now or grant.expires_at <= now:
+        await _record_access_denied(
+            current_user=current_admin,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            reason="grant_unavailable",
+        )
+        raise _not_found(resource_type)
+
+    if grant.last_used_at is None or now > grant.last_used_at:
+        grant.last_used_at = now
+    add_audit_event(
+        session,
+        actor_user_id=current_admin.id,
+        action="support_access_used",
+        resource_type=resource_type,
+        resource_id=resource_id,
+        result="success",
+        security_summary={"access_level": "read_only"},
+    )
+
+
 async def get_supported_knowledge_base(
     session: AsyncSession,
     current_admin: User,
     knowledge_base_id: UUID,
-    now: datetime,
 ) -> KnowledgeBase:
     if current_admin.role != ADMIN_ROLE:
         await _record_access_denied(
@@ -82,9 +108,10 @@ async def get_supported_knowledge_base(
                 *_active_grant_conditions(
                     knowledge_base_id=knowledge_base_id,
                     admin_user_id=current_admin.id,
-                    now=now,
                 ),
             )
+            .order_by(SupportAccessGrant.created_at.desc(), SupportAccessGrant.id.desc())
+            .limit(1)
             .with_for_update(of=SupportAccessGrant)
         )
     ).one_or_none()
@@ -98,15 +125,12 @@ async def get_supported_knowledge_base(
         raise _not_found("knowledge_base")
 
     knowledge_base, grant = row
-    grant.last_used_at = now
-    add_audit_event(
+    await _consume_locked_grant(
         session,
-        actor_user_id=current_admin.id,
-        action="support_access_used",
+        current_admin=current_admin,
+        grant=grant,
         resource_type="knowledge_base",
         resource_id=knowledge_base.id,
-        result="success",
-        security_summary={"access_level": "read_only"},
     )
     return knowledge_base
 
@@ -115,7 +139,6 @@ async def get_supported_document(
     session: AsyncSession,
     current_admin: User,
     document_id: UUID,
-    now: datetime,
 ) -> Document:
     if current_admin.role != ADMIN_ROLE:
         await _record_access_denied(
@@ -140,9 +163,10 @@ async def get_supported_document(
                 *_active_grant_conditions(
                     knowledge_base_id=Document.knowledge_base_id,
                     admin_user_id=current_admin.id,
-                    now=now,
                 ),
             )
+            .order_by(SupportAccessGrant.created_at.desc(), SupportAccessGrant.id.desc())
+            .limit(1)
             .with_for_update(of=SupportAccessGrant)
         )
     ).one_or_none()
@@ -156,14 +180,11 @@ async def get_supported_document(
         raise _not_found("document")
 
     document, grant = row
-    grant.last_used_at = now
-    add_audit_event(
+    await _consume_locked_grant(
         session,
-        actor_user_id=current_admin.id,
-        action="support_access_used",
+        current_admin=current_admin,
+        grant=grant,
         resource_type="document",
         resource_id=document.id,
-        result="success",
-        security_summary={"access_level": "read_only"},
     )
     return document
