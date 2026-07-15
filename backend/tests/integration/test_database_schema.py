@@ -379,7 +379,9 @@ async def test_auth_migration_creates_users_sessions_and_owned_knowledge_bases()
                     "WHERE schemaname='public' AND tablename IN "
                     "('knowledge_bases','documents','document_chunks','document_jobs',"
                     "'worker_heartbeats','users','refresh_sessions','support_access_grants',"
-                    "'audit_events')"
+                    "'audit_events','conversations','conversation_messages','llm_usage_events',"
+                    "'answer_observations','answer_feedback','user_quotas',"
+                    "'quality_evaluation_runs')"
                 )
             )
             table_names = {row[0] for row in table_rows}
@@ -436,6 +438,13 @@ async def test_auth_migration_creates_users_sessions_and_owned_knowledge_bases()
         "refresh_sessions",
         "support_access_grants",
         "audit_events",
+        "conversations",
+        "conversation_messages",
+        "llm_usage_events",
+        "answer_observations",
+        "answer_feedback",
+        "user_quotas",
+        "quality_evaluation_runs",
     }
     assert owner_is_nullable == "NO"
     assert owner_foreign_key_count == 1
