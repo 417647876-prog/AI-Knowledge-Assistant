@@ -5,6 +5,7 @@ import pytest
 from app.ai.contracts import ConversationMessage
 from app.ai.embeddings import FakeEmbeddingProvider
 from app.core.exceptions import AppError
+from app.core.request_context import reset_request_id, set_request_id
 from app.rag.schemas import RetrievedChunk
 from app.rag.service import RagService
 
@@ -349,7 +350,7 @@ async def test_allowed_reranker_failure_falls_back_without_logging_content(caplo
     chunks = [_chunk(), _chunk(), _chunk()]
     error = AppError(
         code="RERANKER_PROVIDER_ERROR",
-        message="重排序失败。",
+        message="绝密异常消息。",
         status_code=502,
     )
     service = RagService(
@@ -364,7 +365,11 @@ async def test_allowed_reranker_failure_falls_back_without_logging_content(caplo
         reranker_allow_fallback=True,
     )
 
-    result = await service.answer(uuid4(), "敏感问题全文", 2)
+    token = set_request_id("rerank-request-001")
+    try:
+        result = await service.answer(uuid4(), "敏感问题全文", 2)
+    finally:
+        reset_request_id(token)
 
     assert [item.document_id for item in result.citations] == [
         chunks[0].document_id,
@@ -374,7 +379,9 @@ async def test_allowed_reranker_failure_falls_back_without_logging_content(caplo
     assert len(caplog.records) == 1
     assert caplog.records[0].error_code == "RERANKER_PROVIDER_ERROR"
     assert caplog.records[0].reranker_provider == "StubReranker"
+    assert caplog.records[0].request_id == "rerank-request-001"
     assert "敏感问题全文" not in caplog.text
+    assert "绝密异常消息" not in caplog.text
     assert all(chunk.content not in caplog.text for chunk in chunks)
 
 

@@ -7,6 +7,7 @@ import pytest
 from app.core.config import Settings
 from app.evaluation.schemas import CaseResult, EvaluationCase, EvaluationReport
 from app.rag.schemas import QuestionAnswer, RetrievedChunk
+from app.rag.service import RagService
 from scripts.evaluate_rag import (
     RagServiceEvaluationAnswerer,
     build_safe_environment,
@@ -26,8 +27,10 @@ class StubEmbeddingProvider:
 class StubRetriever:
     def __init__(self, chunk: RetrievedChunk) -> None:
         self._chunk = chunk
+        self.calls: list[dict[str, object]] = []
 
     async def search(self, **kwargs) -> list[RetrievedChunk]:
+        self.calls.append(kwargs)
         return [self._chunk]
 
 
@@ -214,6 +217,32 @@ async def test_rag_service_answerer_uses_case_question() -> None:
 
     assert answer.answer == "答案"
     assert service.calls == [(knowledge_base_id, "年假有几天？", 5)]
+
+
+@pytest.mark.asyncio
+async def test_evaluation_rag_service_old_constructor_keeps_reranker_disabled() -> None:
+    chunk = RetrievedChunk(
+        chunk_id=uuid4(),
+        document_id=uuid4(),
+        file_name="年假制度.txt",
+        content="年假五天。",
+        relevance_score=0.9,
+    )
+    retriever = StubRetriever(chunk)
+    service = RagService(
+        session=object(),
+        embedding_provider=StubEmbeddingProvider(),
+        retriever=retriever,
+        chat_provider=object(),
+        question_rewriter=object(),
+        score_threshold=0.55,
+    )
+
+    result = await service._retrieve(uuid4(), "年假", 7)
+
+    assert result == [chunk]
+    assert service._reranker is None
+    assert retriever.calls[0]["top_k"] == 7
 
 
 def test_format_safe_error_does_not_echo_connection_or_api_secret() -> None:

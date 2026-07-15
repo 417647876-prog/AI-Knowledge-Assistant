@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Callable
+from functools import lru_cache
 from typing import Any
 
 from app.core.exceptions import AppError
@@ -81,3 +82,14 @@ class LocalBgeRerankerProvider:
             return [float(score) for score in raw_scores]
         except Exception as error:
             raise _provider_error() from error
+
+
+@lru_cache(maxsize=4)
+def get_local_reranker_provider(
+    model_name: str, device: str, batch_size: int
+) -> LocalBgeRerankerProvider:
+    return LocalBgeRerankerProvider(
+        model_name=model_name,
+        device=device,
+        batch_size=batch_size,
+    )

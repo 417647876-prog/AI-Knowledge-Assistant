@@ -13,6 +13,7 @@ from app.ai.contracts import (
     StreamingChatProvider,
 )
 from app.core.exceptions import AppError
+from app.core.request_context import get_request_id
 from app.db.models.knowledge_base import KnowledgeBase
 from app.rag.citations import map_citations
 from app.rag.contracts import Retriever
@@ -39,9 +40,9 @@ class RagService:
         chat_provider: StreamingChatProvider,
         question_rewriter: QuestionRewriter,
         score_threshold: float,
-        reranker: RerankerProvider | None,
-        candidate_k: int,
-        reranker_allow_fallback: bool,
+        reranker: RerankerProvider | None = None,
+        candidate_k: int = 20,
+        reranker_allow_fallback: bool = True,
     ) -> None:
         self._session = session
         self._embedding_provider = embedding_provider
@@ -89,6 +90,7 @@ class RagService:
                 extra={
                     "error_code": error.code,
                     "reranker_provider": type(self._reranker).__name__,
+                    "request_id": get_request_id(),
                 },
             )
             return chunks[:top_k]

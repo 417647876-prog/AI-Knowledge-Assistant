@@ -1,6 +1,5 @@
 import re
 from collections.abc import Awaitable, Callable
-from contextvars import ContextVar
 from uuid import uuid4
 
 from fastapi import Request, Response
@@ -10,9 +9,9 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import Settings
+from app.core.request_context import reset_request_id, set_request_id
 from app.core.security import TokenValidationError, decode_access_token
 
-request_id_context: ContextVar[str] = ContextVar("request_id", default="")
 _UPLOAD_PATH = re.compile(r"^/api/v1/knowledge-bases/[^/]+/documents$")
 
 
@@ -184,11 +183,11 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         request_id = request.headers.get("X-Request-ID") or str(uuid4())
-        token = request_id_context.set(request_id)
+        token = set_request_id(request_id)
         request.state.request_id = request_id
         try:
             response = await call_next(request)
             response.headers["X-Request-ID"] = request_id
             return response
         finally:
-            request_id_context.reset(token)
+            reset_request_id(token)

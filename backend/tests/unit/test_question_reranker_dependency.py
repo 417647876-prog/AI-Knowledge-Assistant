@@ -23,11 +23,15 @@ def test_get_question_reranker_builds_local_provider_from_settings(
     sentinel = object()
     received: dict[str, object] = {}
 
-    def factory(**kwargs: object) -> object:
-        received.update(kwargs)
+    def factory(model_name: str, device: str, batch_size: int) -> object:
+        received.update(
+            model_name=model_name,
+            device=device,
+            batch_size=batch_size,
+        )
         return sentinel
 
-    monkeypatch.setattr(questions, "LocalBgeRerankerProvider", factory)
+    monkeypatch.setattr(questions, "get_local_reranker_provider", factory)
     settings = Settings(
         _env_file=None,
         rag_reranker_provider="local",
@@ -44,3 +48,43 @@ def test_get_question_reranker_builds_local_provider_from_settings(
         "device": "cpu",
         "batch_size": 7,
     }
+
+
+def test_get_question_reranker_reuses_local_provider_for_same_settings() -> None:
+    settings = Settings(
+        _env_file=None,
+        rag_reranker_provider="local",
+        rag_reranker_model="BAAI/cached-reranker",
+        rag_reranker_device="cpu",
+        rag_reranker_batch_size=7,
+    )
+
+    questions.get_local_reranker_provider.cache_clear()
+    try:
+        first = questions.get_question_reranker(settings)
+        second = questions.get_question_reranker(settings)
+    finally:
+        questions.get_local_reranker_provider.cache_clear()
+
+    assert first is second
+
+
+@pytest.mark.asyncio
+async def test_rag_service_factory_wires_reranker_settings_without_database() -> None:
+    reranker = FakeRerankerProvider()
+    service = await questions.get_rag_service(
+        session=object(),
+        embedding_provider=object(),
+        chat_provider=object(),
+        question_rewriter=object(),
+        reranker=reranker,
+        settings=Settings(
+            _env_file=None,
+            rag_candidate_k=12,
+            rag_reranker_allow_fallback=False,
+        ),
+    )
+
+    assert service._reranker is reranker
+    assert service._candidate_k == 12
+    assert service._reranker_allow_fallback is False

@@ -2,7 +2,12 @@ import threading
 
 import pytest
 
-from app.ai.rerankers import FakeRerankerProvider, LocalBgeRerankerProvider
+from app.ai import rerankers
+from app.ai.rerankers import (
+    FakeRerankerProvider,
+    LocalBgeRerankerProvider,
+    get_local_reranker_provider,
+)
 from app.core.exceptions import AppError
 
 
@@ -76,6 +81,32 @@ async def test_local_reranker_loads_once_and_predicts_in_threads(
             {"batch_size": 8, "show_progress_bar": False, "convert_to_numpy": True},
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_local_reranker_factory_reuses_provider_and_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = get_local_reranker_provider
+    factory.cache_clear()
+    model = FakeCrossEncoder()
+    model_factory_calls: list[tuple[str, str]] = []
+
+    def model_factory(model_name: str, device: str) -> FakeCrossEncoder:
+        model_factory_calls.append((model_name, device))
+        return model
+
+    monkeypatch.setattr(rerankers, "_load_cross_encoder", model_factory)
+    first = factory("BAAI/cached-reranker", "cpu", 8)
+    second = factory("BAAI/cached-reranker", "cpu", 8)
+    try:
+        await first.rerank("年假", ["甲", "乙"])
+        await second.rerank("密码", ["丙", "丁"])
+    finally:
+        factory.cache_clear()
+
+    assert first is second
+    assert model_factory_calls == [("BAAI/cached-reranker", "cpu")]
 
 
 @pytest.mark.asyncio

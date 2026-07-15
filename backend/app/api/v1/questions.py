@@ -21,7 +21,7 @@ from app.ai.embeddings import (
     OpenAICompatibleEmbeddingProvider,
     get_local_embedding_provider,
 )
-from app.ai.rerankers import FakeRerankerProvider, LocalBgeRerankerProvider
+from app.ai.rerankers import FakeRerankerProvider, get_local_reranker_provider
 from app.ai.rewrite import ChatQuestionRewriter, FakeQuestionRewriter
 from app.api.auth_dependencies import get_current_user
 from app.api.sse import iter_sse
@@ -157,10 +157,10 @@ def get_question_reranker(
         return None
     if settings.rag_reranker_provider == "fake":
         return FakeRerankerProvider()
-    return LocalBgeRerankerProvider(
-        model_name=settings.rag_reranker_model,
-        device=settings.rag_reranker_device,
-        batch_size=settings.rag_reranker_batch_size,
+    return get_local_reranker_provider(
+        settings.rag_reranker_model,
+        settings.rag_reranker_device,
+        settings.rag_reranker_batch_size,
     )
 
 
