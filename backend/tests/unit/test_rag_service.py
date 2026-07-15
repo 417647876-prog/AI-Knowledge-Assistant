@@ -66,6 +66,18 @@ class RecordingRewriter:
         return self.result
 
 
+class FailingRewriter:
+    def __init__(self, code: str = "QUESTION_REWRITE_ERROR") -> None:
+        self.code = code
+
+    async def rewrite(
+        self,
+        history: list[ConversationMessage],
+        question: str,
+    ) -> str:
+        raise AppError(code=self.code, message="改写失败", status_code=502)
+
+
 class StreamingCountingChatProvider(CountingChatProvider):
     def __init__(self, answer: str, tokens: list[str]) -> None:
         super().__init__(answer)
@@ -170,7 +182,9 @@ async def test_answer_rejects_missing_knowledge_base() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_rewrites_retrieves_generates_citations_and_timings() -> None:
+async def test_stream_rewrites_retrieves_generates_citations_and_timings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     chunk = _chunk()
     rewriter = RecordingRewriter("向量检索有什么缺点？")
     chat = StreamingCountingChatProvider("unused", ["答案 [", "1]"])
@@ -190,6 +204,13 @@ async def test_stream_rewrites_retrieves_generates_citations_and_timings() -> No
         ConversationMessage(role="user", content="介绍向量检索"),
         ConversationMessage(role="assistant", content="它使用向量相似度"),
     ]
+    prompt_questions: list[str] = []
+
+    def recording_prompt(question: str, chunks: list[RetrievedChunk]) -> tuple[str, str]:
+        prompt_questions.append(question)
+        return "system", "user"
+
+    monkeypatch.setattr("app.rag.service.build_rag_prompt", recording_prompt)
 
     events = [item async for item in service.stream_answer(uuid4(), "它的缺点？", 5, history)]
 
@@ -204,7 +225,11 @@ async def test_stream_rewrites_retrieves_generates_citations_and_timings() -> No
         "citation",
         "done",
     ]
-    assert events[1].data["standalone_question"] == "向量检索有什么缺点？"
+    assert events[1].data == {
+        "standalone_question": "向量检索有什么缺点？",
+        "elapsed_ms": events[1].data["elapsed_ms"],
+        "used_fallback": False,
+    }
     assert events[3].data["retrieved_chunk_count"] == 1
     assert events[-1].data["timings"].keys() == {
         "rewrite_ms",
@@ -214,6 +239,115 @@ async def test_stream_rewrites_retrieves_generates_citations_and_timings() -> No
     }
     assert rewriter.calls == [(history, "它的缺点？")]
     assert retriever.calls[0]["query"] == "向量检索有什么缺点？"
+    assert prompt_questions == ["它的缺点？"]
+
+
+@pytest.mark.asyncio
+async def test_stream_with_history_skips_rewriter_for_complete_question() -> None:
+    rewriter = RecordingRewriter("不应调用")
+    retriever = StubRetriever([])
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=retriever,
+        chat_provider=StreamingCountingChatProvider("", []),
+        question_rewriter=rewriter,
+        score_threshold=0.55,
+    )
+    history = [
+        ConversationMessage(role="user", content="介绍年假制度"),
+        ConversationMessage(role="assistant", content="这是制度摘要"),
+    ]
+    question = "员工入职满一年有多少天带薪年假？"
+
+    events = [item async for item in service.stream_answer(uuid4(), question, 5, history)]
+
+    assert rewriter.calls == []
+    assert retriever.calls[0]["query"] == question
+    assert events[0].data == {
+        "standalone_question": question,
+        "elapsed_ms": 0,
+        "used_fallback": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_stream_falls_back_only_for_question_rewrite_error() -> None:
+    retriever = StubRetriever([])
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=retriever,
+        chat_provider=StreamingCountingChatProvider("", []),
+        question_rewriter=FailingRewriter(),
+        score_threshold=0.55,
+    )
+    history = [
+        ConversationMessage(role="user", content="介绍向量检索"),
+        ConversationMessage(role="assistant", content="它使用向量相似度"),
+    ]
+
+    events = [item async for item in service.stream_answer(uuid4(), "它有什么缺点？", 5, history)]
+    rewrite_event = next(item for item in events if item.event == "rewrite")
+
+    assert rewrite_event.data["standalone_question"] == "它有什么缺点？"
+    assert rewrite_event.data["used_fallback"] is True
+    assert retriever.calls[0]["query"] == "它有什么缺点？"
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_swallow_other_rewrite_errors() -> None:
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever([]),
+        chat_provider=StreamingCountingChatProvider("", []),
+        question_rewriter=FailingRewriter("OTHER_ERROR"),
+        score_threshold=0.55,
+    )
+    history = [
+        ConversationMessage(role="user", content="介绍向量检索"),
+        ConversationMessage(role="assistant", content="它使用向量相似度"),
+    ]
+
+    with pytest.raises(AppError) as captured:
+        _ = [item async for item in service.stream_answer(uuid4(), "它有什么缺点？", 5, history)]
+
+    assert captured.value.code == "OTHER_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_answer_with_retrieval_question_separates_retrieval_and_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunk = _chunk()
+    retriever = StubRetriever([chunk])
+    prompt_questions: list[str] = []
+
+    def recording_prompt(question: str, chunks: list[RetrievedChunk]) -> tuple[str, str]:
+        prompt_questions.append(question)
+        return "system", "user"
+
+    monkeypatch.setattr("app.rag.service.build_rag_prompt", recording_prompt)
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=retriever,
+        chat_provider=CountingChatProvider("答案。[1]"),
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+    )
+
+    result = await service.answer_with_retrieval_question(
+        uuid4(),
+        original_question="  它有什么缺点？  ",
+        retrieval_question="向量检索有什么缺点？",
+        top_k=5,
+    )
+
+    assert retriever.calls[0]["query"] == "向量检索有什么缺点？"
+    assert prompt_questions == ["它有什么缺点？"]
+    assert [item.document_id for item in result.citations] == [chunk.document_id]
 
 
 @pytest.mark.asyncio
@@ -234,7 +368,11 @@ async def test_stream_without_history_skips_rewriter_and_uses_zero_ms() -> None:
     events = [item async for item in service.stream_answer(uuid4(), "首问", 5, [])]
 
     assert events[0].event == "rewrite"
-    assert events[0].data == {"standalone_question": "首问", "elapsed_ms": 0}
+    assert events[0].data == {
+        "standalone_question": "首问",
+        "elapsed_ms": 0,
+        "used_fallback": False,
+    }
     assert "rewriting" not in [item.data.get("phase") for item in events]
     assert rewriter.calls == []
     assert [item.data.get("delta") for item in events if item.event == "token"] == [

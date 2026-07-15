@@ -222,7 +222,7 @@ async def answer_with_retrieval_question(
 
 `answer()` 使用相同的原问题和检索问题调用该方法，保持普通问答兼容；Task 5 的评估适配器使用不同的两个问题调用该方法，确保 Recall 和引用来自同一个实际检索问题。该方法属于后端应用内部接口，不新增 HTTP API。
 
-- [ ] **Step 1：写不触发、成功改写、改写异常回退和原问题回答测试**
+- [x] **Step 1：写不触发、成功改写、改写异常回退和原问题回答测试**
 
 关键断言：规则不触发时不会调用 `QuestionRewriter`；触发后 Retriever 收到独立问题；`build_rag_prompt` 收到原问题；`QUESTION_REWRITE_ERROR` 时 Retriever 收到原问题且流继续结束。
 
@@ -254,7 +254,7 @@ assert fallback_retriever.calls[0]["query"] == "它有什么缺点？"
 
 为 `answer_with_retrieval_question` 增加测试：Retriever 收到 `retrieval_question`，`build_rag_prompt` 收到 `original_question`，返回引用只能映射该次检索得到的片段。
 
-- [ ] **Step 2：实现 `policy -> rewrite or original -> retrieve -> answer`**
+- [x] **Step 2：实现 `policy -> rewrite or original -> retrieve -> answer`**
 
 回退只捕获 `AppError(code="QUESTION_REWRITE_ERROR")`。实现时保留两个明确变量：`original_question` 供回答使用，`standalone_question` 供 Embedding 和 Retriever 使用。`rewrite` 流事件必须包含实际使用的 `standalone_question`、`elapsed_ms` 和 `used_fallback: bool`；不得暴露原始历史文本。
 
@@ -292,7 +292,7 @@ yield StreamEvent(
 
 后续 `_retrieve` 必须使用 `standalone_question`；`build_rag_prompt` 必须使用 `original_question`。不要捕获 `Exception`，也不要把改写错误转成“回答失败”。
 
-- [ ] **Step 3：运行目标测试并提交**
+- [x] **Step 3：运行目标测试并提交**
 
 运行：`uv run pytest tests/unit/test_rag_service.py tests/unit/test_rag_streaming.py tests/unit/test_question_rewriter.py -q`
 

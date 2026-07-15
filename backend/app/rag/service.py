@@ -12,6 +12,7 @@ from app.ai.contracts import (
     RerankerProvider,
     StreamingChatProvider,
 )
+from app.ai.rewrite import should_rewrite
 from app.core.exceptions import AppError
 from app.core.request_context import get_request_id
 from app.db.models.knowledge_base import KnowledgeBase
@@ -143,9 +144,26 @@ class RagService:
         answer = await self._answer_from_chunks(question, chunks)
         return answer, chunks, retrieval_latency_ms
 
+    async def answer_with_retrieval_question(
+        self,
+        knowledge_base_id: UUID,
+        original_question: str,
+        retrieval_question: str,
+        top_k: int,
+    ) -> QuestionAnswer:
+        await self._ensure_knowledge_base(knowledge_base_id)
+        original_question = original_question.strip()
+        retrieval_question = retrieval_question.strip()
+        chunks = await self._retrieve(knowledge_base_id, retrieval_question, top_k)
+        return await self._answer_from_chunks(original_question, chunks)
+
     async def answer(self, knowledge_base_id: UUID, question: str, top_k: int) -> QuestionAnswer:
-        answer, _, _ = await self.answer_with_retrieval(knowledge_base_id, question, top_k)
-        return answer
+        return await self.answer_with_retrieval_question(
+            knowledge_base_id,
+            original_question=question,
+            retrieval_question=question,
+            top_k=top_k,
+        )
 
     async def stream_answer(
         self,
@@ -157,22 +175,36 @@ class RagService:
         total_started = perf_counter()
         await self._ensure_knowledge_base(knowledge_base_id)
 
-        if history:
+        original_question = question.strip()
+        standalone_question = original_question
+        used_fallback = False
+        rewrite_ms = 0
+
+        if should_rewrite(original_question, history):
             yield StreamEvent("status", {"phase": "rewriting"})
             rewrite_started = perf_counter()
-            standalone = await self._question_rewriter.rewrite(history, question)
+            try:
+                standalone_question = await self._question_rewriter.rewrite(
+                    history,
+                    original_question,
+                )
+            except AppError as error:
+                if error.code != "QUESTION_REWRITE_ERROR":
+                    raise
+                used_fallback = True
             rewrite_ms = _elapsed_ms(rewrite_started)
-        else:
-            standalone = question.strip()
-            rewrite_ms = 0
         yield StreamEvent(
             "rewrite",
-            {"standalone_question": standalone, "elapsed_ms": rewrite_ms},
+            {
+                "standalone_question": standalone_question,
+                "elapsed_ms": rewrite_ms,
+                "used_fallback": used_fallback,
+            },
         )
 
         yield StreamEvent("status", {"phase": "retrieving"})
         retrieval_started = perf_counter()
-        chunks = await self._retrieve(knowledge_base_id, standalone, top_k)
+        chunks = await self._retrieve(knowledge_base_id, standalone_question, top_k)
         retrieval_ms = _elapsed_ms(retrieval_started)
         yield StreamEvent(
             "retrieval",
@@ -197,7 +229,7 @@ class RagService:
             return
 
         yield StreamEvent("status", {"phase": "generating"})
-        system_prompt, user_prompt = build_rag_prompt(standalone, chunks)
+        system_prompt, user_prompt = build_rag_prompt(original_question, chunks)
         tracker = CitationTracker(chunks)
         generation_started = perf_counter()
         chat_stream = self._chat_provider.stream(system_prompt, user_prompt)
