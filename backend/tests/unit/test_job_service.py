@@ -59,6 +59,21 @@ def test_second_retryable_failure_waits_120_seconds() -> None:
     assert transition.run_after == now + timedelta(seconds=120)
 
 
+def test_retry_backoff_uses_runtime_configuration() -> None:
+    now = datetime(2026, 7, 16, 9, 0, tzinfo=UTC)
+
+    transition = failure_transition(
+        attempt_number=2,
+        max_attempts=4,
+        retryable=True,
+        now=now,
+        backoff_seconds=(7, 19),
+    )
+
+    assert transition.status == "retry_wait"
+    assert transition.run_after == now + timedelta(seconds=19)
+
+
 @pytest.mark.parametrize(
     ("attempt_number", "retryable"),
     [(3, True), (1, False)],

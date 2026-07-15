@@ -1,5 +1,6 @@
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -13,6 +14,7 @@ from app.db.models.document_job import DocumentJob
 from app.db.models.knowledge_base import KnowledgeBase
 from app.db.models.user import USER_ROLE, User
 from app.db.session import session_factory
+from app.jobs.repository import claim_next_job, complete_job
 from app.knowledge.chunking import RecursiveTextChunker
 from app.knowledge.ingestion_service import IngestionService
 from app.knowledge.parsers.registry import ParserRegistry
@@ -80,6 +82,16 @@ async def test_process_stores_vectors_and_is_safe_to_retry(
         session.add(job)
         await session.commit()
 
+        claim_at = datetime.now(UTC) + timedelta(seconds=1)
+        lease = await claim_next_job(
+            session,
+            worker_id="vector-ingestion-test",
+            now=claim_at,
+            lease_seconds=120,
+        )
+        await session.commit()
+        assert lease is not None
+
         service = IngestionService(
             session=session,
             upload_directory=tmp_path,
@@ -88,8 +100,24 @@ async def test_process_stores_vectors_and_is_safe_to_retry(
             embedding_provider=FakeEmbeddingProvider(dimensions=512),
             embedding_dimensions=512,
         )
-        await service.process(document.id)
-        await service.process(document.id)
+        chunk_count = await service.process(
+            document_id=document.id,
+            job_id=job.id,
+            lease_token=lease.lease_token,
+        )
+        await service.process(
+            document_id=document.id,
+            job_id=job.id,
+            lease_token=lease.lease_token,
+        )
+        assert await complete_job(
+            session,
+            job_id=job.id,
+            lease_token=lease.lease_token,
+            chunk_count=chunk_count,
+            now=claim_at + timedelta(seconds=1),
+        )
+        await session.commit()
 
         await session.refresh(document)
         await session.refresh(job)

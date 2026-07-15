@@ -6,10 +6,16 @@ from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.models.document import Document
 from app.db.models.document_job import DocumentJob
 from app.db.models.worker_heartbeat import WorkerHeartbeat
 from app.jobs.contracts import JobLease, JobStatus, JobType
-from app.jobs.service import failure_transition, sanitize_failure, should_retry_failure
+from app.jobs.service import (
+    RETRY_BACKOFF_SECONDS,
+    failure_transition,
+    sanitize_failure,
+    should_retry_failure,
+)
 
 CLAIM_CANDIDATE_SQL = """
 SELECT id
@@ -188,28 +194,28 @@ async def fail_job(
     message: str,
     retryable: bool,
     now: datetime,
+    retry_backoff_seconds: tuple[int, ...] = RETRY_BACKOFF_SECONDS,
 ) -> JobStatus:
-    attempt = (
-        await session.execute(
-            select(DocumentJob.attempt_count, DocumentJob.max_attempts)
-            .where(
-                DocumentJob.id == job_id,
-                DocumentJob.status == "processing",
-                DocumentJob.lease_token == lease_token,
-                DocumentJob.lease_expires_at >= now,
-            )
-            .with_for_update()
+    job = await session.scalar(
+        select(DocumentJob)
+        .where(
+            DocumentJob.id == job_id,
+            DocumentJob.status == "processing",
+            DocumentJob.lease_token == lease_token,
+            DocumentJob.lease_expires_at >= now,
         )
-    ).one_or_none()
-    if attempt is None:
+        .with_for_update()
+    )
+    if job is None:
         raise LeaseLostError("任务租约已失效")
 
     safe_code, safe_message = sanitize_failure(code, message)
     transition = failure_transition(
-        attempt_number=attempt.attempt_count,
-        max_attempts=attempt.max_attempts,
+        attempt_number=job.attempt_count,
+        max_attempts=job.max_attempts,
         retryable=should_retry_failure(safe_code, requested=retryable),
         now=now,
+        backoff_seconds=retry_backoff_seconds,
     )
     result = await session.execute(
         update(DocumentJob)
@@ -233,6 +239,20 @@ async def fail_job(
     )
     if result.rowcount != 1:
         raise LeaseLostError("任务租约已失效")
+    if (
+        transition.status == "failed"
+        and job.job_type == "ingest_document"
+        and job.resource_type == "document"
+    ):
+        await session.execute(
+            update(Document)
+            .where(Document.id == job.resource_id)
+            .values(
+                status="failed",
+                error_code=safe_code,
+                error_message=safe_message,
+            )
+        )
     return transition.status
 
 

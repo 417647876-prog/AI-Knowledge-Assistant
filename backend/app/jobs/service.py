@@ -44,12 +44,13 @@ def failure_transition(
     max_attempts: int,
     retryable: bool,
     now: datetime,
+    backoff_seconds: tuple[int, ...] = RETRY_BACKOFF_SECONDS,
 ) -> FailureTransition:
     if retryable and attempt_number < max_attempts:
-        backoff_index = min(attempt_number - 1, len(RETRY_BACKOFF_SECONDS) - 1)
+        backoff_index = min(attempt_number - 1, len(backoff_seconds) - 1)
         return FailureTransition(
             status="retry_wait",
-            run_after=now + timedelta(seconds=RETRY_BACKOFF_SECONDS[backoff_index]),
+            run_after=now + timedelta(seconds=backoff_seconds[backoff_index]),
         )
     return FailureTransition(status="failed", run_after=now)
 

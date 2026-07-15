@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.exceptions import AppError
 from app.db.session import session_factory as default_session_factory
 from app.jobs.contracts import JobLease
 from app.jobs.repository import (
@@ -21,6 +22,7 @@ from app.jobs.repository import (
     renew_lease,
 )
 from app.jobs.service import sanitize_failure
+from app.knowledge.background import process_ingest_document
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +163,9 @@ async def run_worker_iteration(
         if isinstance(error, JobExecutionError):
             code, message = sanitize_failure(error.code, error.user_message)
             retryable = error.retryable
+        elif isinstance(error, AppError):
+            code, message = sanitize_failure(error.code, error.message)
+            retryable = False
         else:
             code, message, retryable = "JOB_PROCESSING_ERROR", "任务处理失败。", False
         logger.error(
@@ -176,6 +181,7 @@ async def run_worker_iteration(
                 message=message,
                 retryable=retryable,
                 now=datetime.now(UTC),
+                retry_backoff_seconds=settings.job_retry_backoff_seconds,
             )
             await session.commit()
     finally:
@@ -225,6 +231,8 @@ async def run_worker(
 
 
 async def process_job(lease: JobLease) -> int:
+    if lease.job_type == "ingest_document":
+        return await process_ingest_document(lease, get_settings())
     raise JobExecutionError(
         code="JOB_HANDLER_UNAVAILABLE",
         message=f"任务类型 {lease.job_type} 暂不可处理。",

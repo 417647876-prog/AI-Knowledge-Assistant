@@ -257,6 +257,34 @@ async def test_worker_routes_retry_requested_permanent_error_through_repository_
 
 
 @pytest.mark.asyncio
+async def test_worker_passes_configured_retry_backoff_to_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _lease()
+    fail = AsyncMock(return_value="retry_wait")
+    monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=lease))
+    monkeypatch.setattr(worker_main, "fail_job", fail)
+    monkeypatch.setattr(worker_main, "renew_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    async def raises_timeout(_lease: JobLease) -> int:
+        raise worker_main.JobExecutionError(
+            code="MODEL_TIMEOUT",
+            message="上游超时",
+            retryable=True,
+        )
+
+    await worker_main.run_worker_iteration(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None, job_retry_backoff_seconds=(7, 19)),
+        worker_id="worker-a",
+        process_job=raises_timeout,
+    )
+
+    assert fail.await_args.kwargs["retry_backoff_seconds"] == (7, 19)
+
+
+@pytest.mark.asyncio
 async def test_empty_worker_loop_waits_poll_interval_and_stops(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -315,9 +343,34 @@ async def test_health_check_returns_false_when_database_is_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_default_processor_fails_closed_until_handler_is_registered() -> None:
+async def test_default_processor_routes_ingestion_to_registered_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _lease()
+    handler = AsyncMock(return_value=4)
+    monkeypatch.setattr(worker_main, "process_ingest_document", handler)
+
+    assert await worker_main.process_job(lease) == 4
+    handler.assert_awaited_once()
+    assert handler.await_args.args[0] == lease
+
+
+@pytest.mark.asyncio
+async def test_default_processor_fails_closed_for_unregistered_job_type() -> None:
+    lease = _lease()
+    unsupported_lease = JobLease(
+        job_id=lease.job_id,
+        job_type="purge_document",
+        resource_type=lease.resource_type,
+        resource_id=lease.resource_id,
+        owner_user_id=lease.owner_user_id,
+        knowledge_base_id=lease.knowledge_base_id,
+        attempt_number=lease.attempt_number,
+        lease_token=lease.lease_token,
+        lease_expires_at=lease.lease_expires_at,
+    )
     with pytest.raises(worker_main.JobExecutionError) as captured:
-        await worker_main.process_job(_lease())
+        await worker_main.process_job(unsupported_lease)
 
     assert captured.value.code == "JOB_HANDLER_UNAVAILABLE"
     assert captured.value.retryable is False

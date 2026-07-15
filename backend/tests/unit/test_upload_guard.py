@@ -5,7 +5,9 @@ from typing import Annotated
 from uuid import uuid4
 
 import pytest
-from fastapi import BackgroundTasks, Depends, FastAPI, File, UploadFile
+from fastapi import Depends, FastAPI, File, UploadFile
+from fastapi.responses import JSONResponse
+from starlette.background import BackgroundTask
 
 from app.api.middleware import UploadGuardMiddleware
 from app.core.config import Settings
@@ -72,7 +74,7 @@ def upload_path() -> str:
 
 
 @pytest.mark.asyncio
-async def test_upload_guard_sends_202_before_running_fastapi_background_tasks() -> None:
+async def test_upload_guard_sends_202_before_running_response_background_task() -> None:
     settings = Settings(_env_file=None, max_upload_bytes=1024, upload_multipart_overhead_bytes=1024)
     token = create_access_token(user_id=uuid4(), role="user", settings=settings)
     background_started = asyncio.Event()
@@ -87,12 +89,14 @@ async def test_upload_guard_sends_202_before_running_fastapi_background_tasks() 
     @app.post("/api/v1/knowledge-bases/{knowledge_base_id}/documents", status_code=202)
     async def upload(
         knowledge_base_id: str,
-        background_tasks: BackgroundTasks,
         file: Annotated[UploadFile, File()],
-    ) -> dict[str, str]:
+    ) -> JSONResponse:
         del knowledge_base_id, file
-        background_tasks.add_task(background_work)
-        return {"status": "pending"}
+        return JSONResponse(
+            {"status": "pending"},
+            status_code=202,
+            background=BackgroundTask(background_work),
+        )
 
     boundary = "background-boundary"
     body = (

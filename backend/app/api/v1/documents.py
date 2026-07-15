@@ -1,9 +1,10 @@
 import hashlib
+import logging
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,9 +18,10 @@ from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.db.models import Document, DocumentJob, User
 from app.db.session import get_session
-from app.knowledge.background import run_ingestion
+from app.jobs.repository import enqueue_job
 
 router = APIRouter(tags=["documents"])
+logger = logging.getLogger(__name__)
 _allowed_extensions = {".pdf", ".docx", ".xlsx", ".md", ".txt"}
 
 
@@ -37,13 +39,21 @@ class DocumentListResponse(BaseModel):
 
 
 def _document_response(document: Document, job: DocumentJob) -> DocumentTaskResponse:
+    if job.status == "failed":
+        status = "failed"
+        error_code = job.error_code
+        error_message = job.error_message
+    else:
+        status = document.status
+        error_code = document.error_code
+        error_message = document.error_message
     return DocumentTaskResponse(
         document_id=document.id,
         job_id=job.id,
         file_name=document.original_file_name,
-        status=document.status,
-        error_code=document.error_code,
-        error_message=document.error_message,
+        status=status,
+        error_code=error_code,
+        error_message=error_message,
     )
 
 
@@ -67,7 +77,6 @@ async def _latest_job(session: AsyncSession, document_id: UUID) -> DocumentJob |
 )
 async def upload_document(
     knowledge_base_id: UUID,
-    background_tasks: BackgroundTasks,
     file: Annotated[UploadFile, File()],
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -98,7 +107,16 @@ async def upload_document(
         )
     stored_file_name = f"{uuid4()}{extension}"
     settings.upload_directory.mkdir(parents=True, exist_ok=True)
-    (settings.upload_directory / stored_file_name).write_bytes(content)
+    stored_file = settings.upload_directory / stored_file_name
+    try:
+        stored_file.write_bytes(content)
+    except OSError as error:
+        stored_file.unlink(missing_ok=True)
+        raise AppError(
+            code="DOCUMENT_UPLOAD_FAILED",
+            message="文档上传失败，请稍后重试。",
+            status_code=500,
+        ) from error
     document = Document(
         knowledge_base_id=knowledge_base_id,
         original_file_name=file.filename or "upload",
@@ -108,19 +126,26 @@ async def upload_document(
         file_size=len(content),
         file_hash=file_hash,
     )
-    session.add(document)
-    await session.flush()
-    job = DocumentJob(
-        job_type="ingest_document",
-        resource_type="document",
-        resource_id=document.id,
-        owner_user_id=knowledge_base.owner_id,
-        knowledge_base_id=knowledge_base.id,
-        stage="parse",
-    )
-    session.add(job)
-    await session.commit()
-    background_tasks.add_task(run_ingestion, document.id)
+    try:
+        session.add(document)
+        await session.flush()
+        job = await enqueue_job(
+            session,
+            job_type="ingest_document",
+            resource_type="document",
+            resource_id=document.id,
+            owner_user_id=knowledge_base.owner_id,
+            knowledge_base_id=knowledge_base.id,
+            max_attempts=settings.job_max_attempts,
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        try:
+            stored_file.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("清理未入库的上传文件失败", extra={"file": stored_file_name})
+        raise
     return _document_response(document, job)
 
 
@@ -169,7 +194,6 @@ async def list_documents(
 )
 async def reprocess_document(
     document_id: UUID,
-    background_tasks: BackgroundTasks,
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> DocumentTaskResponse:
@@ -194,17 +218,16 @@ async def reprocess_document(
     document.status = "pending"
     document.error_code = None
     document.error_message = None
-    job = DocumentJob(
+    job = await enqueue_job(
+        session,
         job_type="ingest_document",
         resource_type="document",
         resource_id=document.id,
         owner_user_id=knowledge_base.owner_id,
         knowledge_base_id=knowledge_base.id,
-        stage="parse",
+        max_attempts=get_settings().job_max_attempts,
     )
-    session.add(job)
     await session.commit()
-    background_tasks.add_task(run_ingestion, document.id)
     return _document_response(document, job)
 
 
