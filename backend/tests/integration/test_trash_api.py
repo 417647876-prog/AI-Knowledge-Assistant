@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 from app.core.config import get_settings
 from app.core.security import create_access_token, hash_password
 from app.db.models import (
+    ADMIN_ROLE,
     USER_ROLE,
     AuditEvent,
     Document,
@@ -229,6 +230,128 @@ async def test_upload_same_hash_while_document_is_in_trash_is_rejected(
 
 
 @pytest.mark.asyncio
+async def test_other_owner_and_admin_cannot_see_or_mutate_trash_resources(
+    tmp_path, trash_context: TrashContext
+) -> None:
+    knowledge_base, document, _job = await _seed_document(trash_context.user.id, tmp_path)
+    assert (
+        await trash_context.client.delete(f"/api/v1/documents/{document.id}")
+    ).status_code == 204
+    attackers = [
+        User(
+            id=uuid4(),
+            username=f"trash_{role}_{uuid4().hex[:20]}",
+            password_hash=hash_password("correct horse battery"),
+            role=role,
+            is_active=True,
+        )
+        for role in (USER_ROLE, ADMIN_ROLE)
+    ]
+    async with session_factory.begin() as session:
+        session.add_all(attackers)
+
+    try:
+        for attacker in attackers:
+            token = create_access_token(
+                user_id=attacker.id,
+                role=attacker.role,
+                settings=get_settings(),
+            )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=create_app()),
+                base_url="http://test",
+                headers={"Authorization": f"Bearer {token}"},
+            ) as client:
+                trash = await client.get("/api/v1/trash")
+                assert trash.status_code == 200
+                assert str(document.id) not in trash.text
+                assert str(knowledge_base.id) not in trash.text
+
+                operations = [
+                    ("DELETE", f"/api/v1/documents/{document.id}", "DOCUMENT_NOT_FOUND"),
+                    (
+                        "POST",
+                        f"/api/v1/documents/{document.id}/restore",
+                        "DOCUMENT_NOT_FOUND",
+                    ),
+                    (
+                        "DELETE",
+                        f"/api/v1/documents/{document.id}/purge",
+                        "DOCUMENT_NOT_FOUND",
+                    ),
+                    (
+                        "DELETE",
+                        f"/api/v1/knowledge-bases/{knowledge_base.id}",
+                        "KNOWLEDGE_BASE_NOT_FOUND",
+                    ),
+                    (
+                        "POST",
+                        f"/api/v1/knowledge-bases/{knowledge_base.id}/restore",
+                        "KNOWLEDGE_BASE_NOT_FOUND",
+                    ),
+                    (
+                        "DELETE",
+                        f"/api/v1/knowledge-bases/{knowledge_base.id}/purge",
+                        "KNOWLEDGE_BASE_NOT_FOUND",
+                    ),
+                ]
+                for method, path, error_code in operations:
+                    response = await client.request(method, path)
+                    assert response.status_code == 404
+                    assert response.json()["error"]["code"] == error_code
+    finally:
+        attacker_ids = [attacker.id for attacker in attackers]
+        async with session_factory.begin() as session:
+            await session.execute(
+                delete(AuditEvent).where(AuditEvent.actor_user_id.in_(attacker_ids))
+            )
+            await session.execute(delete(User).where(User.id.in_(attacker_ids)))
+
+
+@pytest.mark.asyncio
+async def test_upload_same_hash_after_tombstone_retention_expired_is_allowed(
+    tmp_path, trash_context: TrashContext
+) -> None:
+    knowledge_base, document, _job = await _seed_document(trash_context.user.id, tmp_path)
+    settings = get_settings()
+    previous_upload_directory = settings.upload_directory
+    settings.upload_directory = tmp_path
+    try:
+        await trash_context.client.delete(f"/api/v1/documents/{document.id}")
+        async with session_factory.begin() as session:
+            expired = await session.get(Document, document.id, with_for_update=True)
+            assert expired is not None
+            expired.deleted_at = datetime.now(UTC) - timedelta(days=8)
+            expired.purge_after = datetime.now(UTC) - timedelta(days=1)
+        response = await trash_context.client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base.id}/documents",
+            files={"file": ("重新上传.txt", "相同内容", "text/plain")},
+        )
+    finally:
+        settings.upload_directory = previous_upload_directory
+
+    assert response.status_code == 202
+    assert response.json()["document_id"] != str(document.id)
+
+
+@pytest.mark.asyncio
+async def test_maintenance_cannot_shorten_document_purge_retention(
+    tmp_path, trash_context: TrashContext
+) -> None:
+    _knowledge_base, document, _job = await _seed_document(trash_context.user.id, tmp_path)
+    await trash_context.client.delete(f"/api/v1/documents/{document.id}")
+    async with session_factory.begin() as session:
+        shortened = await session.get(Document, document.id, with_for_update=True)
+        assert shortened is not None
+        shortened.purge_after = datetime.now(UTC) - timedelta(seconds=1)
+
+    response = await trash_context.client.delete(f"/api/v1/documents/{document.id}/purge")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "PURGE_RETENTION_ACTIVE"
+
+
+@pytest.mark.asyncio
 async def test_restore_document_conflict_does_not_modify_deleted_document(
     tmp_path, trash_context: TrashContext
 ) -> None:
@@ -305,6 +428,7 @@ async def test_restore_expires_and_purge_request_is_idempotent_only_after_deadli
     async with session_factory.begin() as session:
         persisted = await session.get(Document, document.id, with_for_update=True)
         assert persisted is not None
+        persisted.deleted_at = datetime.now(UTC) - timedelta(days=8)
         persisted.purge_after = datetime.now(UTC) - timedelta(seconds=1)
 
     expired_restore, first, second = await asyncio.gather(

@@ -78,7 +78,43 @@ async def test_worker_iteration_claims_at_most_one_job(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_worker_does_not_complete_a_purge_job_deleted_by_its_handler(
+async def test_worker_completes_purge_when_handler_returns_plain_chunk_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = _lease()
+    lease = JobLease(
+        job_id=original.job_id,
+        job_type="purge_document",
+        resource_type="document",
+        resource_id=original.resource_id,
+        owner_user_id=original.owner_user_id,
+        knowledge_base_id=original.knowledge_base_id,
+        attempt_number=original.attempt_number,
+        lease_token=original.lease_token,
+        lease_expires_at=original.lease_expires_at,
+    )
+    complete = AsyncMock(return_value=True)
+    fail = AsyncMock()
+    monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=lease))
+    monkeypatch.setattr(worker_main, "complete_job", complete)
+    monkeypatch.setattr(worker_main, "fail_job", fail)
+    monkeypatch.setattr(worker_main, "renew_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    processed = await worker_main.run_worker_iteration(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None),
+        worker_id="worker-a",
+        process_job=AsyncMock(return_value=0),
+    )
+
+    assert processed is True
+    complete.assert_awaited_once()
+    fail.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_worker_skips_complete_only_for_explicit_handler_finalized_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original = _lease()
@@ -101,11 +137,15 @@ async def test_worker_does_not_complete_a_purge_job_deleted_by_its_handler(
     monkeypatch.setattr(worker_main, "renew_lease", AsyncMock(return_value=True))
     monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
 
+    result = worker_main.ProcessResult(
+        chunk_count=0,
+        completion_mode=worker_main.HANDLER_FINALIZED,
+    )
     processed = await worker_main.run_worker_iteration(
         session_factory=_SessionFactory(),
         settings=Settings(_env_file=None),
         worker_id="worker-a",
-        process_job=AsyncMock(return_value=0),
+        process_job=AsyncMock(return_value=result),
     )
 
     assert processed is True

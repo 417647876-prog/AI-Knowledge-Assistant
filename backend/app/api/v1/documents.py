@@ -1,12 +1,13 @@
 import hashlib
 import logging
+from datetime import timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Response, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
@@ -120,15 +121,33 @@ async def upload_document(
         raise AppError(
             code="DUPLICATE_DOCUMENT", message="该知识库已上传相同文件。", status_code=409
         )
-    trashed_duplicate = await session.scalar(
-        select(Document.id).where(
-            Document.knowledge_base_id == knowledge_base_id,
-            Document.file_hash == file_hash,
-            Document.deleted_at.is_not(None),
+    trashed_duplicates = (
+        await session.scalars(
+            select(Document).where(
+                Document.knowledge_base_id == knowledge_base_id,
+                Document.file_hash == file_hash,
+                Document.deleted_at.is_not(None),
+            )
         )
+    ).all()
+    database_now = await session.scalar(select(func.clock_timestamp()))
+    assert database_now is not None
+    recoverable_duplicate = next(
+        (
+            item
+            for item in trashed_duplicates
+            if item.deleted_at is not None
+            and max(
+                item.purge_after or item.deleted_at + timedelta(days=settings.trash_retention_days),
+                item.deleted_at + timedelta(days=settings.trash_retention_days),
+            )
+            > database_now
+        ),
+        None,
     )
-    if trashed_duplicate is not None:
+    if recoverable_duplicate is not None:
         actor_user_id = current_user.id
+        recoverable_duplicate_id = recoverable_duplicate.id
         error = AppError(
             code="DOCUMENT_IN_TRASH",
             message="相同文件仍在回收站中，请先恢复或永久清理。",
@@ -139,7 +158,7 @@ async def upload_document(
             actor_user_id=actor_user_id,
             action="document.upload",
             resource_type="document",
-            resource_id=trashed_duplicate,
+            resource_id=recoverable_duplicate_id,
             security_summary={"reason": error.code},
         )
         raise error
@@ -343,6 +362,7 @@ async def purge_deleted_document(
             owner_user_id=current_user.id,
             document_id=document_id,
             max_attempts=get_settings().job_max_attempts,
+            retention_days=get_settings().trash_retention_days,
         )
         await session.commit()
     except AppError as error:

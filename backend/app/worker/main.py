@@ -12,7 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError
 from app.db.session import session_factory as default_session_factory
-from app.jobs.contracts import JobLease
+from app.jobs.contracts import (
+    HANDLER_FINALIZED,
+    WORKER_COMPLETES,
+    JobLease,
+    ProcessResult,
+)
 from app.jobs.repository import (
     LeaseLostError,
     claim_next_job,
@@ -32,7 +37,7 @@ class SessionFactory(Protocol):
     def __call__(self) -> AsyncSession: ...
 
 
-ProcessJob = Callable[[JobLease], Awaitable[int]]
+ProcessJob = Callable[[JobLease], Awaitable[int | ProcessResult]]
 WaitForStop = Callable[[asyncio.Event, float], Awaitable[bool]]
 
 
@@ -144,14 +149,22 @@ async def run_worker_iteration(
             await asyncio.gather(processor, return_exceptions=True)
             return True
 
-        chunk_count = await processor
-        if lease.job_type not in ("purge_document", "purge_knowledge_base"):
+        raw_result = await processor
+        result = (
+            raw_result
+            if isinstance(raw_result, ProcessResult)
+            else ProcessResult(
+                chunk_count=raw_result,
+                completion_mode=WORKER_COMPLETES,
+            )
+        )
+        if result.completion_mode != HANDLER_FINALIZED:
             async with session_factory() as session:
                 completed = await complete_job(
                     session,
                     job_id=lease.job_id,
                     lease_token=lease.lease_token,
-                    chunk_count=chunk_count,
+                    chunk_count=result.chunk_count,
                     now=datetime.now(UTC),
                 )
                 await session.commit()
@@ -242,7 +255,7 @@ async def run_worker(
             await wait_for_stop(stop_event, settings.worker_poll_seconds)
 
 
-async def process_job(lease: JobLease) -> int:
+async def process_job(lease: JobLease) -> int | ProcessResult:
     settings = get_settings()
     if lease.job_type == "ingest_document":
         return await process_ingest_document(lease, settings)
@@ -251,12 +264,14 @@ async def process_job(lease: JobLease) -> int:
             session_factory=default_session_factory,
             upload_directory=settings.upload_directory,
             lease=lease,
+            retention_days=settings.trash_retention_days,
         )
     if lease.job_type == "purge_knowledge_base":
         return await purge_knowledge_base(
             session_factory=default_session_factory,
             upload_directory=settings.upload_directory,
             lease=lease,
+            retention_days=settings.trash_retention_days,
         )
     raise JobExecutionError(
         code="JOB_HANDLER_UNAVAILABLE",

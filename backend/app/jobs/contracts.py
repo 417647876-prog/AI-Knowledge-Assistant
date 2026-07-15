@@ -16,6 +16,21 @@ JobStatus = Literal[
     "failed",
     "canceled",
 ]
+CompletionMode = Literal["worker_completes", "handler_finalized"]
+WORKER_COMPLETES: CompletionMode = "worker_completes"
+HANDLER_FINALIZED: CompletionMode = "handler_finalized"
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessResult:
+    chunk_count: int
+    completion_mode: CompletionMode = WORKER_COMPLETES
+
+    def __post_init__(self) -> None:
+        if self.chunk_count < 0:
+            raise ValueError("chunk_count 不能小于 0")
+        if self.completion_mode not in (WORKER_COMPLETES, HANDLER_FINALIZED):
+            raise ValueError("未知的任务完成模式")
 
 
 @dataclass(frozen=True, slots=True)
