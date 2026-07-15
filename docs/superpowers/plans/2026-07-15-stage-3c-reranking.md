@@ -100,13 +100,13 @@ class LocalBgeRerankerProvider:
     async def rerank(self, query: str, documents: list[str]) -> list[float]: ...
 ```
 
-- [ ] **Step 1：Fake Provider 写固定分数和默认递减分数测试**
-- [ ] **Step 2：给本地 Provider 注入假的 CrossEncoder，测试参数与线程执行**
-- [ ] **Step 3：实现惰性加载和 `asyncio.to_thread`**
+- [x] **Step 1：Fake Provider 写固定分数和默认递减分数测试**
+- [x] **Step 2：给本地 Provider 注入假的 CrossEncoder，测试参数与线程执行**
+- [x] **Step 3：实现惰性加载和 `asyncio.to_thread`**
 
 本地预测输入固定为 `[[query, document], ...]`；`device=auto` 时按 CUDA 可用性解析为 `cuda` 或 `cpu`，不把字符串 `auto` 直接传给 CrossEncoder；空文档列表直接返回空列表；底层异常转换为 `RERANKER_PROVIDER_ERROR`，不暴露模型缓存路径或请求文本。
 
-- [ ] **Step 4：验证不下载模型的单元测试并提交**
+- [x] **Step 4：验证不下载模型的单元测试并提交**
 
 运行：`uv run pytest tests/unit/test_reranker_providers.py -q`
 

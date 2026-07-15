@@ -1,0 +1,83 @@
+import asyncio
+from collections.abc import Callable
+from typing import Any
+
+from app.core.exceptions import AppError
+
+
+def _provider_error() -> AppError:
+    return AppError(
+        code="RERANKER_PROVIDER_ERROR",
+        message="重排序服务暂不可用。",
+        status_code=502,
+    )
+
+
+def _load_cross_encoder(model_name: str, device: str) -> Any:
+    from sentence_transformers import CrossEncoder
+
+    return CrossEncoder(model_name, device=device)
+
+
+def _resolve_device(device: str) -> str:
+    if device != "auto":
+        return device
+    import torch
+
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+class FakeRerankerProvider:
+    def __init__(self, scores: list[float] | None = None) -> None:
+        self._scores = list(scores) if scores is not None else None
+
+    async def rerank(self, query: str, documents: list[str]) -> list[float]:
+        if not documents:
+            return []
+        if self._scores is not None:
+            return list(self._scores)
+        return [float(score) for score in range(len(documents), 0, -1)]
+
+
+class LocalBgeRerankerProvider:
+    def __init__(
+        self,
+        *,
+        model_name: str,
+        device: str,
+        batch_size: int,
+        model_factory: Callable[[str, str], Any] | None = None,
+    ) -> None:
+        self._model_name = model_name
+        self._device = device
+        self._batch_size = batch_size
+        self._model_factory = model_factory or _load_cross_encoder
+        self._model: Any | None = None
+        self._model_lock = asyncio.Lock()
+
+    async def _get_model(self) -> Any:
+        if self._model is not None:
+            return self._model
+        async with self._model_lock:
+            if self._model is None:
+                device = await asyncio.to_thread(_resolve_device, self._device)
+                self._model = await asyncio.to_thread(self._model_factory, self._model_name, device)
+        return self._model
+
+    async def rerank(self, query: str, documents: list[str]) -> list[float]:
+        if not documents:
+            return []
+        try:
+            model = await self._get_model()
+            pairs = [[query, document] for document in documents]
+            result = await asyncio.to_thread(
+                model.predict,
+                pairs,
+                batch_size=self._batch_size,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            )
+            raw_scores = result.tolist() if hasattr(result, "tolist") else result
+            return [float(score) for score in raw_scores]
+        except Exception as error:
+            raise _provider_error() from error
