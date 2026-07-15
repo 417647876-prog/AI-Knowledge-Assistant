@@ -1408,7 +1408,7 @@ git commit -m "feat: 编排第三阶段一键质量验收"
 - Consumes: Task 1～4 的完整 CLI、真实知识库 `f1279eb3-dcfd-490e-ad33-973e23df5e5e`、固定 30 条 `stage3.jsonl`。
 - Produces: 真实四模式证据、正式脱敏报告、五分钟演示、第三阶段最终状态和最后提交。
 
-- [ ] **Step 1：执行前安全检查**
+- [x] **Step 1：执行前安全检查**
 
 Run:
 
@@ -1425,7 +1425,7 @@ Test-Path D:\学习\AI-Knowledge-Assistant\.worktrees\stage-2d-question-experien
 
 Expected: 分支正确，工作树仅有预期 Task 5 文档状态或为空，三个 `Test-Path` 都是 True。不读取、不打印 `.env` 内容。
 
-- [ ] **Step 2：运行真实四模式一键验收**
+- [x] **Step 2：运行真实四模式一键验收**
 
 在 `backend` 目录执行；`uv --env-file` 只把既有环境加载到当前子进程，不复制配置文件：
 
@@ -1449,7 +1449,7 @@ Expected:
 - 返回 1 时按输入/环境/快照错误诊断，修复后从聚焦测试重跑。
 - 返回 2 时保留真实失败报告，3E 保持进行中；不得改数据集、策略阈值或 Markdown 制造通过。
 
-- [ ] **Step 3：独立校验 manifest、同源性和最终门**
+- [x] **Step 3：独立校验 manifest、同源性和最终门**
 
 用内联 Python 只输出非敏感摘要：
 
@@ -1511,7 +1511,7 @@ print(
 
 Expected: 所有断言通过，只输出 run ID、12 位快照、rewrite 三项指标、3C 状态和 passed。
 
-- [ ] **Step 4：运行后端全量、Ruff 和格式检查**
+- [x] **Step 4：运行后端全量、Ruff 和格式检查**
 
 Run:
 
@@ -1523,7 +1523,7 @@ uv run ruff format --check app tests migrations scripts
 
 Expected: 全量 pytest、Ruff check 和 format check 通过；记录本轮真实 passed、skipped 和文件数，不沿用 3D 数字。
 
-- [ ] **Step 5：临时空库验证从零迁移、全部 integration、降级和重升级**
+- [x] **Step 5：临时空库验证从零迁移、全部 integration、降级和重升级**
 
 从仓库根目录执行，`finally` 必须运行：
 
@@ -1556,7 +1556,7 @@ finally {
 
 Expected: 空库升级到 head，全部 integration PASS，可降级到 `20260714_04` 并重新升级，最后输出 `temporary database remaining: 0`。
 
-- [ ] **Step 6：运行前端全量测试与生产构建**
+- [x] **Step 6：运行前端全量测试与生产构建**
 
 Run:
 
@@ -1568,7 +1568,7 @@ npm.cmd run build
 
 Expected: 全量 Vitest PASS，Vue TypeScript 检查和 Vite build 成功；记录真实测试文件数和测试数。
 
-- [ ] **Step 7：正式报告隐私与一致性复核**
+- [x] **Step 7：正式报告隐私与一致性复核**
 
 Run:
 
@@ -1586,7 +1586,7 @@ Expected:
 - 3C 豁免、严格边界、推荐 rewrite 和回退 vector 都存在。
 - 正式报告不得手工改写机器生成指标；修正时先改渲染器测试，再重跑一键验收。
 
-- [ ] **Step 8：编写五分钟演示文档**
+- [x] **Step 8：编写五分钟演示文档**
 
 创建 `docs/阶段3验证与演示.md`，固定结构：
 
@@ -1604,7 +1604,7 @@ Expected:
 6. 失败演示：解释退出码 1/2，不破坏数据库或策略。
 7. 回退：使用既有 `RAG_RETRIEVAL_MODE=vector`，Reranker disabled，不改数据库 schema。
 
-- [ ] **Step 9：更新 README 和学习笔记**
+- [x] **Step 9：更新 README 和学习笔记**
 
 `README.md` 增加“阶段 3 RAG 质量验收”：
 
@@ -1621,7 +1621,7 @@ Expected:
 - 3C waiver 类比受条件限制的风险签字，不等于测试通过。
 - 解释最终绝对门只验收 rewrite，以及保留 vector 回退的原因。
 
-- [ ] **Step 10：完成前总审查**
+- [x] **Step 10：完成前总审查**
 
 Run:
 
@@ -1645,7 +1645,7 @@ git ls-files backend/reports
 - HTTP/SSE、前端交互、数据库 schema 和固定数据集没有无关修改。
 - 任一 gate 或自动验证失败时停止收口，保持进行中并记录失败。
 
-- [ ] **Step 11：更新最终进度与计划**
+- [x] **Step 11：更新最终进度与计划**
 
 只有 Steps 2～10 全部通过时：
 
@@ -1656,7 +1656,7 @@ git ls-files backend/reports
 - “继续执行时的最小提示”改为“第三阶段已完成；下一阶段必须另行设计和确认”，不得标记下一阶段开始。
 - 勾选本计划 Task 5 全部步骤，并记录真实验收摘要。
 
-- [ ] **Step 12：提交第三阶段收口**
+- [x] **Step 12：提交第三阶段收口**
 
 Run:
 
@@ -1670,6 +1670,13 @@ git log -5 --oneline
 ```
 
 Expected: staged diff 通过，提交成功，工作树干净，最近 5 个提交包含 3E 的五个独立 Task 提交。
+
+真实验收摘要（2026-07-15）：`accept_stage3` 返回 0；run ID 为
+`23905267-22bf-4052-b232-fcb85704c297`，知识库快照前 12 位为 `14bb9872935d`；rewrite
+Recall@5 为 96.67%、引用命中率为 100.00%、拒答准确率为 96.67%。3C MRR gate 为
+`waived`，其余 11 个 gate 为 `passed`。后端 396 passed / 61 skipped，临时空库 61 个
+integration passed，迁移降级/升级成功且临时库残留 0；前端 24 个测试文件、170 项测试和
+生产构建通过；Ruff check 与 155 个文件 format check 通过。
 
 ---
 
