@@ -17,6 +17,7 @@
 - 阶段 3B：PostgreSQL 中文关键词检索、向量/关键词 RRF 融合与质量验收。
 - 阶段 3C：本地 BGE Reranker、接受门校准与生产安全回退；MRR 质量门由用户明确豁免。
 - 阶段 3D：选择性多轮问题改写、精确失败回退、SSE 展示与真实质量门验收。
+- 阶段 3E：同快照四模式综合验收、12 个质量门、原子 manifest 和脱敏中文报告。
 
 当前闭环为：管理员初始化账号 → 用户登录 → 创建自己的知识库 → 上传文档 → 解析和向量入库 → 检索问答 → 返回可追溯引用。系统不提供公开注册，普通用户只能访问自己的资源，管理员可以查看和操作全部知识库。
 
@@ -155,7 +156,41 @@ Remove-Item Env:EVALUATION_KNOWLEDGE_BASE_ID
 多轮质量门使用 `ceiling_aware_target(83.33%, 15 个百分点)` 得到 98.33%，rewrite 实测 100%，
 提升 16.67 个百分点并通过。rewrite 的引用命中率和拒答准确率也都不低于 3C 正式报告的
 93.33%。延迟是本次真实 CPU 运行的观测值，不作为 3D 通过条件；报告不会记录数据库连接串或
-API Key。阶段 3D 已完成，阶段 3E 仍未开始。
+API Key。阶段 3D 已完成；最终综合指标和阶段 3 收口结论见下一节。
+
+## 阶段 3 RAG 质量验收
+
+阶段 3E 用同一份 30 条数据、同一个 run ID 和同一个知识库快照，按
+`vector → hybrid → rerank → rewrite` 顺序生成四份 schema 1.1 报告，再自动计算 3A～3E 的
+12 个质量门。2026-07-15 的最终 rewrite 指标为 Recall@5 96.67%、引用命中率 100.00%、
+拒答准确率 96.67%，三项绝对门均通过。
+
+3C 的 MRR 相对提升仍是 0.00%，没有达到至少 5% 的原质量门，因此结论始终是
+“质量门未通过、已获风险豁免”，不等于技术通过。豁免只在 MRR 不负增长且引用不下降时适用。
+最终推荐 `rewrite`；当本地重排或问题改写链路需要故障隔离时，回退到 `vector`。
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Set-Location backend
+$env:STAGE3_KNOWLEDGE_BASE_ID = "准备好的评估知识库 UUID"
+uv run python -m scripts.accept_stage3 `
+  --dataset tests/fixtures/evaluation/stage3.jsonl `
+  --knowledge-base-id $env:STAGE3_KNOWLEDGE_BASE_ID `
+  --policy config/evaluation/stage3-quality-policy.json `
+  --reports-dir reports `
+  --markdown-output ..\docs\阶段3质量验收报告.md
+$acceptanceExitCode = $LASTEXITCODE
+Remove-Item Env:STAGE3_KNOWLEDGE_BASE_ID
+Write-Output "accept_stage3 exit code: $acceptanceExitCode"
+```
+
+退出码 `0` 表示所有非豁免质量门通过，`1` 表示输入、环境、快照或输出错误，`2` 表示存在未豁免
+的质量门失败。质量失败仍会保留产物用于诊断，不应修改固定数据集或策略阈值制造通过。
+
+四份 JSON 和 `stage3e-manifest.json` 保存在被 Git 忽略的 `backend/reports`，只作为本地原始证据；
+可提交的公开材料是[阶段 3 质量验收报告](docs/阶段3质量验收报告.md)和
+[阶段 3 验证与演示](docs/阶段3验证与演示.md)。manifest 最后写入，并记录五个公开产物的
+SHA-256，便于判断一组报告是否完整且同源。
 
 ## 本地启动
 

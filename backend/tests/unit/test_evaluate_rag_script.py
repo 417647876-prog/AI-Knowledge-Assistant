@@ -1,5 +1,6 @@
 import asyncio
 import json
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -9,6 +10,7 @@ from app.ai.rerankers import FakeRerankerProvider
 from app.core.config import Settings
 from app.core.exceptions import AppError
 from app.evaluation.schemas import CaseResult, EvaluationCase, EvaluationReport
+from app.evaluation.snapshot import KnowledgeBaseSnapshot
 from app.rag.schemas import QuestionAnswer, RetrievedChunk
 from app.rag.service import RagService
 from scripts.evaluate_rag import (
@@ -115,6 +117,76 @@ class FailingQuestionRewriter:
         raise AppError(code=self.code, message="改写失败", status_code=502)
 
 
+def make_test_report(mode: str = "vector") -> EvaluationReport:
+    return EvaluationReport(
+        mode=mode,
+        dataset_sha256="a" * 64,
+        top_k=5,
+        case_count=1,
+        recall_at_5=1.0,
+        mrr_at_5=1.0,
+        citation_hit_rate=1.0,
+        refusal_accuracy=1.0,
+        latency_p50_ms=1.0,
+        latency_p95_ms=1.0,
+        environment={},
+        cases=[
+            CaseResult(
+                case_id="keyword-001",
+                category="keyword",
+                retrieved_files=["员工手册.txt"],
+                citation_files=["员工手册.txt"],
+                accepted_chunk_count=1,
+                recall_at_k=1.0,
+                reciprocal_rank=1.0,
+                citation_hit_rate=1.0,
+                refused=False,
+                refusal_correct=True,
+                latency_ms=1.0,
+            )
+        ],
+    )
+
+
+def stub_run_from_args_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    report: EvaluationReport,
+) -> None:
+    async def dependency():
+        yield object()
+
+    async def get_rewriter(settings, chat_provider):
+        return object()
+
+    class SessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc_value, traceback):
+            return None
+
+    async def fake_run_evaluation(**kwargs) -> EvaluationReport:
+        return report
+
+    monkeypatch.setattr(
+        "scripts.evaluate_rag.get_question_embedding_provider",
+        lambda settings: dependency(),
+    )
+    monkeypatch.setattr(
+        "scripts.evaluate_rag.get_question_chat_provider",
+        lambda settings: dependency(),
+    )
+    monkeypatch.setattr("scripts.evaluate_rag.get_question_rewriter", get_rewriter)
+    monkeypatch.setattr("scripts.evaluate_rag.get_question_reranker", lambda settings: object())
+    monkeypatch.setattr("scripts.evaluate_rag.session_factory", SessionContext)
+    monkeypatch.setattr(
+        "scripts.evaluate_rag.build_retriever",
+        lambda session, settings: object(),
+    )
+    monkeypatch.setattr("scripts.evaluate_rag.RagService", lambda **kwargs: object())
+    monkeypatch.setattr("scripts.evaluate_rag.run_evaluation", fake_run_evaluation)
+
+
 def test_parse_args_accepts_vector_baseline_inputs() -> None:
     knowledge_base_id = uuid4()
 
@@ -177,6 +249,23 @@ def test_parse_args_accepts_vector_baseline_inputs() -> None:
         ]
     )
     assert rewrite_args.mode == "rewrite"
+
+
+def test_existing_single_mode_cli_remains_flat() -> None:
+    args = parse_args(
+        [
+            "--dataset",
+            "stage3.jsonl",
+            "--knowledge-base-id",
+            str(uuid4()),
+            "--mode",
+            "rewrite",
+            "--output",
+            "rewrite.json",
+        ]
+    )
+
+    assert args.mode == "rewrite"
 
 
 def test_parse_args_rejects_unknown_mode_and_top_k_below_five() -> None:
@@ -542,20 +631,7 @@ async def test_run_from_args_injects_reranker_acceptance_threshold(
         return object()
 
     async def fake_run_evaluation(**kwargs) -> EvaluationReport:
-        return EvaluationReport(
-            mode="rerank",
-            dataset_sha256="a" * 64,
-            top_k=5,
-            case_count=1,
-            recall_at_5=1.0,
-            mrr_at_5=1.0,
-            citation_hit_rate=1.0,
-            refusal_accuracy=1.0,
-            latency_p50_ms=1.0,
-            latency_p95_ms=1.0,
-            environment={},
-            cases=[],
-        )
+        return make_test_report("rerank")
 
     monkeypatch.setattr(
         "scripts.evaluate_rag.get_question_embedding_provider", lambda settings: dependency()
@@ -585,9 +661,157 @@ async def test_run_from_args_injects_reranker_acceptance_threshold(
             "reports/stage3c-rerank.json",
         ]
     )
+    snapshot = KnowledgeBaseSnapshot(
+        knowledge_base_id=args.knowledge_base_id,
+        snapshot_sha256="c" * 64,
+        document_count=5,
+        chunk_count=13,
+    )
+    monkeypatch.setattr(
+        "scripts.evaluate_rag.compute_knowledge_base_snapshot",
+        AsyncMock(return_value=snapshot),
+    )
     await run_from_args(args, Settings(_env_file=None, rag_reranker_min_score=-0.25))
 
     assert captured_service_kwargs["reranker_min_score"] == -0.25
+
+
+@pytest.mark.asyncio
+async def test_run_from_args_returns_report_11_with_shared_run_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    knowledge_base_id = uuid4()
+    run_id = uuid4()
+    expected_snapshot = KnowledgeBaseSnapshot(
+        knowledge_base_id=knowledge_base_id,
+        snapshot_sha256="d" * 64,
+        document_count=5,
+        chunk_count=13,
+    )
+    snapshots = AsyncMock(side_effect=[expected_snapshot, expected_snapshot])
+    stub_run_from_args_dependencies(monkeypatch, make_test_report())
+    monkeypatch.setattr(
+        "scripts.evaluate_rag.compute_knowledge_base_snapshot",
+        snapshots,
+        raising=False,
+    )
+    args = parse_args(
+        [
+            "--dataset",
+            "tests/fixtures/evaluation/stage3.jsonl",
+            "--knowledge-base-id",
+            str(knowledge_base_id),
+            "--mode",
+            "vector",
+            "--output",
+            "reports/stage3e-vector.json",
+        ]
+    )
+
+    report = await run_from_args(
+        args,
+        Settings(_env_file=None),
+        run_id=run_id,
+        expected_snapshot=expected_snapshot,
+    )
+
+    assert report.schema_version == "1.1"
+    assert report.provenance is not None
+    assert report.provenance.run_id == run_id
+    assert report.provenance.knowledge_base_id == knowledge_base_id
+    assert report.provenance.snapshot_sha256 == "d" * 64
+    assert report.provenance.document_count == 5
+    assert report.provenance.chunk_count == 13
+    assert report.provenance.generated_at.tzinfo is not None
+    assert snapshots.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_from_args_rejects_snapshot_that_differs_from_acceptance_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    knowledge_base_id = uuid4()
+    expected_snapshot = KnowledgeBaseSnapshot(
+        knowledge_base_id=knowledge_base_id,
+        snapshot_sha256="a" * 64,
+        document_count=5,
+        chunk_count=13,
+    )
+    actual_snapshot = KnowledgeBaseSnapshot(
+        knowledge_base_id=knowledge_base_id,
+        snapshot_sha256="b" * 64,
+        document_count=5,
+        chunk_count=13,
+    )
+    stub_run_from_args_dependencies(monkeypatch, make_test_report())
+    monkeypatch.setattr(
+        "scripts.evaluate_rag.compute_knowledge_base_snapshot",
+        AsyncMock(return_value=actual_snapshot),
+        raising=False,
+    )
+    args = parse_args(
+        [
+            "--dataset",
+            "tests/fixtures/evaluation/stage3.jsonl",
+            "--knowledge-base-id",
+            str(knowledge_base_id),
+            "--mode",
+            "vector",
+            "--output",
+            "reports/stage3e-vector.json",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="知识库快照与本次验收基准不一致"):
+        await run_from_args(
+            args,
+            Settings(_env_file=None),
+            expected_snapshot=expected_snapshot,
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_from_args_rejects_snapshot_change_during_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    knowledge_base_id = uuid4()
+    before = KnowledgeBaseSnapshot(
+        knowledge_base_id=knowledge_base_id,
+        snapshot_sha256="a" * 64,
+        document_count=5,
+        chunk_count=13,
+    )
+    after = KnowledgeBaseSnapshot(
+        knowledge_base_id=knowledge_base_id,
+        snapshot_sha256="b" * 64,
+        document_count=5,
+        chunk_count=13,
+    )
+    stub_run_from_args_dependencies(monkeypatch, make_test_report())
+    monkeypatch.setattr(
+        "scripts.evaluate_rag.compute_knowledge_base_snapshot",
+        AsyncMock(side_effect=[before, after]),
+        raising=False,
+    )
+    args = parse_args(
+        [
+            "--dataset",
+            "tests/fixtures/evaluation/stage3.jsonl",
+            "--knowledge-base-id",
+            str(knowledge_base_id),
+            "--mode",
+            "vector",
+            "--output",
+            "reports/stage3e-vector.json",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="知识库快照在评估期间发生变化"):
+        await run_from_args(
+            args,
+            Settings(_env_file=None),
+            expected_snapshot=before,
+        )
 
 
 @pytest.mark.asyncio
@@ -744,20 +968,7 @@ def test_run_evaluation_command_uses_selector_event_loop(monkeypatch: pytest.Mon
     async def fake_run_from_args(*args, **kwargs) -> EvaluationReport:
         nonlocal observed_loop
         observed_loop = asyncio.get_running_loop()
-        return EvaluationReport(
-            mode="vector",
-            dataset_sha256="a" * 64,
-            top_k=5,
-            case_count=1,
-            recall_at_5=1.0,
-            mrr_at_5=1.0,
-            citation_hit_rate=1.0,
-            refusal_accuracy=1.0,
-            latency_p50_ms=1.0,
-            latency_p95_ms=1.0,
-            environment={},
-            cases=[],
-        )
+        return make_test_report()
 
     monkeypatch.setattr("scripts.evaluate_rag.run_from_args", fake_run_from_args)
 

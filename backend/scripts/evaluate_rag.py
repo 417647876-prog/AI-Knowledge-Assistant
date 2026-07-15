@@ -3,8 +3,9 @@
 import argparse
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.ai.contracts import ConversationMessage, EmbeddingProvider, QuestionRewriter
 from app.ai.rewrite import should_rewrite
@@ -29,7 +30,11 @@ from app.evaluation.runner import (
     OriginalQuestionResolver,
     evaluate_cases,
 )
-from app.evaluation.schemas import EvaluationCase, EvaluationReport
+from app.evaluation.schemas import EvaluationCase, EvaluationProvenance, EvaluationReport
+from app.evaluation.snapshot import (
+    KnowledgeBaseSnapshot,
+    compute_knowledge_base_snapshot,
+)
 from app.rag.schemas import QuestionAnswer
 from app.rag.service import RagService
 
@@ -212,7 +217,13 @@ async def run_evaluation(
     )
 
 
-async def run_from_args(args: argparse.Namespace, settings: Settings) -> EvaluationReport:
+async def run_from_args(
+    args: argparse.Namespace,
+    settings: Settings,
+    *,
+    run_id: UUID | None = None,
+    expected_snapshot: KnowledgeBaseSnapshot | None = None,
+) -> EvaluationReport:
     evaluation_settings = build_evaluation_settings(settings, args.mode)
     embedding_dependency = get_question_embedding_provider(evaluation_settings)
     chat_dependency = get_question_chat_provider(evaluation_settings)
@@ -222,6 +233,9 @@ async def run_from_args(args: argparse.Namespace, settings: Settings) -> Evaluat
         question_rewriter = await get_question_rewriter(evaluation_settings, chat_provider)
         reranker = get_question_reranker(evaluation_settings)
         async with session_factory() as session:
+            before = await compute_knowledge_base_snapshot(session, args.knowledge_base_id)
+            if expected_snapshot is not None and before != expected_snapshot:
+                raise ValueError("知识库快照与本次验收基准不一致")
             retriever = build_retriever(session, evaluation_settings)
             service = RagService(
                 session=session,
@@ -240,7 +254,7 @@ async def run_from_args(args: argparse.Namespace, settings: Settings) -> Evaluat
                 query_resolver = SelectiveEvaluationQueryResolver(question_rewriter)
             else:
                 query_resolver = OriginalQuestionResolver()
-            return await run_evaluation(
+            report = await run_evaluation(
                 dataset=args.dataset,
                 knowledge_base_id=args.knowledge_base_id,
                 settings=evaluation_settings,
@@ -250,6 +264,23 @@ async def run_from_args(args: argparse.Namespace, settings: Settings) -> Evaluat
                 query_resolver=query_resolver,
                 top_k=args.top_k,
                 mode=args.mode,
+            )
+            after = await compute_knowledge_base_snapshot(session, args.knowledge_base_id)
+            if after != before or (expected_snapshot is not None and after != expected_snapshot):
+                raise ValueError("知识库快照在评估期间发生变化")
+            return EvaluationReport.model_validate(
+                {
+                    **report.model_dump(mode="python"),
+                    "schema_version": "1.1",
+                    "provenance": EvaluationProvenance(
+                        run_id=run_id or uuid4(),
+                        knowledge_base_id=args.knowledge_base_id,
+                        snapshot_sha256=before.snapshot_sha256,
+                        document_count=before.document_count,
+                        chunk_count=before.chunk_count,
+                        generated_at=datetime.now(UTC),
+                    ),
+                }
             )
     finally:
         await chat_dependency.aclose()

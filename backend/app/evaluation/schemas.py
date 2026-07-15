@@ -1,6 +1,17 @@
+from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+EvaluationCategory = Literal[
+    "keyword",
+    "semantic",
+    "refusal",
+    "multi_turn",
+    "interference",
+]
+GateStatus = Literal["passed", "failed", "waived"]
 
 
 class ExpectedSource(BaseModel):
@@ -31,7 +42,7 @@ class EvaluationTurn(BaseModel):
 
 class EvaluationCase(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9-]+$", min_length=1, max_length=100)
-    category: Literal["keyword", "semantic", "refusal", "multi_turn", "interference"]
+    category: EvaluationCategory
     question: str = Field(min_length=1, max_length=2000)
     expected_sources: list[ExpectedSource] = Field(default_factory=list)
     should_refuse: bool = False
@@ -61,20 +72,31 @@ class EvaluationCase(BaseModel):
         return self
 
 
+class EvaluationProvenance(BaseModel):
+    run_id: UUID
+    knowledge_base_id: UUID
+    snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    document_count: int = Field(ge=0)
+    chunk_count: int = Field(ge=0)
+    generated_at: datetime
+
+
 class CaseResult(BaseModel):
     case_id: str
+    category: EvaluationCategory | None = None
     retrieved_files: list[str]
     citation_files: list[str]
     accepted_chunk_count: int = Field(ge=0)
     recall_at_k: float = Field(ge=0, le=1)
     reciprocal_rank: float = Field(ge=0, le=1)
+    citation_hit_rate: float | None = Field(default=None, ge=0, le=1)
     refused: bool
     refusal_correct: bool
     latency_ms: float = Field(ge=0)
 
 
 class EvaluationReport(BaseModel):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     mode: Literal["vector", "hybrid", "rerank", "rewrite"]
     dataset_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     top_k: int = Field(ge=5)
@@ -86,4 +108,38 @@ class EvaluationReport(BaseModel):
     latency_p50_ms: float = Field(ge=0)
     latency_p95_ms: float = Field(ge=0)
     environment: dict[str, str] = Field(default_factory=dict)
+    provenance: EvaluationProvenance | None = None
     cases: list[CaseResult]
+
+    @model_validator(mode="after")
+    def validate_report_contract(self) -> "EvaluationReport":
+        if self.case_count != len(self.cases):
+            raise ValueError("case_count 必须等于 cases 数量")
+        if self.schema_version == "1.1":
+            if self.provenance is None:
+                raise ValueError("1.1 报告必须包含溯源信息")
+            for case in self.cases:
+                if case.category is None:
+                    raise ValueError("1.1 案例必须包含 category")
+                if case.citation_hit_rate is None:
+                    raise ValueError("1.1 案例必须包含 citation_hit_rate")
+        return self
+
+
+class Stage3AcceptanceManifest(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    run_id: UUID
+    snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    artifacts: dict[str, str]
+    gate_statuses: dict[str, GateStatus]
+    passed: bool
+
+    @field_validator("artifacts")
+    @classmethod
+    def validate_artifact_hashes(cls, value: dict[str, str]) -> dict[str, str]:
+        valid_digits = set("0123456789abcdef")
+        if len(value) != 5:
+            raise ValueError("manifest 必须包含五个产物")
+        if any(len(digest) != 64 or set(digest) - valid_digits for digest in value.values()):
+            raise ValueError("manifest 包含无效 SHA-256")
+        return value
