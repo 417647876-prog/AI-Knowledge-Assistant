@@ -141,11 +141,13 @@ async def evaluate_cases(
         results.append(
             CaseResult(
                 case_id=case.id,
+                category=case.category,
                 retrieved_files=[chunk.file_name for chunk in chunks],
                 citation_files=[citation.file_name for citation in answer.citations],
                 accepted_chunk_count=len(chunks),
                 recall_at_k=recall_at_k(case.expected_sources, chunks, _METRIC_K),
                 reciprocal_rank=reciprocal_rank_at_k(case.expected_sources, chunks, _METRIC_K),
+                citation_hit_rate=citation_score,
                 refused=refused,
                 refusal_correct=refusal_correct,
                 latency_ms=latency_ms,

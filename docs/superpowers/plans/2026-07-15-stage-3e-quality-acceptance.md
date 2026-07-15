@@ -86,7 +86,7 @@
 - Consumes: `EvaluationCase.category`、`citation_hit_rate(expected_sources, citations)`、`session_factory`、`Document`、`DocumentChunk`、`EvaluationReport`。
 - Produces: `KnowledgeBaseSnapshot`、`EvaluationProvenance`、`compute_knowledge_base_snapshot(session, knowledge_base_id)`，以及带可选 `run_id` 和 `expected_snapshot` 的 `run_from_args`。
 
-- [ ] **Step 1：把 3E 标为进行中并锁定 5 Task 口径**
+- [x] **Step 1：把 3E 标为进行中并锁定 5 Task 口径**
 
 在 `docs/阶段3执行进度.md` 精确更新：
 
@@ -104,7 +104,7 @@ rg -n "21 / 26|3E：综合评估与验收|0 / 5|报告溯源与知识库快照" 
 
 Expected: 四项均命中，3A～3D 和 3C 豁免文字不变。
 
-- [ ] **Step 2：先写报告 schema 失败测试**
+- [x] **Step 2：先写报告 schema 失败测试**
 
 创建 `backend/tests/unit/test_evaluation_schemas.py`，先定义完整工厂：
 
@@ -186,7 +186,7 @@ uv run pytest tests/unit/test_evaluation_schemas.py -q
 
 Expected: import FAIL，指出 `EvaluationProvenance` 尚不存在。
 
-- [ ] **Step 3：扩展 schema 并保持 1.0 可读**
+- [x] **Step 3：扩展 schema 并保持 1.0 可读**
 
 在 `backend/app/evaluation/schemas.py` 增加：
 
@@ -226,7 +226,7 @@ def validate_report_contract(self) -> "EvaluationReport":
 
 把 `EvaluationCase.category` 的内联 Literal 替换为 `EvaluationCategory`。不要要求 1.0 报告具有新字段。
 
-- [ ] **Step 4：让 Runner 写入分类与逐案例引用**
+- [x] **Step 4：让 Runner 写入分类与逐案例引用**
 
 先在 `backend/tests/unit/test_evaluation_runner.py` 增加：
 
@@ -250,7 +250,7 @@ uv run pytest tests/unit/test_evaluation_schemas.py tests/unit/test_evaluation_r
 
 Expected: PASS，旧报告仍默认为 schema 1.0。
 
-- [ ] **Step 5：写确定性快照失败测试**
+- [x] **Step 5：写确定性快照失败测试**
 
 `backend/tests/unit/test_evaluation_snapshot.py` 用固定 UUID 构造两个 `Document` 和两个 `DocumentChunk`，测试：
 
@@ -267,7 +267,7 @@ uv run pytest tests/unit/test_evaluation_snapshot.py -q
 
 Expected: import FAIL，指出 `app.evaluation.snapshot` 不存在。
 
-- [ ] **Step 6：实现快照规范化**
+- [x] **Step 6：实现快照规范化**
 
 `backend/app/evaluation/snapshot.py` 定义：
 
@@ -294,7 +294,7 @@ Run: `uv run pytest tests/unit/test_evaluation_snapshot.py -q`
 
 Expected: PASS。
 
-- [ ] **Step 7：写 PostgreSQL 快照隔离测试**
+- [x] **Step 7：写 PostgreSQL 快照隔离测试**
 
 `backend/tests/integration/test_evaluation_snapshot.py` 沿用现有 integration fixture 创建目标和其他两个知识库：
 
@@ -321,7 +321,7 @@ Remove-Item Env:RUN_DATABASE_TESTS
 
 Expected: 已迁移测试库 PASS；未设置开关时 SKIP。
 
-- [ ] **Step 8：给单模式评测增加前后快照和 1.1 溯源**
+- [x] **Step 8：给单模式评测增加前后快照和 1.1 溯源**
 
 在 `backend/tests/unit/test_evaluate_rag_script.py` 增加：
 
@@ -361,7 +361,7 @@ return EvaluationReport.model_validate(
 )
 ```
 
-- [ ] **Step 9：验证 Task 1、更新看板并提交**
+- [x] **Step 9：验证 Task 1、更新看板并提交**
 
 Run:
 

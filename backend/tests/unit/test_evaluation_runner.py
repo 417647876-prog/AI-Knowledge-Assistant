@@ -198,6 +198,8 @@ async def test_evaluate_cases_runs_single_case_with_stable_metadata() -> None:
     assert len(report.dataset_sha256) == 64
     assert report.environment == {"embedding_provider": "fake"}
     assert report.case_count == 1
+    assert report.cases[0].category == "keyword"
+    assert report.cases[0].citation_hit_rate == 1.0
     assert report.recall_at_5 == 1.0
     assert report.mrr_at_5 == 1.0
     assert report.citation_hit_rate == 1.0
