@@ -373,6 +373,70 @@ async def test_worker_retries_transient_embedding_app_error_with_configured_back
 
 
 @pytest.mark.asyncio
+async def test_worker_discards_failure_transition_when_lease_is_lost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _lease()
+    complete = AsyncMock()
+    fail = AsyncMock(side_effect=LeaseLostError("reclaimed before fail transition"))
+    monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=lease))
+    monkeypatch.setattr(worker_main, "complete_job", complete)
+    monkeypatch.setattr(worker_main, "fail_job", fail)
+    monkeypatch.setattr(worker_main, "renew_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    async def raises_app_error(_lease: JobLease) -> int:
+        raise AppError(code="MODEL_TIMEOUT", message="timeout", status_code=502)
+
+    processed = await worker_main.run_worker_iteration(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None),
+        worker_id="worker-a",
+        process_job=raises_app_error,
+    )
+
+    assert processed is True
+    fail.assert_awaited_once()
+    complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_continues_after_failure_transition_loses_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _lease()
+    stop = asyncio.Event()
+    attempts = 0
+    complete = AsyncMock(return_value=True)
+    fail = AsyncMock(side_effect=LeaseLostError("reclaimed before fail transition"))
+    monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=lease))
+    monkeypatch.setattr(worker_main, "complete_job", complete)
+    monkeypatch.setattr(worker_main, "fail_job", fail)
+    monkeypatch.setattr(worker_main, "renew_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    async def process(_lease: JobLease) -> int:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise AppError(code="MODEL_TIMEOUT", message="timeout", status_code=502)
+        stop.set()
+        return 1
+
+    await worker_main.run_worker(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None),
+        worker_id="worker-a",
+        process_job=process,
+        stop_event=stop,
+    )
+
+    assert attempts == 2
+    fail.assert_awaited_once()
+    complete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_empty_worker_loop_waits_poll_interval_and_stops(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

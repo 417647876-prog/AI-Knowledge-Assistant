@@ -175,18 +175,25 @@ async def run_worker_iteration(
             "Worker 任务处理失败",
             extra={"job_id": str(lease.job_id), "error_type": type(error).__name__},
         )
-        async with session_factory() as session:
-            await fail_job(
-                session,
-                job_id=lease.job_id,
-                lease_token=lease.lease_token,
-                code=code,
-                message=message,
-                retryable=retryable,
-                now=datetime.now(UTC),
-                retry_backoff_seconds=settings.job_retry_backoff_seconds,
+        try:
+            async with session_factory() as session:
+                await fail_job(
+                    session,
+                    job_id=lease.job_id,
+                    lease_token=lease.lease_token,
+                    code=code,
+                    message=message,
+                    retryable=retryable,
+                    now=datetime.now(UTC),
+                    retry_backoff_seconds=settings.job_retry_backoff_seconds,
+                )
+                await session.commit()
+        except LeaseLostError:
+            logger.warning(
+                "Worker 失败结果因租约失效被丢弃",
+                extra={"job_id": str(lease.job_id)},
             )
-            await session.commit()
+            return True
     finally:
         heartbeat_stop.set()
         if not processor.done():
