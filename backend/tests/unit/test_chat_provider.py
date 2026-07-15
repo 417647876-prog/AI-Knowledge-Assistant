@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from app.ai.chat import FakeChatProvider, OpenAICompatibleChatProvider
+from app.ai.contracts import ChatCompletion, ChatStreamChunk
 from app.core.exceptions import AppError
 
 
@@ -11,9 +12,14 @@ from app.core.exceptions import AppError
 async def test_fake_chat_provider_returns_configured_answer() -> None:
     provider = FakeChatProvider(answer="固定答案。[1]")
 
-    answer = await provider.generate("系统提示", "用户提示")
+    completion = await provider.generate("系统提示", "用户提示")
 
-    assert answer == "固定答案。[1]"
+    assert completion == ChatCompletion(
+        content="固定答案。[1]",
+        usage=None,
+        finish_reason="stop",
+        provider_request_id="fake-chat-request",
+    )
 
 
 @pytest.mark.asyncio
@@ -31,9 +37,10 @@ async def test_openai_compatible_chat_provider_calls_chat_completions() -> None:
             api_key="private-key",
             model="chat-model",
         )
-        answer = await provider.generate("只依据上下文", "问题和上下文")
+        completion = await provider.generate("只依据上下文", "问题和上下文")
 
-    assert answer == "回答。[1]"
+    assert completion.content == "回答。[1]"
+    assert completion.usage is None
     assert str(captured[0].url) == "https://chat.example/v1/chat/completions"
     assert captured[0].headers["Authorization"] == "Bearer private-key"
     assert b'"stream":false' in captured[0].content
@@ -62,14 +69,28 @@ async def test_chat_provider_wraps_invalid_response_without_leaking_secret() -> 
 async def test_fake_chat_provider_streams_configured_tokens() -> None:
     provider = FakeChatProvider(tokens=["答案", "。[1]"])
 
-    assert [item async for item in provider.stream("system", "user")] == ["答案", "。[1]"]
+    assert [item async for item in provider.stream("system", "user")] == [
+        ChatStreamChunk(kind="token", delta="答案"),
+        ChatStreamChunk(kind="token", delta="。[1]"),
+        ChatStreamChunk(
+            kind="done",
+            finish_reason="stop",
+            provider_request_id="fake-chat-request",
+        ),
+    ]
 
 
 @pytest.mark.asyncio
 async def test_fake_chat_provider_streams_explicit_empty_tokens() -> None:
     provider = FakeChatProvider(answer="回退答案", tokens=[])
 
-    assert [item async for item in provider.stream("system", "user")] == []
+    assert [item async for item in provider.stream("system", "user")] == [
+        ChatStreamChunk(
+            kind="done",
+            finish_reason="stop",
+            provider_request_id="fake-chat-request",
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -91,7 +112,11 @@ async def test_openai_provider_reads_streaming_deltas_and_done() -> None:
             api_key="private-key",
             model="chat-model",
         )
-        assert [item async for item in provider.stream("system", "user")] == ["答案", "。[1]"]
+        assert [item async for item in provider.stream("system", "user")] == [
+            ChatStreamChunk(kind="token", delta="答案"),
+            ChatStreamChunk(kind="token", delta="。[1]"),
+            ChatStreamChunk(kind="done"),
+        ]
 
 
 @pytest.mark.asyncio
@@ -107,7 +132,9 @@ async def test_openai_provider_disables_deepseek_thinking_by_default() -> None:
             api_key="private-key",
             model="chat-model",
         )
-        assert [item async for item in provider.stream("system", "user")] == []
+        assert [item async for item in provider.stream("system", "user")] == [
+            ChatStreamChunk(kind="done")
+        ]
 
 
 @pytest.mark.asyncio
@@ -130,7 +157,10 @@ async def test_openai_provider_skips_null_and_empty_streaming_deltas() -> None:
             api_key="private-key",
             model="chat-model",
         )
-        assert [item async for item in provider.stream("system", "user")] == ["答案"]
+        assert [item async for item in provider.stream("system", "user")] == [
+            ChatStreamChunk(kind="token", delta="答案"),
+            ChatStreamChunk(kind="done"),
+        ]
 
 
 @pytest.mark.asyncio
@@ -185,4 +215,7 @@ async def test_stream_stops_reading_after_done() -> None:
             client=client, base_url="https://chat.example", api_key="secret", model="model"
         )
 
-        assert [item async for item in provider.stream("system", "user")] == ["答案"]
+        assert [item async for item in provider.stream("system", "user")] == [
+            ChatStreamChunk(kind="token", delta="答案"),
+            ChatStreamChunk(kind="done"),
+        ]

@@ -143,7 +143,8 @@ class RagService:
                 retrieved_chunk_count=0,
             )
         system_prompt, user_prompt = build_rag_prompt(question, chunks)
-        answer = await self._chat_provider.generate(system_prompt, user_prompt)
+        completion = await self._chat_provider.generate(system_prompt, user_prompt)
+        answer = completion.content
         return QuestionAnswer(
             answer=answer,
             citations=map_citations(answer, chunks),
@@ -257,7 +258,12 @@ class RagService:
         generation_started = perf_counter()
         chat_stream = self._chat_provider.stream(system_prompt, user_prompt)
         try:
-            async for delta in chat_stream:
+            async for chunk in chat_stream:
+                if chunk.kind != "token":
+                    continue
+                delta = chunk.delta
+                if delta is None:
+                    continue
                 yield StreamEvent("token", {"delta": delta})
                 for citation in tracker.feed(delta):
                     yield StreamEvent("citation", citation_payload(citation))

@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.ai.contracts import ConversationMessage
+from app.ai.contracts import ChatCompletion, ConversationMessage
 from app.ai.rerankers import FakeRerankerProvider
 from app.core.config import Settings
 from app.core.exceptions import AppError
@@ -52,8 +52,13 @@ class StubSession:
 
 
 class StubChatProvider:
-    async def generate(self, system_prompt: str, user_prompt: str) -> str:
-        return "重排后的答案。[1]"
+    async def generate(self, system_prompt: str, user_prompt: str) -> ChatCompletion:
+        return ChatCompletion(
+            content="重排后的答案。[1]",
+            usage=None,
+            finish_reason="stop",
+            provider_request_id="evaluation-request",
+        )
 
 
 class SlowReranker:

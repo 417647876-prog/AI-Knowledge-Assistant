@@ -1,6 +1,7 @@
 import json
+from collections.abc import Awaitable, Callable
 
-from app.ai.contracts import ChatProvider, ConversationMessage
+from app.ai.contracts import ChatCompletion, ChatProvider, ConversationMessage
 from app.core.exceptions import AppError
 
 REWRITE_SYSTEM_PROMPT = """你负责把对话中的当前追问改写成可独立检索的问题。
@@ -44,8 +45,14 @@ def _validate_result(result: object) -> str:
 
 
 class ChatQuestionRewriter:
-    def __init__(self, chat_provider: ChatProvider) -> None:
+    def __init__(
+        self,
+        chat_provider: ChatProvider,
+        *,
+        on_completion: Callable[[ChatCompletion], Awaitable[None]] | None = None,
+    ) -> None:
         self._chat_provider = chat_provider
+        self._on_completion = on_completion
 
     async def rewrite(self, history: list[ConversationMessage], question: str) -> str:
         payload = {
@@ -53,13 +60,15 @@ class ChatQuestionRewriter:
             "question": question,
         }
         try:
-            result = await self._chat_provider.generate(
+            completion = await self._chat_provider.generate(
                 REWRITE_SYSTEM_PROMPT,
                 json.dumps(payload, ensure_ascii=False, indent=2),
             )
+            if self._on_completion is not None:
+                await self._on_completion(completion)
         except Exception as error:
             raise _rewrite_error() from error
-        return _validate_result(result)
+        return _validate_result(completion.content)
 
 
 class FakeQuestionRewriter:

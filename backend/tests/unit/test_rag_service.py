@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.ai.contracts import ConversationMessage
+from app.ai.contracts import ChatCompletion, ChatStreamChunk, ConversationMessage
 from app.ai.embeddings import FakeEmbeddingProvider
 from app.core.exceptions import AppError
 from app.core.request_context import reset_request_id, set_request_id
@@ -60,9 +60,14 @@ class CountingChatProvider:
         self.answer = answer
         self.call_count = 0
 
-    async def generate(self, system_prompt: str, user_prompt: str) -> str:
+    async def generate(self, system_prompt: str, user_prompt: str) -> ChatCompletion:
         self.call_count += 1
-        return self.answer
+        return ChatCompletion(
+            content=self.answer,
+            usage=None,
+            finish_reason="stop",
+            provider_request_id="test-request",
+        )
 
 
 class RecordingRewriter:
@@ -96,7 +101,12 @@ class StreamingCountingChatProvider(CountingChatProvider):
     async def stream(self, system_prompt: str, user_prompt: str):
         try:
             for token in self.tokens:
-                yield token
+                yield ChatStreamChunk(kind="token", delta=token)
+            yield ChatStreamChunk(
+                kind="done",
+                finish_reason="stop",
+                provider_request_id="test-request",
+            )
         finally:
             self.stream_closed = True
 
