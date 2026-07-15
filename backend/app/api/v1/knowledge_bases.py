@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
-from app.db.models import ADMIN_ROLE, KnowledgeBase, User
+from app.db.models import KnowledgeBase, User
 from app.db.session import get_session
 
 router = APIRouter(prefix="/api/v1/knowledge-bases", tags=["knowledge-bases"])
@@ -53,20 +53,21 @@ async def list_knowledge_bases(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> list[KnowledgeBaseResponse]:
     statement = (
-        select(KnowledgeBase, User.username)
-        .join(User, User.id == KnowledgeBase.owner_id)
+        select(KnowledgeBase)
+        .where(
+            KnowledgeBase.owner_id == current_user.id,
+            KnowledgeBase.deleted_at.is_(None),
+        )
         .order_by(KnowledgeBase.created_at)
     )
-    if current_user.role != ADMIN_ROLE:
-        statement = statement.where(KnowledgeBase.owner_id == current_user.id)
-    rows = (await session.execute(statement)).all()
+    knowledge_bases = (await session.scalars(statement)).all()
     return [
         KnowledgeBaseResponse(
             id=str(knowledge_base.id),
             name=knowledge_base.name,
             description=knowledge_base.description,
             owner_id=str(knowledge_base.owner_id),
-            owner_username=owner_username,
+            owner_username=current_user.username,
         )
-        for knowledge_base, owner_username in rows
+        for knowledge_base in knowledge_bases
     ]

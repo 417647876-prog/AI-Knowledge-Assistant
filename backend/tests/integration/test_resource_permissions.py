@@ -145,7 +145,22 @@ async def test_documents_and_questions_are_isolated_by_owner(
         f"/api/v1/knowledge-bases/{knowledge_base_id}/questions",
         json={"question": "年假有几天？"},
     )
-    admin_response = await permission_context.admin_client.get(f"/api/v1/documents/{document_id}")
+    admin_document_response = await permission_context.admin_client.get(
+        f"/api/v1/documents/{document_id}"
+    )
+    admin_reprocess_response = await permission_context.admin_client.post(
+        f"/api/v1/documents/{document_id}/reprocess"
+    )
+    admin_list_response = await permission_context.admin_client.get(
+        f"/api/v1/knowledge-bases/{knowledge_base_id}/documents"
+    )
+    admin_question_response = await permission_context.admin_client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base_id}/questions",
+        json={"question": "Can an admin use the ordinary RAG endpoint?"},
+    )
+    admin_delete_response = await permission_context.admin_client.delete(
+        f"/api/v1/documents/{document_id}"
+    )
 
     assert document_response.status_code == 404
     assert document_response.json()["error"]["code"] == "DOCUMENT_NOT_FOUND"
@@ -157,8 +172,17 @@ async def test_documents_and_questions_are_isolated_by_owner(
     assert delete_response.json()["error"]["code"] == "DOCUMENT_NOT_FOUND"
     assert question_response.status_code == 404
     assert question_response.json()["error"]["code"] == "KNOWLEDGE_BASE_NOT_FOUND"
+    assert admin_document_response.status_code == 404
+    assert admin_document_response.json()["error"]["code"] == "DOCUMENT_NOT_FOUND"
+    assert admin_reprocess_response.status_code == 404
+    assert admin_reprocess_response.json()["error"]["code"] == "DOCUMENT_NOT_FOUND"
+    assert admin_list_response.status_code == 404
+    assert admin_list_response.json()["error"]["code"] == "KNOWLEDGE_BASE_NOT_FOUND"
+    assert admin_question_response.status_code == 404
+    assert admin_question_response.json()["error"]["code"] == "KNOWLEDGE_BASE_NOT_FOUND"
+    assert admin_delete_response.status_code == 404
+    assert admin_delete_response.json()["error"]["code"] == "DOCUMENT_NOT_FOUND"
     assert permission_context.rag_service.calls == []
-    assert admin_response.status_code == 200
 
 
 @pytest.mark.asyncio

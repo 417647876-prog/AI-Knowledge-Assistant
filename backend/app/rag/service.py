@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 from time import perf_counter
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.contracts import (
@@ -36,6 +37,7 @@ class RagService:
         self,
         *,
         session: AsyncSession,
+        owner_user_id: UUID | None = None,
         embedding_provider: EmbeddingProvider,
         retriever: Retriever,
         chat_provider: StreamingChatProvider,
@@ -47,6 +49,7 @@ class RagService:
         reranker_min_score: float | None = None,
     ) -> None:
         self._session = session
+        self._owner_user_id = owner_user_id
         self._embedding_provider = embedding_provider
         self._retriever = retriever
         self._chat_provider = chat_provider
@@ -58,7 +61,21 @@ class RagService:
         self._reranker_min_score = reranker_min_score
 
     async def _ensure_knowledge_base(self, knowledge_base_id: UUID) -> None:
-        if await self._session.get(KnowledgeBase, knowledge_base_id) is None:
+        if self._owner_user_id is None:
+            knowledge_base = await self._session.get(KnowledgeBase, knowledge_base_id)
+            is_available = (
+                knowledge_base is not None and getattr(knowledge_base, "deleted_at", None) is None
+            )
+        else:
+            knowledge_base = await self._session.scalar(
+                select(KnowledgeBase).where(
+                    KnowledgeBase.id == knowledge_base_id,
+                    KnowledgeBase.owner_id == self._owner_user_id,
+                    KnowledgeBase.deleted_at.is_(None),
+                )
+            )
+            is_available = knowledge_base is not None
+        if not is_available:
             raise AppError(
                 code="KNOWLEDGE_BASE_NOT_FOUND",
                 message="知识库不存在。",

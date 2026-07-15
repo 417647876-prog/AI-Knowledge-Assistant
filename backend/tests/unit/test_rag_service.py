@@ -18,6 +18,15 @@ class FakeSession:
         return self.knowledge_base
 
 
+class ScopedFakeSession:
+    def __init__(self) -> None:
+        self.statement = None
+
+    async def scalar(self, statement):
+        self.statement = statement
+        return None
+
+
 class StubRetriever:
     def __init__(self, chunks: list[RetrievedChunk]) -> None:
         self.chunks = chunks
@@ -179,6 +188,31 @@ async def test_answer_rejects_missing_knowledge_base() -> None:
 
     assert error.value.code == "KNOWLEDGE_BASE_NOT_FOUND"
     assert retriever.calls == []
+
+
+@pytest.mark.asyncio
+async def test_api_scoped_rag_service_rechecks_owner_and_active_knowledge_base() -> None:
+    session = ScopedFakeSession()
+    retriever = StubRetriever([])
+    owner_user_id = uuid4()
+    service = RagService(
+        session=session,
+        owner_user_id=owner_user_id,
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=retriever,
+        chat_provider=CountingChatProvider("unused"),
+        question_rewriter=RecordingRewriter("unused"),
+        score_threshold=0.55,
+    )
+
+    with pytest.raises(AppError) as error:
+        await service.answer(uuid4(), "private question", 5)
+
+    assert error.value.code == "KNOWLEDGE_BASE_NOT_FOUND"
+    assert retriever.calls == []
+    statement = str(session.statement)
+    assert "knowledge_bases.owner_id" in statement
+    assert "knowledge_bases.deleted_at IS NULL" in statement
 
 
 @pytest.mark.asyncio

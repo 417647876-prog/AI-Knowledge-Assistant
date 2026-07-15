@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 
 from app.ai.rerankers import FakeRerankerProvider
@@ -74,6 +76,7 @@ async def test_rag_service_factory_wires_reranker_settings_without_database() ->
     reranker = FakeRerankerProvider()
     service = await questions.get_rag_service(
         session=object(),
+        current_user=type("FakeUser", (), {"id": uuid4()})(),
         embedding_provider=object(),
         chat_provider=object(),
         question_rewriter=object(),

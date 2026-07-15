@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
 from app.authorization.service import (
-    get_accessible_document,
-    get_accessible_knowledge_base,
+    get_owned_document,
+    get_owned_knowledge_base,
 )
 from app.core.config import get_settings
 from app.core.exceptions import AppError
@@ -81,7 +81,7 @@ async def upload_document(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> DocumentTaskResponse:
-    knowledge_base = await get_accessible_knowledge_base(session, current_user, knowledge_base_id)
+    knowledge_base = await get_owned_knowledge_base(session, current_user, knowledge_base_id)
     extension = Path(file.filename or "").suffix.lower()
     if extension not in _allowed_extensions:
         raise AppError(
@@ -98,7 +98,9 @@ async def upload_document(
     file_hash = hashlib.sha256(content).hexdigest()
     duplicate = await session.scalar(
         select(Document.id).where(
-            Document.knowledge_base_id == knowledge_base_id, Document.file_hash == file_hash
+            Document.knowledge_base_id == knowledge_base_id,
+            Document.file_hash == file_hash,
+            Document.deleted_at.is_(None),
         )
     )
     if duplicate is not None:
@@ -159,7 +161,7 @@ async def get_document(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> DocumentTaskResponse:
-    document = await get_accessible_document(session, current_user, document_id)
+    document = await get_owned_document(session, current_user, document_id)
     job = await _latest_job(session, document_id)
     if job is None:
         raise AppError(code="DOCUMENT_NOT_FOUND", message="文档任务不存在。", status_code=404)
@@ -175,11 +177,14 @@ async def list_documents(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> DocumentListResponse:
-    await get_accessible_knowledge_base(session, current_user, knowledge_base_id)
+    await get_owned_knowledge_base(session, current_user, knowledge_base_id)
     documents = (
         await session.scalars(
             select(Document)
-            .where(Document.knowledge_base_id == knowledge_base_id)
+            .where(
+                Document.knowledge_base_id == knowledge_base_id,
+                Document.deleted_at.is_(None),
+            )
             .order_by(Document.created_at.desc(), Document.id.desc())
         )
     ).all()
@@ -201,8 +206,8 @@ async def reprocess_document(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> DocumentTaskResponse:
-    document = await get_accessible_document(session, current_user, document_id, for_update=True)
-    knowledge_base = await get_accessible_knowledge_base(
+    document = await get_owned_document(session, current_user, document_id, for_update=True)
+    knowledge_base = await get_owned_knowledge_base(
         session, current_user, document.knowledge_base_id
     )
     active_job = await session.scalar(
@@ -241,7 +246,7 @@ async def delete_document(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Response:
-    document = await get_accessible_document(session, current_user, document_id, for_update=True)
+    document = await get_owned_document(session, current_user, document_id, for_update=True)
     active_job = await session.scalar(
         select(DocumentJob.id).where(
             DocumentJob.job_type == "ingest_document",
