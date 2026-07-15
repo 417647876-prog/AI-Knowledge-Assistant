@@ -1,4 +1,7 @@
-from sqlalchemy import CHAR, CheckConstraint, Text, UniqueConstraint
+from dataclasses import fields
+from typing import get_args
+
+from sqlalchemy import CHAR, CheckConstraint, Index, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import TSVECTOR
 
 from app.db.base import Base
@@ -7,26 +10,30 @@ from app.db.models import (
     USER_ROLE,
     Document,
     DocumentChunk,
-    IngestionJob,
+    DocumentJob,
     KnowledgeBase,
     RefreshSession,
     User,
+    WorkerHeartbeat,
 )
+from app.jobs.contracts import JobLease, JobStatus, JobType
 
 
-def test_metadata_contains_six_core_tables() -> None:
+def test_metadata_contains_seven_core_tables() -> None:
     assert set(Base.metadata.tables) == {
         "knowledge_bases",
         "documents",
         "document_chunks",
-        "ingestion_jobs",
+        "document_jobs",
+        "worker_heartbeats",
         "users",
         "refresh_sessions",
     }
     assert KnowledgeBase.__tablename__ == "knowledge_bases"
     assert Document.__tablename__ == "documents"
     assert DocumentChunk.__tablename__ == "document_chunks"
-    assert IngestionJob.__tablename__ == "ingestion_jobs"
+    assert DocumentJob.__tablename__ == "document_jobs"
+    assert WorkerHeartbeat.__tablename__ == "worker_heartbeats"
     assert User.__tablename__ == "users"
     assert RefreshSession.__tablename__ == "refresh_sessions"
 
@@ -87,3 +94,83 @@ def test_document_chunk_contains_generated_search_columns() -> None:
     assert search_vector.computed is not None
     assert str(search_vector.computed.sqltext) == "to_tsvector('simple', search_text)"
     assert search_vector.computed.persisted is True
+
+
+def test_document_job_declares_status_lease_error_and_scheduling_contract() -> None:
+    columns = DocumentJob.__table__.c
+
+    assert columns.max_attempts.default.arg == 3
+    assert columns.lease_token.nullable is True
+    assert columns.error_code.type.length == 50
+    assert isinstance(columns.error_message.type, Text)
+    assert {
+        "run_after",
+        "attempt_count",
+        "max_attempts",
+        "lease_owner",
+        "lease_token",
+        "lease_expires_at",
+        "heartbeat_at",
+    }.issubset(columns.keys())
+
+    checks = [
+        constraint
+        for constraint in DocumentJob.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    ]
+    assert any(
+        "status IN ('pending', 'processing', 'retry_wait', 'succeeded', 'failed', 'canceled')"
+        in str(constraint.sqltext)
+        for constraint in checks
+    )
+
+    indexes = {
+        index.name: index for index in DocumentJob.__table__.indexes if isinstance(index, Index)
+    }
+    assert {
+        "ix_document_jobs_status_run_after",
+        "ix_document_jobs_lease_expires_at",
+        "uq_document_jobs_active_resource",
+    }.issubset(indexes)
+    assert indexes["uq_document_jobs_active_resource"].unique is True
+    assert (
+        str(indexes["uq_document_jobs_active_resource"].dialect_options["postgresql"]["where"])
+        == "status IN ('pending', 'processing', 'retry_wait')"
+    )
+
+
+def test_worker_heartbeat_uses_worker_id_as_primary_key() -> None:
+    assert WorkerHeartbeat.__table__.c.worker_id.primary_key is True
+    assert {
+        "worker_id",
+        "status",
+        "current_job_id",
+        "last_seen_at",
+    } == set(WorkerHeartbeat.__table__.c.keys())
+
+
+def test_job_contracts_expose_fixed_types_and_lease_fields() -> None:
+    assert set(get_args(JobType)) == {
+        "ingest_document",
+        "purge_document",
+        "purge_knowledge_base",
+    }
+    assert set(get_args(JobStatus)) == {
+        "pending",
+        "processing",
+        "retry_wait",
+        "succeeded",
+        "failed",
+        "canceled",
+    }
+    assert [field.name for field in fields(JobLease)] == [
+        "job_id",
+        "job_type",
+        "resource_type",
+        "resource_id",
+        "owner_user_id",
+        "knowledge_base_id",
+        "attempt_number",
+        "lease_token",
+        "lease_expires_at",
+    ]

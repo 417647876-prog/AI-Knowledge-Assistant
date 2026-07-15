@@ -12,9 +12,8 @@ from sqlalchemy import delete, select
 from app.ai.embeddings import FakeEmbeddingProvider
 from app.core.config import get_settings
 from app.core.security import create_access_token, hash_password
-from app.db.models import USER_ROLE, DocumentChunk, KnowledgeBase, User
+from app.db.models import USER_ROLE, DocumentChunk, DocumentJob, KnowledgeBase, User
 from app.db.models.document import Document
-from app.db.models.ingestion_job import IngestionJob
 from app.db.session import session_factory
 from app.main import create_app
 
@@ -69,7 +68,7 @@ async def _create_document(
     reverse_job_ids: bool = False,
     active_job: bool = False,
     embedding: list[float] | None = None,
-) -> tuple[KnowledgeBase, Document, list[IngestionJob]]:
+) -> tuple[KnowledgeBase, Document, list[DocumentJob]]:
     stored_file_name = f"{uuid4()}.txt"
     (tmp_path / stored_file_name).write_text("员工入职满一年享受五天年假。", encoding="utf-8")
     async with session_factory() as session:
@@ -93,17 +92,25 @@ async def _create_document(
         older_id = UUID("ffffffff-ffff-ffff-ffff-ffffffffffff") if reverse_job_ids else uuid4()
         newer_id = UUID("00000000-0000-0000-0000-000000000001") if reverse_job_ids else uuid4()
         jobs = [
-            IngestionJob(
+            DocumentJob(
                 id=older_id,
-                document_id=document.id,
+                job_type="ingest_document",
+                resource_type="document",
+                resource_id=document.id,
+                owner_user_id=owner_id,
+                knowledge_base_id=knowledge_base.id,
                 status="failed",
                 stage="parse",
                 created_at=datetime(2026, 7, 14, 8, 0, tzinfo=UTC),
             ),
-            IngestionJob(
+            DocumentJob(
                 id=newer_id,
-                document_id=document.id,
-                status="running" if active_job else "succeeded",
+                job_type="ingest_document",
+                resource_type="document",
+                resource_id=document.id,
+                owner_user_id=owner_id,
+                knowledge_base_id=knowledge_base.id,
+                status="processing" if active_job else "succeeded",
                 stage="store",
                 created_at=datetime(2026, 7, 14, 9, 0, tzinfo=UTC),
             ),
@@ -202,7 +209,11 @@ async def test_delete_document_removes_database_records_and_original_file(
         ) is None
         assert (
             await session.scalar(
-                select(IngestionJob.id).where(IngestionJob.document_id == document.id)
+                select(DocumentJob.id).where(
+                    DocumentJob.job_type == "ingest_document",
+                    DocumentJob.resource_type == "document",
+                    DocumentJob.resource_id == document.id,
+                )
             )
         ) is None
     assert len(jobs) == 2

@@ -9,9 +9,8 @@ from sqlalchemy import delete, select
 
 from app.core.config import get_settings
 from app.core.security import create_access_token, hash_password
-from app.db.models import USER_ROLE, RefreshSession, User
+from app.db.models import USER_ROLE, DocumentJob, RefreshSession, User
 from app.db.models.document import Document
-from app.db.models.ingestion_job import IngestionJob
 from app.db.models.knowledge_base import KnowledgeBase
 from app.db.session import session_factory
 from app.main import create_app
@@ -62,7 +61,7 @@ async def reprocess_context() -> AsyncIterator[ReprocessContext]:
                 await session.execute(delete(User).where(User.id == user.id))
 
 
-async def _create_document(tmp_path, owner_id, *, job_status: str) -> tuple[Document, IngestionJob]:
+async def _create_document(tmp_path, owner_id, *, job_status: str) -> tuple[Document, DocumentJob]:
     stored_file_name = f"{uuid4()}.txt"
     (tmp_path / stored_file_name).write_text("员工入职满一年享受五天年假。", encoding="utf-8")
     async with session_factory() as session:
@@ -83,8 +82,12 @@ async def _create_document(tmp_path, owner_id, *, job_status: str) -> tuple[Docu
         )
         session.add(document)
         await session.flush()
-        job = IngestionJob(
-            document_id=document.id,
+        job = DocumentJob(
+            job_type="ingest_document",
+            resource_type="document",
+            resource_id=document.id,
+            owner_user_id=owner_id,
+            knowledge_base_id=knowledge_base.id,
             status=job_status,
             stage="store" if job_status == "succeeded" else "embed",
         )
@@ -117,7 +120,11 @@ async def test_reprocess_creates_new_job_and_reuses_ingestion_pipeline(
         refreshed = await session.get(Document, document.id)
         jobs = (
             await session.scalars(
-                select(IngestionJob).where(IngestionJob.document_id == document.id)
+                select(DocumentJob).where(
+                    DocumentJob.job_type == "ingest_document",
+                    DocumentJob.resource_type == "document",
+                    DocumentJob.resource_id == document.id,
+                )
             )
         ).all()
     assert refreshed is not None
@@ -131,7 +138,9 @@ async def test_reprocess_creates_new_job_and_reuses_ingestion_pipeline(
 async def test_reprocess_rejects_document_with_active_job(
     tmp_path, reprocess_context: ReprocessContext
 ) -> None:
-    document, _ = await _create_document(tmp_path, reprocess_context.user.id, job_status="running")
+    document, _ = await _create_document(
+        tmp_path, reprocess_context.user.id, job_status="processing"
+    )
     response = await reprocess_context.client.post(f"/api/v1/documents/{document.id}/reprocess")
 
     assert response.status_code == 409

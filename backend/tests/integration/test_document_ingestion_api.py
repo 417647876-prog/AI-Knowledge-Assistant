@@ -4,11 +4,11 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.core.config import get_settings
 from app.core.security import create_access_token, hash_password
-from app.db.models import USER_ROLE, KnowledgeBase, User
+from app.db.models import USER_ROLE, DocumentJob, KnowledgeBase, User
 from app.db.session import session_factory
 from app.main import create_app
 
@@ -76,6 +76,14 @@ async def test_upload_runs_fake_embedding_ingestion_to_ready(
         assert response.status_code == 202
         document_id = response.json()["document_id"]
         state = await authenticated_client.get(f"/api/v1/documents/{document_id}")
+        async with session_factory() as session:
+            persisted_job = await session.scalar(
+                select(DocumentJob).where(
+                    DocumentJob.job_type == "ingest_document",
+                    DocumentJob.resource_type == "document",
+                    DocumentJob.resource_id == document_id,
+                )
+            )
 
     finally:
         settings.upload_directory = previous_upload_directory
@@ -83,6 +91,10 @@ async def test_upload_runs_fake_embedding_ingestion_to_ready(
 
     assert state.status_code == 200
     assert state.json()["status"] == "ready"
+    assert persisted_job is not None
+    assert str(persisted_job.knowledge_base_id) == knowledge_base["id"]
+    assert persisted_job.owner_user_id is not None
+    assert persisted_job.status == "succeeded"
 
 
 @pytest.mark.asyncio

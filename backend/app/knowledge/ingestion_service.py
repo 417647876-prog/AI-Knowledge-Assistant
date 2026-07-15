@@ -9,7 +9,7 @@ from app.ai.contracts import EmbeddingProvider
 from app.core.exceptions import AppError
 from app.db.models.document import Document
 from app.db.models.document_chunk import DocumentChunk
-from app.db.models.ingestion_job import IngestionJob
+from app.db.models.document_job import DocumentJob
 from app.knowledge.chunking import RecursiveTextChunker
 from app.knowledge.parsers.registry import ParserRegistry
 from app.knowledge.search_tokens import build_search_text
@@ -92,31 +92,35 @@ class IngestionService:
             await self._mark_failed(document_id, error)
             raise
 
-    async def _latest_job(self, document_id: UUID) -> IngestionJob | None:
+    async def _latest_job(self, document_id: UUID) -> DocumentJob | None:
         return await self._session.scalar(
-            select(IngestionJob)
-            .where(IngestionJob.document_id == document_id)
+            select(DocumentJob)
+            .where(
+                DocumentJob.job_type == "ingest_document",
+                DocumentJob.resource_type == "document",
+                DocumentJob.resource_id == document_id,
+            )
             .order_by(
                 case(
-                    (IngestionJob.status == "pending", 0),
-                    (IngestionJob.status == "running", 1),
+                    (DocumentJob.status == "pending", 0),
+                    (DocumentJob.status == "processing", 1),
                     else_=2,
                 ),
-                IngestionJob.created_at.desc(),
-                IngestionJob.id.desc(),
+                DocumentJob.created_at.desc(),
+                DocumentJob.id.desc(),
             )
         )
 
     async def _update_stage(
         self,
         document: Document,
-        job: IngestionJob,
+        job: DocumentJob,
         *,
         document_status: str,
         job_stage: str,
     ) -> None:
         document.status = document_status
-        job.status = "running"
+        job.status = "processing"
         job.stage = job_stage
         if job.started_at is None:
             job.started_at = datetime.now(UTC)

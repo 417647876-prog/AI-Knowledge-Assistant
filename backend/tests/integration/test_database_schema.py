@@ -181,7 +181,7 @@ def test_ingestion_job_created_at_migration_backfills_existing_jobs(
                 {"id": job_id, "document_id": document_id, "started_at": started_at},
             )
 
-        command.upgrade(alembic_config, "head")
+        command.upgrade(alembic_config, "20260715_05")
 
         with engine.connect() as connection:
             created_at = connection.scalar(
@@ -377,8 +377,8 @@ async def test_auth_migration_creates_users_sessions_and_owned_knowledge_bases()
                 text(
                     "SELECT tablename FROM pg_tables "
                     "WHERE schemaname='public' AND tablename IN "
-                    "('knowledge_bases','documents','document_chunks','ingestion_jobs',"
-                    "'users','refresh_sessions')"
+                    "('knowledge_bases','documents','document_chunks','document_jobs',"
+                    "'worker_heartbeats','users','refresh_sessions')"
                 )
             )
             table_names = {row[0] for row in table_rows}
@@ -429,7 +429,8 @@ async def test_auth_migration_creates_users_sessions_and_owned_knowledge_bases()
         "knowledge_bases",
         "documents",
         "document_chunks",
-        "ingestion_jobs",
+        "document_jobs",
+        "worker_heartbeats",
         "users",
         "refresh_sessions",
     }

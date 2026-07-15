@@ -9,7 +9,7 @@ from app.ai.embeddings import FakeEmbeddingProvider
 from app.core.security import hash_password
 from app.db.models.document import Document
 from app.db.models.document_chunk import DocumentChunk
-from app.db.models.ingestion_job import IngestionJob
+from app.db.models.document_job import DocumentJob
 from app.db.models.knowledge_base import KnowledgeBase
 from app.db.models.user import USER_ROLE, User
 from app.db.session import session_factory
@@ -69,7 +69,14 @@ async def test_process_stores_vectors_and_is_safe_to_retry(
         )
         session.add(document)
         await session.flush()
-        job = IngestionJob(document_id=document.id)
+        job = DocumentJob(
+            job_type="ingest_document",
+            resource_type="document",
+            resource_id=document.id,
+            owner_user_id=knowledge_base_owner.id,
+            knowledge_base_id=knowledge_base.id,
+            stage="parse",
+        )
         session.add(job)
         await session.commit()
 

@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
@@ -15,8 +15,7 @@ from app.authorization.service import (
 )
 from app.core.config import get_settings
 from app.core.exceptions import AppError
-from app.db.models import Document, User
-from app.db.models.ingestion_job import IngestionJob
+from app.db.models import Document, DocumentJob, User
 from app.db.session import get_session
 from app.knowledge.background import run_ingestion
 
@@ -37,7 +36,7 @@ class DocumentListResponse(BaseModel):
     items: list[DocumentTaskResponse]
 
 
-def _document_response(document: Document, job: IngestionJob) -> DocumentTaskResponse:
+def _document_response(document: Document, job: DocumentJob) -> DocumentTaskResponse:
     return DocumentTaskResponse(
         document_id=document.id,
         job_id=job.id,
@@ -48,11 +47,15 @@ def _document_response(document: Document, job: IngestionJob) -> DocumentTaskRes
     )
 
 
-async def _latest_job(session: AsyncSession, document_id: UUID) -> IngestionJob | None:
+async def _latest_job(session: AsyncSession, document_id: UUID) -> DocumentJob | None:
     return await session.scalar(
-        select(IngestionJob)
-        .where(IngestionJob.document_id == document_id)
-        .order_by(IngestionJob.created_at.desc(), IngestionJob.id.desc())
+        select(DocumentJob)
+        .where(
+            DocumentJob.job_type == "ingest_document",
+            DocumentJob.resource_type == "document",
+            DocumentJob.resource_id == document_id,
+        )
+        .order_by(DocumentJob.created_at.desc(), DocumentJob.id.desc())
         .limit(1)
     )
 
@@ -69,7 +72,7 @@ async def upload_document(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> DocumentTaskResponse:
-    await get_accessible_knowledge_base(session, current_user, knowledge_base_id)
+    knowledge_base = await get_accessible_knowledge_base(session, current_user, knowledge_base_id)
     extension = Path(file.filename or "").suffix.lower()
     if extension not in _allowed_extensions:
         raise AppError(
@@ -107,7 +110,14 @@ async def upload_document(
     )
     session.add(document)
     await session.flush()
-    job = IngestionJob(document_id=document.id)
+    job = DocumentJob(
+        job_type="ingest_document",
+        resource_type="document",
+        resource_id=document.id,
+        owner_user_id=knowledge_base.owner_id,
+        knowledge_base_id=knowledge_base.id,
+        stage="parse",
+    )
     session.add(job)
     await session.commit()
     background_tasks.add_task(run_ingestion, document.id)
@@ -164,10 +174,15 @@ async def reprocess_document(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> DocumentTaskResponse:
     document = await get_accessible_document(session, current_user, document_id, for_update=True)
+    knowledge_base = await get_accessible_knowledge_base(
+        session, current_user, document.knowledge_base_id
+    )
     active_job = await session.scalar(
-        select(IngestionJob.id).where(
-            IngestionJob.document_id == document_id,
-            IngestionJob.status.in_(("pending", "running")),
+        select(DocumentJob.id).where(
+            DocumentJob.job_type == "ingest_document",
+            DocumentJob.resource_type == "document",
+            DocumentJob.resource_id == document_id,
+            DocumentJob.status.in_(("pending", "processing", "retry_wait")),
         )
     )
     if active_job is not None:
@@ -179,7 +194,14 @@ async def reprocess_document(
     document.status = "pending"
     document.error_code = None
     document.error_message = None
-    job = IngestionJob(document_id=document.id)
+    job = DocumentJob(
+        job_type="ingest_document",
+        resource_type="document",
+        resource_id=document.id,
+        owner_user_id=knowledge_base.owner_id,
+        knowledge_base_id=knowledge_base.id,
+        stage="parse",
+    )
     session.add(job)
     await session.commit()
     background_tasks.add_task(run_ingestion, document.id)
@@ -194,9 +216,11 @@ async def delete_document(
 ) -> Response:
     document = await get_accessible_document(session, current_user, document_id, for_update=True)
     active_job = await session.scalar(
-        select(IngestionJob.id).where(
-            IngestionJob.document_id == document_id,
-            IngestionJob.status.in_(("pending", "running")),
+        select(DocumentJob.id).where(
+            DocumentJob.job_type == "ingest_document",
+            DocumentJob.resource_type == "document",
+            DocumentJob.resource_id == document_id,
+            DocumentJob.status.in_(("pending", "processing", "retry_wait")),
         )
     )
     if active_job is not None:
@@ -215,6 +239,13 @@ async def delete_document(
             status_code=500,
         )
     try:
+        await session.execute(
+            delete(DocumentJob).where(
+                DocumentJob.job_type == "ingest_document",
+                DocumentJob.resource_type == "document",
+                DocumentJob.resource_id == document_id,
+            )
+        )
         await session.delete(document)
         await session.flush()
         stored_file.unlink(missing_ok=True)
