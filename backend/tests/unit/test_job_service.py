@@ -6,6 +6,7 @@ from app.jobs.service import (
     failure_transition,
     is_retryable_error,
     sanitize_failure,
+    should_retry_failure,
 )
 
 
@@ -111,3 +112,23 @@ def test_known_code_uses_canonical_message_instead_of_caller_text() -> None:
 
     assert code == "DOCUMENT_CONTENT_EMPTY"
     assert message == "文档没有可入库的内容。"
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        "DOCUMENT_CORRUPTED",
+        "UNSUPPORTED_FILE_TYPE",
+        "DOCUMENT_VALIDATION_FAILED",
+        "UNKNOWN_PROVIDER_FAILURE",
+    ],
+)
+def test_retry_request_cannot_override_permanent_or_unknown_error_policy(
+    error_code: str,
+) -> None:
+    assert should_retry_failure(error_code, requested=True) is False
+
+
+def test_known_transient_error_retries_only_when_caller_allows_it() -> None:
+    assert should_retry_failure("MODEL_TIMEOUT", requested=True) is True
+    assert should_retry_failure("MODEL_TIMEOUT", requested=False) is False

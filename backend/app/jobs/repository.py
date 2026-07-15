@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.document_job import DocumentJob
 from app.db.models.worker_heartbeat import WorkerHeartbeat
 from app.jobs.contracts import JobLease, JobStatus, JobType
-from app.jobs.service import failure_transition, sanitize_failure
+from app.jobs.service import failure_transition, sanitize_failure, should_retry_failure
 
 CLAIM_CANDIDATE_SQL = """
 SELECT id
@@ -204,13 +204,13 @@ async def fail_job(
     if attempt is None:
         raise LeaseLostError("任务租约已失效")
 
+    safe_code, safe_message = sanitize_failure(code, message)
     transition = failure_transition(
         attempt_number=attempt.attempt_count,
         max_attempts=attempt.max_attempts,
-        retryable=retryable,
+        retryable=should_retry_failure(safe_code, requested=retryable),
         now=now,
     )
-    safe_code, safe_message = sanitize_failure(code, message)
     result = await session.execute(
         update(DocumentJob)
         .where(

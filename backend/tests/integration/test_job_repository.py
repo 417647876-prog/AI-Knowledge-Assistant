@@ -229,6 +229,67 @@ async def test_retryable_failures_wait_30_then_120_seconds_and_third_is_terminal
 
 
 @pytest.mark.asyncio
+async def test_persistence_boundary_rejects_retry_override_for_permanent_and_unknown_errors(
+    session_factory: async_sessionmaker[AsyncSession], job_ids: dict[str, UUID]
+) -> None:
+    now = datetime(2026, 7, 16, 11, 30, tzinfo=UTC)
+
+    for error_code in (
+        "DOCUMENT_CORRUPTED",
+        "UNSUPPORTED_FILE_TYPE",
+        "DOCUMENT_VALIDATION_FAILED",
+        "UNKNOWN_PROVIDER_FAILURE",
+    ):
+        job_ids["resource_id"] = uuid4()
+        job_id = await _enqueue(session_factory, job_ids)
+        async with session_factory.begin() as session:
+            lease = await claim_next_job(
+                session,
+                worker_id="worker-policy",
+                now=now,
+                lease_seconds=120,
+            )
+            assert lease is not None
+            status = await fail_job(
+                session,
+                job_id=job_id,
+                lease_token=lease.lease_token,
+                code=error_code,
+                message="不应被持久化的调用方正文",
+                retryable=True,
+                now=now,
+            )
+        assert status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_persistence_boundary_allows_caller_to_disable_transient_retry(
+    session_factory: async_sessionmaker[AsyncSession], job_ids: dict[str, UUID]
+) -> None:
+    job_id = await _enqueue(session_factory, job_ids)
+    now = datetime(2026, 7, 16, 11, 45, tzinfo=UTC)
+    async with session_factory.begin() as session:
+        lease = await claim_next_job(
+            session,
+            worker_id="worker-policy",
+            now=now,
+            lease_seconds=120,
+        )
+        assert lease is not None
+        status = await fail_job(
+            session,
+            job_id=job_id,
+            lease_token=lease.lease_token,
+            code="MODEL_TIMEOUT",
+            message="任务处理暂时失败，请稍后重试。",
+            retryable=False,
+            now=now,
+        )
+
+    assert status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_mutations_require_current_lease_and_resource_jobs_can_be_canceled(
     session_factory: async_sessionmaker[AsyncSession], job_ids: dict[str, UUID]
 ) -> None:

@@ -34,6 +34,10 @@ def is_retryable_error(error_code: str) -> bool:
     return error_code in RETRYABLE_ERROR_CODES
 
 
+def should_retry_failure(error_code: str, *, requested: bool) -> bool:
+    return requested and is_retryable_error(error_code)
+
+
 def failure_transition(
     *,
     attempt_number: int,
