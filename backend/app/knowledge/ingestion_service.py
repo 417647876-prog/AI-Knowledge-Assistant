@@ -264,6 +264,8 @@ class IngestionService:
             job is None
             or document is None
             or knowledge_base is None
+            or document.deleted_at is not None
+            or knowledge_base.deleted_at is not None
             or job.job_type != "ingest_document"
             or job.resource_type != "document"
             or job.resource_id != document_id

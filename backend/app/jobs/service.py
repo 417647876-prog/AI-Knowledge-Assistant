@@ -9,6 +9,7 @@ RETRYABLE_ERROR_CODES = frozenset(
         "TEMPORARY_NETWORK_ERROR",
         "MODEL_SERVICE_UNAVAILABLE",
         "MODEL_TIMEOUT",
+        "PURGE_FILE_DELETE_FAILED",
     }
 )
 _CANONICAL_FAILURE_MESSAGES = {
@@ -21,6 +22,10 @@ _CANONICAL_FAILURE_MESSAGES = {
     "DOCUMENT_VALIDATION_FAILED": "文档校验失败。",
     "JOB_HANDLER_UNAVAILABLE": "当前任务暂不可处理。",
     "JOB_PROCESSING_ERROR": "任务处理失败。",
+    "PURGE_FILE_DELETE_FAILED": "文档文件暂时无法清理。",
+    "PURGE_PATH_INVALID": "文档存储路径校验失败。",
+    "PURGE_RETENTION_ACTIVE": "恢复期内不能永久清理。",
+    "RESOURCE_NOT_IN_TRASH": "资源不在回收站中。",
 }
 
 

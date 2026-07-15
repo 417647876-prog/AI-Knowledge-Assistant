@@ -36,7 +36,10 @@ class KeywordRetriever:
         statement = (
             select(DocumentChunk, Document.original_file_name, rank)
             .join(Document, Document.id == DocumentChunk.document_id)
-            .where(DocumentChunk.knowledge_base_id == knowledge_base_id)
+            .where(
+                DocumentChunk.knowledge_base_id == knowledge_base_id,
+                Document.deleted_at.is_(None),
+            )
             .where(DocumentChunk.search_vector.bool_op("@@")(ts_query))
             .where(rank >= minimum_matches * _TOKEN_RANK_WEIGHT)
             .order_by(rank.desc(), DocumentChunk.id.asc())

@@ -10,6 +10,7 @@ from app.api.v1.knowledge_bases import router as knowledge_base_router
 from app.api.v1.questions import router as question_router
 from app.api.v1.support_content import router as support_content_router
 from app.api.v1.support_grants import router as support_grants_router
+from app.api.v1.trash import router as trash_router
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 
@@ -28,6 +29,7 @@ def create_app() -> FastAPI:
     app.include_router(question_router)
     app.include_router(support_grants_router)
     app.include_router(support_content_router)
+    app.include_router(trash_router)
     return app
 
 

@@ -23,6 +23,7 @@ from app.jobs.repository import (
 )
 from app.jobs.service import is_retryable_error, sanitize_failure
 from app.knowledge.background import process_ingest_document
+from app.lifecycle.service import purge_document, purge_knowledge_base
 
 logger = logging.getLogger(__name__)
 
@@ -144,17 +145,18 @@ async def run_worker_iteration(
             return True
 
         chunk_count = await processor
-        async with session_factory() as session:
-            completed = await complete_job(
-                session,
-                job_id=lease.job_id,
-                lease_token=lease.lease_token,
-                chunk_count=chunk_count,
-                now=datetime.now(UTC),
-            )
-            await session.commit()
-        if not completed:
-            logger.warning("Worker 完成任务时租约已失效", extra={"job_id": str(lease.job_id)})
+        if lease.job_type not in ("purge_document", "purge_knowledge_base"):
+            async with session_factory() as session:
+                completed = await complete_job(
+                    session,
+                    job_id=lease.job_id,
+                    lease_token=lease.lease_token,
+                    chunk_count=chunk_count,
+                    now=datetime.now(UTC),
+                )
+                await session.commit()
+            if not completed:
+                logger.warning("Worker 完成任务时租约已失效", extra={"job_id": str(lease.job_id)})
     except asyncio.CancelledError:
         raise
     except LeaseLostError:
@@ -241,8 +243,21 @@ async def run_worker(
 
 
 async def process_job(lease: JobLease) -> int:
+    settings = get_settings()
     if lease.job_type == "ingest_document":
-        return await process_ingest_document(lease, get_settings())
+        return await process_ingest_document(lease, settings)
+    if lease.job_type == "purge_document":
+        return await purge_document(
+            session_factory=default_session_factory,
+            upload_directory=settings.upload_directory,
+            lease=lease,
+        )
+    if lease.job_type == "purge_knowledge_base":
+        return await purge_knowledge_base(
+            session_factory=default_session_factory,
+            upload_directory=settings.upload_directory,
+            lease=lease,
+        )
     raise JobExecutionError(
         code="JOB_HANDLER_UNAVAILABLE",
         message=f"任务类型 {lease.job_type} 暂不可处理。",

@@ -6,19 +6,25 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Response, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
+from app.audit.service import record_denied_audit_event
 from app.authorization.service import (
     get_owned_document,
     get_owned_knowledge_base,
 )
 from app.core.config import get_settings
 from app.core.exceptions import AppError
-from app.db.models import Document, DocumentChunk, DocumentJob, User
+from app.db.models import Document, DocumentJob, User
 from app.db.session import get_session
 from app.jobs.repository import enqueue_job
+from app.lifecycle.service import (
+    request_purge_document,
+    restore_document,
+    soft_delete_document,
+)
 
 router = APIRouter(tags=["documents"])
 logger = logging.getLogger(__name__)
@@ -36,6 +42,11 @@ class DocumentTaskResponse(BaseModel):
 
 class DocumentListResponse(BaseModel):
     items: list[DocumentTaskResponse]
+
+
+class PurgeJobResponse(BaseModel):
+    job_id: UUID
+    status: str
 
 
 def _document_response(document: Document, job: DocumentJob) -> DocumentTaskResponse:
@@ -81,7 +92,9 @@ async def upload_document(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> DocumentTaskResponse:
-    knowledge_base = await get_owned_knowledge_base(session, current_user, knowledge_base_id)
+    knowledge_base = await get_owned_knowledge_base(
+        session, current_user, knowledge_base_id, for_update=True
+    )
     extension = Path(file.filename or "").suffix.lower()
     if extension not in _allowed_extensions:
         raise AppError(
@@ -107,6 +120,29 @@ async def upload_document(
         raise AppError(
             code="DUPLICATE_DOCUMENT", message="该知识库已上传相同文件。", status_code=409
         )
+    trashed_duplicate = await session.scalar(
+        select(Document.id).where(
+            Document.knowledge_base_id == knowledge_base_id,
+            Document.file_hash == file_hash,
+            Document.deleted_at.is_not(None),
+        )
+    )
+    if trashed_duplicate is not None:
+        actor_user_id = current_user.id
+        error = AppError(
+            code="DOCUMENT_IN_TRASH",
+            message="相同文件仍在回收站中，请先恢复或永久清理。",
+            status_code=409,
+        )
+        await session.rollback()
+        await record_denied_audit_event(
+            actor_user_id=actor_user_id,
+            action="document.upload",
+            resource_type="document",
+            resource_id=trashed_duplicate,
+            security_summary={"reason": error.code},
+        )
+        raise error
     stored_file_name = f"{uuid4()}{extension}"
     settings.upload_directory.mkdir(parents=True, exist_ok=True)
     stored_file = settings.upload_directory / stored_file_name
@@ -246,48 +282,78 @@ async def delete_document(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Response:
-    document = await get_owned_document(session, current_user, document_id, for_update=True)
-    active_job = await session.scalar(
-        select(DocumentJob.id).where(
-            DocumentJob.job_type == "ingest_document",
-            DocumentJob.resource_type == "document",
-            DocumentJob.resource_id == document_id,
-            DocumentJob.status.in_(("pending", "processing", "retry_wait")),
-        )
-    )
-    if active_job is not None:
-        raise AppError(
-            code="DOCUMENT_PROCESSING",
-            message="文档正在处理中，请稍后再删除。",
-            status_code=409,
-        )
-
-    upload_root = get_settings().upload_directory.resolve()
-    stored_file = (upload_root / document.stored_file_name).resolve()
-    if not stored_file.is_relative_to(upload_root):
-        raise AppError(
-            code="DOCUMENT_DELETE_FAILED",
-            message="文档删除失败，请稍后重试。",
-            status_code=500,
-        )
     try:
-        await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
-        await session.execute(
-            delete(DocumentJob).where(
-                DocumentJob.job_type == "ingest_document",
-                DocumentJob.resource_type == "document",
-                DocumentJob.resource_id == document_id,
-            )
+        await soft_delete_document(
+            session,
+            owner_user_id=current_user.id,
+            document_id=document_id,
+            retention_days=get_settings().trash_retention_days,
         )
-        await session.delete(document)
-        await session.flush()
-        stored_file.unlink(missing_ok=True)
         await session.commit()
-    except OSError as error:
+    except AppError as error:
+        actor_user_id = current_user.id
         await session.rollback()
-        raise AppError(
-            code="DOCUMENT_DELETE_FAILED",
-            message="文档删除失败，请稍后重试。",
-            status_code=500,
-        ) from error
+        await record_denied_audit_event(
+            actor_user_id=actor_user_id,
+            action="document.delete",
+            resource_type="document",
+            resource_id=document_id,
+            security_summary={"reason": error.code},
+        )
+        raise
     return Response(status_code=204)
+
+
+@router.post("/api/v1/documents/{document_id}/restore", status_code=204)
+async def restore_deleted_document(
+    document_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Response:
+    try:
+        await restore_document(session, owner_user_id=current_user.id, document_id=document_id)
+        await session.commit()
+    except AppError as error:
+        actor_user_id = current_user.id
+        await session.rollback()
+        await record_denied_audit_event(
+            actor_user_id=actor_user_id,
+            action="document.restore",
+            resource_type="document",
+            resource_id=document_id,
+            security_summary={"reason": error.code},
+        )
+        raise
+    return Response(status_code=204)
+
+
+@router.delete(
+    "/api/v1/documents/{document_id}/purge",
+    response_model=PurgeJobResponse,
+    status_code=202,
+)
+async def purge_deleted_document(
+    document_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> PurgeJobResponse:
+    try:
+        job = await request_purge_document(
+            session,
+            owner_user_id=current_user.id,
+            document_id=document_id,
+            max_attempts=get_settings().job_max_attempts,
+        )
+        await session.commit()
+    except AppError as error:
+        actor_user_id = current_user.id
+        await session.rollback()
+        await record_denied_audit_event(
+            actor_user_id=actor_user_id,
+            action="document.purge_request",
+            resource_type="document",
+            resource_id=document_id,
+            security_summary={"reason": error.code},
+        )
+        raise
+    return PurgeJobResponse(job_id=job.id, status=job.status)

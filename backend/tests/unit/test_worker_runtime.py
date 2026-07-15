@@ -78,6 +78,42 @@ async def test_worker_iteration_claims_at_most_one_job(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_worker_does_not_complete_a_purge_job_deleted_by_its_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = _lease()
+    lease = JobLease(
+        job_id=original.job_id,
+        job_type="purge_document",
+        resource_type="document",
+        resource_id=original.resource_id,
+        owner_user_id=original.owner_user_id,
+        knowledge_base_id=original.knowledge_base_id,
+        attempt_number=original.attempt_number,
+        lease_token=original.lease_token,
+        lease_expires_at=original.lease_expires_at,
+    )
+    complete = AsyncMock()
+    fail = AsyncMock()
+    monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=lease))
+    monkeypatch.setattr(worker_main, "complete_job", complete)
+    monkeypatch.setattr(worker_main, "fail_job", fail)
+    monkeypatch.setattr(worker_main, "renew_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker_main, "record_worker_heartbeat", AsyncMock())
+
+    processed = await worker_main.run_worker_iteration(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None),
+        worker_id="worker-a",
+        process_job=AsyncMock(return_value=0),
+    )
+
+    assert processed is True
+    complete.assert_not_awaited()
+    fail.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_empty_iteration_does_not_call_processor(monkeypatch: pytest.MonkeyPatch) -> None:
     process = AsyncMock()
     monkeypatch.setattr(worker_main, "claim_next_job", AsyncMock(return_value=None))
@@ -508,11 +544,35 @@ async def test_default_processor_routes_ingestion_to_registered_handler(
 
 
 @pytest.mark.asyncio
+async def test_default_processor_routes_purge_to_registered_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = _lease()
+    purge_lease = JobLease(
+        job_id=lease.job_id,
+        job_type="purge_document",
+        resource_type=lease.resource_type,
+        resource_id=lease.resource_id,
+        owner_user_id=lease.owner_user_id,
+        knowledge_base_id=lease.knowledge_base_id,
+        attempt_number=lease.attempt_number,
+        lease_token=lease.lease_token,
+        lease_expires_at=lease.lease_expires_at,
+    )
+    handler = AsyncMock(return_value=0)
+    monkeypatch.setattr(worker_main, "purge_document", handler)
+
+    assert await worker_main.process_job(purge_lease) == 0
+    handler.assert_awaited_once()
+    assert handler.await_args.kwargs["lease"] == purge_lease
+
+
+@pytest.mark.asyncio
 async def test_default_processor_fails_closed_for_unregistered_job_type() -> None:
     lease = _lease()
     unsupported_lease = JobLease(
         job_id=lease.job_id,
-        job_type="purge_document",
+        job_type="export_document",  # type: ignore[arg-type]
         resource_type=lease.resource_type,
         resource_id=lease.resource_id,
         owner_user_id=lease.owner_user_id,

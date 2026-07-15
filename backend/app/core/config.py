@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     worker_heartbeat_seconds: float = Field(default=15, gt=0)
     job_max_attempts: int = Field(default=3, gt=0)
     job_retry_backoff_seconds: tuple[int, int] = (30, 120)
+    trash_retention_days: int = Field(default=7, gt=0, le=365)
 
     jwt_secret_key: str = "development-only-change-me-please-32-chars"
     jwt_algorithm: Literal["HS256"] = "HS256"

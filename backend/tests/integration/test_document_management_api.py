@@ -176,7 +176,7 @@ async def test_get_document_uses_latest_job_created_at(
 
 
 @pytest.mark.asyncio
-async def test_delete_document_removes_database_records_and_original_file(
+async def test_delete_document_soft_deletes_and_keeps_records_and_original_file(
     tmp_path, document_management_context: DocumentManagementContext
 ) -> None:
     _knowledge_base, document, jobs = await _create_document(
@@ -197,16 +197,16 @@ async def test_delete_document_removes_database_records_and_original_file(
         settings.upload_directory = previous_upload_directory
 
     assert response.status_code == 204
-    assert repeated_response.status_code == 404
-    assert repeated_response.json()["error"]["code"] == "DOCUMENT_NOT_FOUND"
-    assert not stored_file.exists()
+    assert repeated_response.status_code == 204
+    assert stored_file.exists()
     async with session_factory() as session:
-        assert await session.get(Document, document.id) is None
+        deleted_document = await session.get(Document, document.id)
+        assert deleted_document is not None and deleted_document.deleted_at is not None
         assert (
             await session.scalar(
                 select(DocumentChunk.id).where(DocumentChunk.document_id == document.id)
             )
-        ) is None
+        ) is not None
         assert (
             await session.scalar(
                 select(DocumentJob.id).where(
@@ -215,12 +215,12 @@ async def test_delete_document_removes_database_records_and_original_file(
                     DocumentJob.resource_id == document.id,
                 )
             )
-        ) is None
+        ) is not None
     assert len(jobs) == 2
 
 
 @pytest.mark.asyncio
-async def test_delete_document_rejects_active_ingestion_job(
+async def test_delete_document_cancels_active_ingestion_job(
     tmp_path, document_management_context: DocumentManagementContext
 ) -> None:
     _knowledge_base, document, _jobs = await _create_document(
@@ -239,15 +239,23 @@ async def test_delete_document_rejects_active_ingestion_job(
     finally:
         settings.upload_directory = previous_upload_directory
 
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "DOCUMENT_PROCESSING"
+    assert response.status_code == 204
     assert stored_file.exists()
     async with session_factory() as session:
-        assert await session.get(Document, document.id) is not None
+        deleted_document = await session.get(Document, document.id)
+        canceled_job = await session.scalar(
+            select(DocumentJob).where(
+                DocumentJob.resource_type == "document",
+                DocumentJob.resource_id == document.id,
+                DocumentJob.status == "canceled",
+            )
+        )
+    assert deleted_document is not None and deleted_document.deleted_at is not None
+    assert canceled_job is not None
 
 
 @pytest.mark.asyncio
-async def test_delete_document_rolls_back_when_file_unlink_fails(
+async def test_soft_delete_does_not_touch_the_original_file(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
     document_management_context: DocumentManagementContext,
@@ -270,11 +278,10 @@ async def test_delete_document_rolls_back_when_file_unlink_fails(
     finally:
         settings.upload_directory = previous_upload_directory
 
-    assert response.status_code == 500
-    assert response.json()["error"]["code"] == "DOCUMENT_DELETE_FAILED"
-    assert "AppData" not in response.text
+    assert response.status_code == 204
     async with session_factory() as session:
-        assert await session.get(Document, document.id) is not None
+        deleted_document = await session.get(Document, document.id)
+        assert deleted_document is not None and deleted_document.deleted_at is not None
         assert (
             await session.scalar(
                 select(DocumentChunk.id).where(DocumentChunk.document_id == document.id)
