@@ -56,6 +56,19 @@ def test_settings_use_stage_3c_reranker_defaults() -> None:
     assert settings.rag_reranker_batch_size == 16
     assert settings.rag_candidate_k == 20
     assert settings.rag_reranker_allow_fallback is True
+    assert settings.rag_reranker_min_score is None
+
+
+@pytest.mark.parametrize("invalid_score", [float("nan"), float("inf"), float("-inf")])
+def test_settings_reject_non_finite_reranker_min_score(invalid_score: float) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, rag_reranker_min_score=invalid_score)
+
+
+def test_settings_accepts_finite_reranker_min_score() -> None:
+    settings = Settings(_env_file=None, rag_reranker_min_score=-2.75)
+
+    assert settings.rag_reranker_min_score == -2.75
 
 
 @pytest.mark.parametrize("candidate_k", [0, 101])

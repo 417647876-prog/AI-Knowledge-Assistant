@@ -3,7 +3,7 @@ from uuid import UUID
 import pytest
 
 from app.core.exceptions import AppError
-from app.rag.reranking import rerank_chunks
+from app.rag.reranking import accept_reranked_chunks, rerank_chunks
 from app.rag.schemas import RetrievedChunk
 
 
@@ -25,6 +25,32 @@ def make_chunk(number: int, *, score: float = 0.1) -> RetrievedChunk:
         content=f"候选片段 {number}",
         relevance_score=score,
     )
+
+
+def test_accept_reranked_chunks_returns_all_when_gate_is_disabled() -> None:
+    chunks = [make_chunk(1, score=-3.0), make_chunk(2, score=0.8)]
+
+    assert accept_reranked_chunks(chunks, min_score=None) == chunks
+
+
+def test_accept_reranked_chunks_keeps_score_equal_to_threshold() -> None:
+    chunks = [make_chunk(1, score=0.4), make_chunk(2, score=0.3)]
+
+    result = accept_reranked_chunks(chunks, min_score=0.4)
+
+    assert [item.chunk_id for item in result] == [chunks[0].chunk_id]
+
+
+def test_accept_reranked_chunks_preserves_accepted_order() -> None:
+    chunks = [make_chunk(1, score=0.9), make_chunk(2, score=0.2), make_chunk(3, score=0.7)]
+
+    result = accept_reranked_chunks(chunks, min_score=0.5)
+
+    assert [item.chunk_id for item in result] == [chunks[0].chunk_id, chunks[2].chunk_id]
+
+
+def test_accept_reranked_chunks_can_reject_every_chunk() -> None:
+    assert accept_reranked_chunks([make_chunk(1, score=-1.0)], min_score=0.0) == []
 
 
 @pytest.mark.asyncio

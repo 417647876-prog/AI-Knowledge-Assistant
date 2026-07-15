@@ -14,6 +14,16 @@ def _provider_error() -> AppError:
     )
 
 
+def accept_reranked_chunks(
+    chunks: list[RetrievedChunk],
+    *,
+    min_score: float | None,
+) -> list[RetrievedChunk]:
+    if min_score is None:
+        return chunks
+    return [chunk for chunk in chunks if chunk.relevance_score >= min_score]
+
+
 async def rerank_chunks(
     provider: RerankerProvider,
     *,

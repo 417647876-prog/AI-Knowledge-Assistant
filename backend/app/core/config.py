@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     rag_reranker_batch_size: int = Field(default=16, ge=1, le=256)
     rag_candidate_k: int = Field(default=20, ge=1, le=100)
     rag_reranker_allow_fallback: bool = True
+    rag_reranker_min_score: float | None = Field(default=None, allow_inf_nan=False)
 
     jwt_secret_key: str = "development-only-change-me-please-32-chars"
     jwt_algorithm: Literal["HS256"] = "HS256"
