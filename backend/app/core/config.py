@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     rag_question_max_length: int = Field(default=2000, ge=1, le=10000)
     rag_retrieval_mode: Literal["vector", "hybrid"] = "vector"
     rag_rrf_rank_constant: int = Field(default=60, ge=1, le=1000)
+    rag_reranker_provider: Literal["disabled", "fake", "local"] = "disabled"
+    rag_reranker_model: str = "BAAI/bge-reranker-base"
+    rag_reranker_device: Literal["auto", "cuda", "cpu"] = "auto"
+    rag_reranker_batch_size: int = Field(default=16, ge=1, le=256)
+    rag_candidate_k: int = Field(default=20, ge=1, le=100)
+    rag_reranker_allow_fallback: bool = True
 
     jwt_secret_key: str = "development-only-change-me-please-32-chars"
     jwt_algorithm: Literal["HS256"] = "HS256"
@@ -62,6 +68,8 @@ class Settings(BaseSettings):
             raise ValueError("使用 DeepSeek Chat 时必须配置 API Key")
         if self.rag_top_k_default > self.rag_top_k_max:
             raise ValueError("rag_top_k_default 不能大于 rag_top_k_max")
+        if self.rag_candidate_k < self.rag_top_k_default:
+            raise ValueError("rag_candidate_k 不能小于 rag_top_k_default")
         if self.app_env == "production":
             if self.jwt_secret_key == "development-only-change-me-please-32-chars":
                 raise ValueError("生产环境必须配置 JWT_SECRET_KEY")

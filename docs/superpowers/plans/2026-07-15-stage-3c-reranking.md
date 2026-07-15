@@ -136,10 +136,10 @@ rag_candidate_k: int = Field(default=20, ge=1, le=100)
 rag_reranker_allow_fallback: bool = True
 ```
 
-- [ ] **Step 1：写默认禁用、候选数下限和 Provider 选择测试**
-- [ ] **Step 2：校验 `rag_candidate_k >= rag_top_k_default`**
-- [ ] **Step 3：实现依赖，disabled 返回 `None`，Fake/Local 返回对应 Provider**
-- [ ] **Step 4：验证并提交**
+- [x] **Step 1：写默认禁用、候选数下限和 Provider 选择测试**
+- [x] **Step 2：校验 `rag_candidate_k >= rag_top_k_default`**
+- [x] **Step 3：实现依赖，disabled 返回 `None`，Fake/Local 返回对应 Provider**
+- [x] **Step 4：验证并提交**
 
 运行：`uv run pytest tests/unit/test_config.py tests/unit/test_question_reranker_dependency.py -q`
 

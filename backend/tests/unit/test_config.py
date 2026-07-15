@@ -47,6 +47,28 @@ def test_settings_use_stage_1d_rag_defaults() -> None:
     assert settings.rag_rrf_rank_constant == 60
 
 
+def test_settings_use_stage_3c_reranker_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.rag_reranker_provider == "disabled"
+    assert settings.rag_reranker_model == "BAAI/bge-reranker-base"
+    assert settings.rag_reranker_device == "auto"
+    assert settings.rag_reranker_batch_size == 16
+    assert settings.rag_candidate_k == 20
+    assert settings.rag_reranker_allow_fallback is True
+
+
+@pytest.mark.parametrize("candidate_k", [0, 101])
+def test_settings_reject_invalid_candidate_k_bounds(candidate_k: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, rag_candidate_k=candidate_k)
+
+
+def test_settings_reject_candidate_k_below_default_top_k() -> None:
+    with pytest.raises(ValidationError, match="rag_candidate_k"):
+        Settings(_env_file=None, rag_top_k_default=6, rag_candidate_k=5)
+
+
 @pytest.mark.parametrize("rank_constant", [0, 1001])
 def test_settings_reject_invalid_rrf_rank_constant(rank_constant: int) -> None:
     with pytest.raises(ValidationError):

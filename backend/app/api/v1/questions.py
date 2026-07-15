@@ -13,6 +13,7 @@ from app.ai.contracts import (
     ConversationMessage,
     EmbeddingProvider,
     QuestionRewriter,
+    RerankerProvider,
     StreamingChatProvider,
 )
 from app.ai.embeddings import (
@@ -20,6 +21,7 @@ from app.ai.embeddings import (
     OpenAICompatibleEmbeddingProvider,
     get_local_embedding_provider,
 )
+from app.ai.rerankers import FakeRerankerProvider, LocalBgeRerankerProvider
 from app.ai.rewrite import ChatQuestionRewriter, FakeQuestionRewriter
 from app.api.auth_dependencies import get_current_user
 from app.api.sse import iter_sse
@@ -146,6 +148,20 @@ async def get_question_rewriter(
     if settings.chat_provider == "fake":
         return FakeQuestionRewriter()
     return ChatQuestionRewriter(chat_provider)
+
+
+def get_question_reranker(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RerankerProvider | None:
+    if settings.rag_reranker_provider == "disabled":
+        return None
+    if settings.rag_reranker_provider == "fake":
+        return FakeRerankerProvider()
+    return LocalBgeRerankerProvider(
+        model_name=settings.rag_reranker_model,
+        device=settings.rag_reranker_device,
+        batch_size=settings.rag_reranker_batch_size,
+    )
 
 
 def build_retriever(session: AsyncSession, settings: Settings) -> Retriever:
