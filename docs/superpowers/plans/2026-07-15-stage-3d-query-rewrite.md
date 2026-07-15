@@ -314,7 +314,7 @@ yield StreamEvent(
 - 修改：`frontend/src/stores/conversations.spec.ts`
 - 修改：`frontend/src/components/RetrievalDetails.vue`
 
-- [ ] **Step 1：写 `used_fallback` 事件解析和会话状态更新测试**
+- [x] **Step 1：写 `used_fallback` 事件解析和会话状态更新测试**
 
 后端 Stub 的事件固定为：
 
@@ -341,7 +341,7 @@ expect(store.messages[store.messages.length - 1]).toMatchObject({
 
 先分别运行后端集成测试和前端 Store 测试，预期前者因旧 Stub 契约断言失败，后者因 `used_fallback` 类型或 `rewriteUsedFallback` 状态尚不存在而失败。
 
-- [ ] **Step 2：在既有 rewrite 事件类型中增加 `used_fallback`，不新增接口路径或 history 字段**
+- [x] **Step 2：在既有 rewrite 事件类型中增加 `used_fallback`，不新增接口路径或 history 字段**
 
 类型和状态只做下列扩展：
 
@@ -397,7 +397,7 @@ answer.rewriteUsedFallback = event.data.used_fallback
 
 `RetrievalDetails.vue` 增加一行只读说明：回退时显示“已回退到原问题”，否则显示“未回退”。字段使用可选布尔值，保证旧 `sessionStorage` 会话仍可读取，不做存储迁移。
 
-- [ ] **Step 3：验证前端与后端**
+- [x] **Step 3：验证前端与后端**
 
 运行：`Set-Location backend; uv run pytest tests/integration/test_question_api.py -q`
 
@@ -405,7 +405,7 @@ answer.rewriteUsedFallback = event.data.used_fallback
 
 再运行：`npm.cmd run build`，预期 TypeScript 编译和 Vite 构建通过。
 
-- [ ] **Step 4：提交**
+- [x] **Step 4：提交**
 
 提交：`git commit -m "test: 覆盖问题改写回退体验"`
 

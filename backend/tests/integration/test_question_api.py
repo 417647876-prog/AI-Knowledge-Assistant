@@ -67,7 +67,14 @@ class StubRagService:
 
     async def stream_answer(self, knowledge_base_id, question, top_k, history):
         self.stream_calls.append((knowledge_base_id, question, top_k, history))
-        yield StreamEvent("rewrite", {"standalone_question": "独立问题", "elapsed_ms": 10})
+        yield StreamEvent(
+            "rewrite",
+            {
+                "standalone_question": "它呢？",
+                "elapsed_ms": 10,
+                "used_fallback": True,
+            },
+        )
         yield StreamEvent("retrieval", {"retrieved_chunk_count": 1, "elapsed_ms": 20})
         yield StreamEvent("token", {"delta": "答案。[1]"})
         yield StreamEvent(
@@ -215,6 +222,8 @@ async def test_stream_question_returns_sse_and_forwards_valid_history(
     assert response.headers["cache-control"] == "no-cache"
     assert response.headers["x-accel-buffering"] == "no"
     assert "event: rewrite" in response.text
+    assert '"standalone_question":"它呢？"' in response.text
+    assert '"used_fallback":true' in response.text
     assert '"request_id":"stream-req-1"' in response.text
     assert question_context.service.stream_calls == [
         (

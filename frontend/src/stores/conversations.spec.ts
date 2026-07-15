@@ -31,7 +31,10 @@ describe('conversations store', () => {
 
   it('累积流式事件并保存已完成回答', async () => {
     vi.mocked(streamQuestion).mockReturnValue(events(
-      { event: 'rewrite', data: { standalone_question: '独立问题', elapsed_ms: 12 } },
+      {
+        event: 'rewrite',
+        data: { standalone_question: '它呢？', elapsed_ms: 12, used_fallback: true },
+      },
       { event: 'retrieval', data: { retrieved_chunk_count: 1, elapsed_ms: 8 } },
       { event: 'token', data: { delta: '答案。[1]' } },
       { event: 'citation', data: citation(1) },
@@ -49,7 +52,8 @@ describe('conversations store', () => {
 
     expect(store.messages[store.messages.length - 1]).toMatchObject({
       kind: 'assistant', status: 'completed', content: '答案。[1]', requestId: 'req-1',
-      standaloneQuestion: '独立问题', retrievedChunkCount: 1, citations: [citation(1)],
+      standaloneQuestion: '它呢？', rewriteUsedFallback: true,
+      retrievedChunkCount: 1, citations: [citation(1)],
     })
     expect(streamQuestion).toHaveBeenCalledWith(
       'kb-1', '它呢？', [], expect.any(AbortSignal),
