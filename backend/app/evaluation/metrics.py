@@ -4,6 +4,14 @@ from app.evaluation.schemas import ExpectedSource
 from app.rag.schemas import Citation, RetrievedChunk
 
 
+def ceiling_aware_target(baseline: float, required_gain: float) -> float:
+    if not 0 <= baseline <= 1:
+        raise ValueError("baseline 必须位于 0 到 1 之间")
+    if not 0 <= required_gain <= 1:
+        raise ValueError("required_gain 必须位于 0 到 1 之间")
+    return min(1.0, baseline + required_gain)
+
+
 def _matches(expected: ExpectedSource, file_name: str, content: str) -> bool:
     return expected.file_name == file_name and expected.contains in content
 

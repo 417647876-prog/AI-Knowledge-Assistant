@@ -2,7 +2,7 @@
 
 > **执行要求：** 使用 `executing-plans` 逐 Task 执行；除非用户明确要求，不派发子代理。所有步骤用本文复选框跟踪。
 >
-> **当前状态：** 计划已就绪，但阶段 3C 尚未开始。3C 未验收通过前，只允许评审和修订本计划，不得修改 3D 业务代码。
+> **当前状态：** 阶段 3D Task 1～5 已完成并通过自身质量门；阶段 3E 仍未开始。本计划保留 3C 质量门豁免记录，不把豁免描述为技术通过。
 
 **目标：** 复用阶段 2D 的流式多轮问答，减少不必要的改写模型调用，并让改写失败时安全回退到原问题。
 
@@ -419,12 +419,15 @@ answer.rewriteUsedFallback = event.data.used_fallback
 
 - 修改：`backend/scripts/evaluate_rag.py`
 - 修改：`backend/tests/unit/test_evaluate_rag_script.py`
+- 修改：`backend/app/evaluation/metrics.py`
 - 修改：`backend/app/evaluation/runner.py`
+- 修改：`backend/app/rag/service.py`
+- 修改：`backend/tests/unit/test_evaluation_metrics.py`
 - 修改：`backend/tests/unit/test_evaluation_runner.py`
 - 修改：`docs/阶段3执行进度.md`
 - 修改：`README.md`
 
-- [ ] **Step 1：先写 rewrite 模式的失败测试**
+- [x] **Step 1：先写 rewrite 模式的失败测试**
 
 必须覆盖：
 
@@ -438,7 +441,7 @@ answer.rewriteUsedFallback = event.data.used_fallback
 
 预期：FAIL，`parse_args` 尚不接受 `rewrite`，评估链路也尚未消费 history。
 
-- [ ] **Step 2：增加 `--mode rewrite`，仅为 `multi_turn` 案例提供 2D 格式 history**
+- [x] **Step 2：增加 `--mode rewrite`，仅为 `multi_turn` 案例提供 2D 格式 history**
 
 CLI 的 `choices` 扩为 `vector`、`hybrid`、`rerank`、`rewrite`。`rewrite` 表示“使用 3C 已验收的 Retriever/Reranker 配置，并在多轮案例前执行选择性改写”，不能把字符串 `rewrite` 直接赋给只接受检索后端模式的 `rag_retrieval_mode`。
 
@@ -469,7 +472,7 @@ class EvaluationAnswerer(Protocol):
 
 生产 Resolver 复用 `should_rewrite` 和现有 `QuestionRewriter`；仅当 `case.category == "multi_turn"` 且规则触发时才转换并传入 `case.history`。不触发或捕获 `QUESTION_REWRITE_ERROR` 时返回 `case.question.strip()`。这样真实模型每个案例只改写一次，不会出现评估 Retriever 和回答链路分别改写、得到两个不同问题的情况。
 
-- [ ] **Step 3：生成未改写和选择性改写两份报告**
+- [x] **Step 3：生成未改写和选择性改写两份报告**
 
 先生成未改写对照报告，配置必须与 rewrite 报告一致，唯一变量是是否启用改写。报告文件均为本地产物，不提交 Git：
 
@@ -486,7 +489,7 @@ uv run python -m scripts.evaluate_rag `
 
 运行：`uv run python -m scripts.evaluate_rag --dataset tests/fixtures/evaluation/stage3.jsonl --knowledge-base-id $env:EVALUATION_KNOWLEDGE_BASE_ID --mode rewrite --output reports/stage3d-rewrite.json`
 
-- [ ] **Step 4：验证质量门**
+- [x] **Step 4：验证质量门**
 
 采用上限感知质量门：rewrite 多轮 Recall@5 必须达到 `min(100%, no-rewrite 多轮 Recall@5 + 15 个百分点)`；无历史和完整问题的改写调用次数为 0；所有改写失败案例均安全回退。若未改写基线已经达到 100%，只要求保持 100%，不要求不可能的 115%。
 
@@ -500,7 +503,7 @@ uv run python -m scripts.evaluate_rag `
 
 目标值必须调用 3C 已加入 `backend/app/evaluation/metrics.py` 的 `ceiling_aware_target(no_rewrite_recall, 0.15)` 计算，不在 CLI 中复制第二套公式。示例：未改写基线为 50% 时目标为 65%；基线为 93% 时目标为 100%；基线为 100% 时目标仍为 100%。同时要求总体引用命中率和拒答准确率均不得低于 3C 正式报告；如果未达到，不得只调整文档数字，必须保留两份报告并用 `Sol｜xhigh` 分析失败案例。
 
-- [ ] **Step 5：运行完整测试、更新看板并提交**
+- [x] **Step 5：运行完整测试、更新看板并提交**
 
 后端验证：
 
@@ -524,6 +527,15 @@ npm.cmd run build
 通过后将 3D 标为 `已完成`，把下一步写为“另开任务开始 3E Task 1”；不要在同一提交中提前执行 3E 代码。
 
 提交：`git commit -m "docs: 完成阶段3D选择性改写验收"`
+
+### Task 5 完成结论
+
+- 评估实现：新增 `rewrite` 模式和 `EvaluationQueryResolver`；仅为需要改写的 `multi_turn` 案例转换并使用 history，其他案例保持零改写调用。改写失败只对 `QUESTION_REWRITE_ERROR` 回退。
+- 口径修复：审查发现 rewrite 报告曾误走 raw hybrid Top5 分支。已通过红—绿测试修复为与 no-rewrite 相同的单次最终重排链路，Recall/MRR/引用/延迟均取 BGE rerank 后 Top5；回答 Prompt 仍使用原问题。
+- 真实报告：`stage3d-no-rewrite.json` 与 `stage3d-rewrite.json` 使用相同数据集哈希、`top_k=5` 和安全环境摘要。多轮 Recall@5 从 83.33% 提升到 100%，`ceiling_aware_target` 计算目标为 98.33%，质量门通过。
+- 保护指标：rewrite 引用命中率和拒答准确率均为 96.67%，不低于 3C 正式报告的 93.33%；报告扫描未发现数据库连接串或 API Key 标记。
+- 完整验证：后端 303 passed / 60 skipped；临时空库从零迁移后 60 integration passed，清理后残留数据库数量为 0；Ruff check 和 143 个文件 format check 通过；前端 170 passed，Vue TypeScript 与 Vite build 通过。
+- 阶段边界：3D Task 1～5 全部完成，阶段 3D 已完成；3E 保持未开始，本次未执行 3E。
 
 ## 计划自检
 

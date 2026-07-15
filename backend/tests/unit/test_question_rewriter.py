@@ -79,6 +79,15 @@ async def test_rewriter_treats_history_as_data_and_returns_trimmed_question() ->
 
 
 @pytest.mark.asyncio
+async def test_rewriter_normalizes_common_chinese_duration_expression() -> None:
+    rewriter = ChatQuestionRewriter(RecordingChatProvider("员工迟到半小时的考勤处理规则是什么？"))
+
+    result = await rewriter.rewrite([], "迟到半小时怎么办？")
+
+    assert result == "员工迟到30分钟的考勤处理规则是什么？"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("answer", ["", "   ", "问" * 2001])
 async def test_rewriter_rejects_invalid_model_result(answer: str) -> None:
     rewriter = ChatQuestionRewriter(RecordingChatProvider(answer))

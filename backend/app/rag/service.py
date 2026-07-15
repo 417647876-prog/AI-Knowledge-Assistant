@@ -134,14 +134,20 @@ class RagService:
         )
 
     async def answer_with_retrieval(
-        self, knowledge_base_id: UUID, question: str, top_k: int
+        self,
+        knowledge_base_id: UUID,
+        question: str,
+        top_k: int,
+        *,
+        original_question: str | None = None,
     ) -> tuple[QuestionAnswer, list[RetrievedChunk], float]:
         await self._ensure_knowledge_base(knowledge_base_id)
         question = question.strip()
+        answer_question = question if original_question is None else original_question.strip()
         retrieval_started = perf_counter()
         chunks = await self._retrieve(knowledge_base_id, question, top_k)
         retrieval_latency_ms = max(0.0, (perf_counter() - retrieval_started) * 1000)
-        answer = await self._answer_from_chunks(question, chunks)
+        answer = await self._answer_from_chunks(answer_question, chunks)
         return answer, chunks, retrieval_latency_ms
 
     async def answer_with_retrieval_question(

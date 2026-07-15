@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.ai.contracts import ConversationMessage
 from app.ai.rerankers import FakeRerankerProvider
 from app.core.config import Settings
 from app.core.exceptions import AppError
@@ -12,6 +13,7 @@ from app.rag.schemas import QuestionAnswer, RetrievedChunk
 from app.rag.service import RagService
 from scripts.evaluate_rag import (
     RagServiceEvaluationAnswerer,
+    SelectiveEvaluationQueryResolver,
     build_evaluation_settings,
     build_safe_environment,
     format_safe_error,
@@ -74,11 +76,43 @@ class StubAnswerer:
 
 class StubRagService:
     def __init__(self) -> None:
-        self.calls: list[tuple[object, str, int]] = []
+        self.calls: list[tuple[object, str, str, int]] = []
 
-    async def answer(self, knowledge_base_id: object, question: str, top_k: int) -> QuestionAnswer:
-        self.calls.append((knowledge_base_id, question, top_k))
+    async def answer_with_retrieval_question(
+        self,
+        knowledge_base_id: object,
+        original_question: str,
+        retrieval_question: str,
+        top_k: int,
+    ) -> QuestionAnswer:
+        self.calls.append((knowledge_base_id, original_question, retrieval_question, top_k))
         return QuestionAnswer(answer="答案", citations=[], retrieved_chunk_count=1)
+
+
+class RecordingQuestionRewriter:
+    def __init__(self, result: str) -> None:
+        self.result = result
+        self.calls: list[tuple[list[ConversationMessage], str]] = []
+
+    async def rewrite(
+        self,
+        history: list[ConversationMessage],
+        question: str,
+    ) -> str:
+        self.calls.append((history, question))
+        return self.result
+
+
+class FailingQuestionRewriter:
+    def __init__(self, code: str) -> None:
+        self.code = code
+
+    async def rewrite(
+        self,
+        history: list[ConversationMessage],
+        question: str,
+    ) -> str:
+        raise AppError(code=self.code, message="改写失败", status_code=502)
 
 
 def test_parse_args_accepts_vector_baseline_inputs() -> None:
@@ -130,6 +164,20 @@ def test_parse_args_accepts_vector_baseline_inputs() -> None:
     )
     assert rerank_args.mode == "rerank"
 
+    rewrite_args = parse_args(
+        [
+            "--dataset",
+            "tests/fixtures/evaluation/stage3.jsonl",
+            "--knowledge-base-id",
+            str(knowledge_base_id),
+            "--mode",
+            "rewrite",
+            "--output",
+            "reports/stage3d-rewrite.json",
+        ]
+    )
+    assert rewrite_args.mode == "rewrite"
+
 
 def test_parse_args_rejects_unknown_mode_and_top_k_below_five() -> None:
     knowledge_base_id = uuid4()
@@ -143,7 +191,7 @@ def test_parse_args_rejects_unknown_mode_and_top_k_below_five() -> None:
     ]
 
     with pytest.raises(SystemExit):
-        parse_args([*required_args, "--mode", "rewrite"])
+        parse_args([*required_args, "--mode", "unknown"])
     with pytest.raises(SystemExit):
         parse_args([*required_args, "--mode", "vector", "--top-k", "4"])
 
@@ -245,6 +293,93 @@ def test_rerank_mode_uses_hybrid_candidates_and_strict_local_reranker() -> None:
     assert settings.rag_reranker_allow_fallback is False
 
 
+def test_rewrite_mode_reuses_strict_rerank_configuration() -> None:
+    settings = build_evaluation_settings(Settings(), "rewrite")
+
+    assert settings.rag_retrieval_mode == "hybrid"
+    assert settings.rag_reranker_provider == "local"
+    assert settings.rag_reranker_allow_fallback is False
+
+
+@pytest.mark.asyncio
+async def test_selective_query_resolver_converts_multi_turn_history_once() -> None:
+    rewriter = RecordingQuestionRewriter("年假可以顺延吗？")
+    resolver = SelectiveEvaluationQueryResolver(rewriter)
+    case = EvaluationCase(
+        id="multi-turn-001",
+        category="multi_turn",
+        question="那能顺延吗？",
+        expected_sources=[{"file_name": "年假制度.txt", "contains": "顺延"}],
+        history=[
+            {"role": "user", "content": "年假制度怎么规定？"},
+            {"role": "assistant", "content": "员工有五天年假。"},
+        ],
+    )
+
+    result = await resolver.resolve(case)
+
+    assert result == "年假可以顺延吗？"
+    assert rewriter.calls == [
+        (
+            [
+                ConversationMessage(role="user", content="年假制度怎么规定？"),
+                ConversationMessage(role="assistant", content="员工有五天年假。"),
+            ],
+            "那能顺延吗？",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("category", "question"),
+    [
+        ("semantic", "它有什么缺点？"),
+        ("multi_turn", "员工入职满一年有多少天带薪年假？"),
+    ],
+)
+async def test_selective_query_resolver_skips_non_multi_turn_or_complete_question(
+    category: str,
+    question: str,
+) -> None:
+    rewriter = RecordingQuestionRewriter("不应调用")
+    resolver = SelectiveEvaluationQueryResolver(rewriter)
+    case = EvaluationCase(
+        id="case-001",
+        category=category,
+        question=question,
+        expected_sources=[{"file_name": "制度.txt", "contains": "五天"}],
+        history=[
+            {"role": "user", "content": "介绍制度"},
+            {"role": "assistant", "content": "这是摘要"},
+        ],
+    )
+
+    assert await resolver.resolve(case) == question
+    assert rewriter.calls == []
+
+
+@pytest.mark.asyncio
+async def test_selective_query_resolver_falls_back_only_for_rewrite_error() -> None:
+    case = EvaluationCase(
+        id="multi-turn-002",
+        category="multi_turn",
+        question="它呢？",
+        expected_sources=[{"file_name": "制度.txt", "contains": "五天"}],
+        history=[
+            {"role": "user", "content": "介绍制度"},
+            {"role": "assistant", "content": "这是摘要"},
+        ],
+    )
+
+    fallback = SelectiveEvaluationQueryResolver(FailingQuestionRewriter("QUESTION_REWRITE_ERROR"))
+    assert await fallback.resolve(case) == "它呢？"
+
+    strict = SelectiveEvaluationQueryResolver(FailingQuestionRewriter("OTHER_ERROR"))
+    with pytest.raises(AppError, match="改写失败"):
+        await strict.resolve(case)
+
+
 @pytest.mark.asyncio
 async def test_run_evaluation_loads_dataset_and_sets_safe_environment(tmp_path) -> None:
     dataset = tmp_path / "cases.jsonl"
@@ -333,6 +468,57 @@ async def test_rerank_evaluation_metrics_use_final_reranked_order(tmp_path) -> N
     assert len(retriever.calls) == 1
     assert retriever.calls[0]["top_k"] == 20
     assert embedding_provider.queries == ["年假有几天？"]
+
+
+@pytest.mark.asyncio
+async def test_rewrite_final_retrieval_answers_with_original_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunk = RetrievedChunk(
+        chunk_id=uuid4(),
+        document_id=uuid4(),
+        file_name="年假制度.txt",
+        content="员工享有五天年假。",
+        relevance_score=0.8,
+    )
+    embedding_provider = StubEmbeddingProvider()
+    retriever = StubRetriever(chunk)
+    service = RagService(
+        session=StubSession(),
+        embedding_provider=embedding_provider,
+        retriever=retriever,
+        chat_provider=StubChatProvider(),
+        question_rewriter=object(),
+        score_threshold=0.55,
+        reranker=FakeRerankerProvider(scores=[0.9]),
+        candidate_k=20,
+        reranker_allow_fallback=False,
+    )
+    prompt_questions: list[str] = []
+
+    def record_prompt(question: str, chunks: list[RetrievedChunk]) -> tuple[str, str]:
+        prompt_questions.append(question)
+        return "系统提示", "用户提示"
+
+    monkeypatch.setattr("app.rag.service.build_rag_prompt", record_prompt)
+    case = EvaluationCase(
+        id="multi-turn-001",
+        category="multi_turn",
+        question="它呢？",
+        expected_sources=[{"file_name": "年假制度.txt", "contains": "五天年假"}],
+    )
+
+    result = await RagServiceEvaluationAnswerer(service).answer_case_with_retrieval(
+        knowledge_base_id=uuid4(),
+        case=case,
+        retrieval_question="年假制度有几天带薪假？",
+        top_k=5,
+    )
+
+    assert prompt_questions == ["它呢？"]
+    assert embedding_provider.queries == ["年假制度有几天带薪假？"]
+    assert [item.file_name for item in result.retrieved_chunks] == ["年假制度.txt"]
+    assert result.retrieved_chunks[0].relevance_score == 0.9
 
 
 @pytest.mark.asyncio
@@ -494,7 +680,7 @@ async def test_rerank_evaluation_strict_provider_error_stops_single_retrieval(tm
 
 
 @pytest.mark.asyncio
-async def test_rag_service_answerer_uses_case_question() -> None:
+async def test_rag_service_answerer_separates_original_and_retrieval_question() -> None:
     service = StubRagService()
     answerer = RagServiceEvaluationAnswerer(service)
     knowledge_base_id = uuid4()
@@ -508,11 +694,12 @@ async def test_rag_service_answerer_uses_case_question() -> None:
     answer = await answerer.answer_case(
         knowledge_base_id=knowledge_base_id,
         case=case,
+        retrieval_question="年假制度有几天带薪假？",
         top_k=5,
     )
 
     assert answer.answer == "答案"
-    assert service.calls == [(knowledge_base_id, "年假有几天？", 5)]
+    assert service.calls == [(knowledge_base_id, "年假有几天？", "年假制度有几天带薪假？", 5)]
 
 
 @pytest.mark.asyncio

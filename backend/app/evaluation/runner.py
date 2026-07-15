@@ -41,13 +41,32 @@ class EvaluationRetriever(Protocol):
     ) -> list[RetrievedChunk]: ...
 
 
+class EvaluationQueryResolver(Protocol):
+    async def resolve(self, case: EvaluationCase) -> str: ...
+
+
+class OriginalQuestionResolver:
+    async def resolve(self, case: EvaluationCase) -> str:
+        return case.question
+
+
 class EvaluationAnswerer(Protocol):
     async def answer_case(
-        self, *, knowledge_base_id: UUID, case: EvaluationCase, top_k: int
+        self,
+        *,
+        knowledge_base_id: UUID,
+        case: EvaluationCase,
+        retrieval_question: str,
+        top_k: int,
     ) -> QuestionAnswer: ...
 
     async def answer_case_with_retrieval(
-        self, *, knowledge_base_id: UUID, case: EvaluationCase, top_k: int
+        self,
+        *,
+        knowledge_base_id: UUID,
+        case: EvaluationCase,
+        retrieval_question: str,
+        top_k: int,
     ) -> EvaluationAnswerResult: ...
 
 
@@ -68,6 +87,7 @@ async def evaluate_cases(
     embedding_provider: EmbeddingProvider,
     retriever: EvaluationRetriever,
     answerer: EvaluationAnswerer,
+    query_resolver: EvaluationQueryResolver | None = None,
     top_k: int,
     score_threshold: float,
     mode: EvaluationMode = "vector",
@@ -80,12 +100,15 @@ async def evaluate_cases(
 
     results: list[CaseResult] = []
     citation_scores: list[float] = []
+    resolver = query_resolver or OriginalQuestionResolver()
 
     for case in cases:
-        if mode == "rerank":
+        retrieval_question = await resolver.resolve(case)
+        if mode in {"rerank", "rewrite"}:
             final_result = await answerer.answer_case_with_retrieval(
                 knowledge_base_id=knowledge_base_id,
                 case=case,
+                retrieval_question=retrieval_question,
                 top_k=top_k,
             )
             chunks = final_result.retrieved_chunks
@@ -93,10 +116,10 @@ async def evaluate_cases(
             latency_ms = max(0.0, final_result.retrieval_latency_ms)
         else:
             started_at = perf_counter()
-            query_embedding = await embedding_provider.embed_query(case.question)
+            query_embedding = await embedding_provider.embed_query(retrieval_question)
             chunks = await retriever.search(
                 knowledge_base_id=knowledge_base_id,
-                query=case.question,
+                query=retrieval_question,
                 query_embedding=query_embedding,
                 top_k=top_k,
                 score_threshold=score_threshold,
@@ -105,6 +128,7 @@ async def evaluate_cases(
             answer = await answerer.answer_case(
                 knowledge_base_id=knowledge_base_id,
                 case=case,
+                retrieval_question=retrieval_question,
                 top_k=top_k,
             )
         refused = answer.retrieved_chunk_count == 0 and not answer.citations

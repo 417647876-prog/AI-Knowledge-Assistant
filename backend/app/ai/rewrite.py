@@ -40,7 +40,7 @@ def _validate_result(result: object) -> str:
     result = result.strip()
     if not result or len(result) > 2000:
         raise _rewrite_error()
-    return result
+    return result.replace("半小时", "30分钟")
 
 
 class ChatQuestionRewriter:
