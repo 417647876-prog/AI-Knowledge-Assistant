@@ -17,6 +17,7 @@ from app.knowledge.chunking import RecursiveTextChunker
 from app.knowledge.ingestion_service import IngestionService
 from app.knowledge.parsers.registry import ParserRegistry
 from app.knowledge.parsers.text import TextParser
+from app.knowledge.search_tokens import build_search_text
 
 pytestmark = [
     pytest.mark.integration,
@@ -99,3 +100,6 @@ async def test_process_stores_vectors_and_is_safe_to_retry(
     assert len(chunks) > 1
     assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
     assert all(len(chunk.embedding) == 512 for chunk in chunks)
+    assert [chunk.search_text for chunk in chunks] == [
+        build_search_text(chunk.content) for chunk in chunks
+    ]

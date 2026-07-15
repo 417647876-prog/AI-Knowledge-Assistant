@@ -7,6 +7,7 @@ import {
 } from '../api/auth'
 import { configureAuthentication } from '../api/client'
 import type { AuthSession, CurrentUser } from '../types/api'
+import { useConversationsStore } from './conversations'
 import { useWorkspaceStore } from './workspace'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -16,6 +17,7 @@ export const useAuthStore = defineStore('auth', () => {
   const initializing = ref(false)
   const isAdmin = computed(() => user.value?.role === 'admin')
   const workspace = useWorkspaceStore()
+  const conversations = useConversationsStore()
   let authenticationGeneration = 0
   let refreshSessionPromise: Promise<AuthSession> | null = null
   let loginSessionPromise: Promise<AuthSession> | null = null
@@ -28,6 +30,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function clearSession() {
+    const userId = user.value?.id
+    if (userId) conversations.clearUser(userId)
     accessToken.value = null
     user.value = null
     workspace.reset()
@@ -56,10 +60,7 @@ export const useAuthStore = defineStore('auth', () => {
         applySession(session)
         return session.access_token
       } catch {
-        if (generation === authenticationGeneration) {
-          accessToken.value = null
-          user.value = null
-        }
+        if (generation === authenticationGeneration) clearSession()
         return null
       }
     },

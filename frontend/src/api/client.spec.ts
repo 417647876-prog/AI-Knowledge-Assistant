@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, apiRequest, configureAuthentication, formatApiError } from './client'
+import { ApiError, apiRequest, authenticatedFetch, configureAuthentication, formatApiError } from './client'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -11,6 +11,31 @@ afterEach(() => {
 })
 
 describe('apiRequest', () => {
+  it('returns the successful raw response after one initial 401 refresh', async () => {
+    let token = 'old'
+    configureAuthentication({
+      getAccessToken: () => token,
+      refreshAccessToken: vi.fn(async () => { token = 'new'; return token }),
+      onAuthenticationFailed: vi.fn(),
+    })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      .mockResolvedValueOnce(new Response('stream', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await authenticatedFetch('/stream', { method: 'POST' })
+
+    expect(await response.text()).toBe('stream')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps AbortError so the conversation store can mark stopped', async () => {
+    const aborted = new DOMException('aborted', 'AbortError')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(aborted))
+
+    await expect(authenticatedFetch('/stream')).rejects.toBe(aborted)
+  })
+
   it('returns JSON on success', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{"status":"ready"}', {
       status: 200, headers: { 'Content-Type': 'application/json' },
