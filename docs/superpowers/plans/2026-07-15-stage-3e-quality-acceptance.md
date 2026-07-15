@@ -887,7 +887,7 @@ git commit -m "feat: 自动比较阶段3质量门"
 - Consumes: `Stage3Comparison`、稳定 gate ID、四份报告的 provenance。
 - Produces: `ensure_public_report_safe(markdown)` 和 `render_stage3_markdown(comparison, *, reproduce_command)`。
 
-- [ ] **Step 1：写固定章节与顺序失败测试**
+- [x] **Step 1：写固定章节与顺序失败测试**
 
 `backend/tests/unit/test_evaluation_reporting.py` 定义固定章节：
 
@@ -939,7 +939,7 @@ uv run pytest tests/unit/test_evaluation_reporting.py -q
 
 Expected: import FAIL，指出 `app.evaluation.reporting` 不存在。
 
-- [ ] **Step 2：写格式、豁免和隐私失败测试**
+- [x] **Step 2：写格式、豁免和隐私失败测试**
 
 测试必须包含：
 
@@ -984,7 +984,7 @@ def test_sensitive_marker_scan_rejects_secret(secret: str) -> None:
 
 run ID 可以完整显示；知识库 UUID 不显示；快照只显示前 12 位。
 
-- [ ] **Step 3：实现纯函数 Markdown 渲染器**
+- [x] **Step 3：实现纯函数 Markdown 渲染器**
 
 `backend/app/evaluation/reporting.py` 固定辅助函数：
 
@@ -1030,7 +1030,7 @@ def ensure_public_report_safe(markdown: str) -> None:
 14. 3D 选择性改写与 `QUESTION_REWRITE_ERROR` 回退只引用自动化测试证据，不从 JSON 指标虚构结论。
 15. 返回前调用 `ensure_public_report_safe`。
 
-- [ ] **Step 4：验证、更新看板并提交**
+- [x] **Step 4：验证、更新看板并提交**
 
 Run:
 
