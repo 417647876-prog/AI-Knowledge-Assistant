@@ -138,6 +138,7 @@ async def restore_deleted_knowledge_base(
             session,
             owner_user_id=current_user.id,
             knowledge_base_id=knowledge_base_id,
+            retention_days=get_settings().trash_retention_days,
         )
         await session.commit()
     except AppError as error:

@@ -23,7 +23,7 @@ from app.db.models import (
 )
 from app.db.session import session_factory
 from app.jobs.contracts import HANDLER_FINALIZED
-from app.jobs.repository import claim_next_job, complete_job, enqueue_job
+from app.jobs.repository import LeaseLostError, claim_next_job, complete_job, enqueue_job
 from app.lifecycle.service import purge_document, purge_knowledge_base
 from app.worker import main as worker_main
 from tests.database_cleanup import delete_owned_knowledge_bases
@@ -137,7 +137,9 @@ async def test_purge_document_deletes_file_and_content_but_keeps_safe_audit(tmp_
 
 
 @pytest.mark.asyncio
-async def test_purge_recovers_after_file_deleted_but_database_commit_fails(tmp_path) -> None:
+async def test_purge_worker_restart_reclaims_after_file_deleted_and_commit_fails(
+    tmp_path,
+) -> None:
     user = User(
         id=uuid4(),
         username=f"purge_commit_{uuid4().hex}",
@@ -227,10 +229,29 @@ async def test_purge_recovers_after_file_deleted_but_database_commit_fails(tmp_p
         assert persisted_job is not None and persisted_job.status == "processing"
         assert persisted_document is not None
 
+        async with session_factory.begin() as session:
+            restarted_lease = await claim_next_job(
+                session,
+                worker_id="purge-restarted-worker",
+                now=lease.lease_expires_at + timedelta(seconds=1),
+                lease_seconds=120,
+            )
+        assert restarted_lease is not None
+        assert restarted_lease.job_id == lease.job_id
+        assert restarted_lease.lease_token != lease.lease_token
+        assert restarted_lease.attempt_number == lease.attempt_number + 1
+
+        with pytest.raises(LeaseLostError):
+            await purge_document(
+                session_factory=session_factory,
+                upload_directory=tmp_path,
+                lease=lease,
+            )
+
         recovered = await purge_document(
             session_factory=session_factory,
             upload_directory=tmp_path,
-            lease=lease,
+            lease=restarted_lease,
         )
 
         assert recovered.completion_mode == HANDLER_FINALIZED

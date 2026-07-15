@@ -338,17 +338,33 @@ async def test_upload_same_hash_after_tombstone_retention_expired_is_allowed(
 async def test_maintenance_cannot_shorten_document_purge_retention(
     tmp_path, trash_context: TrashContext
 ) -> None:
-    _knowledge_base, document, _job = await _seed_document(trash_context.user.id, tmp_path)
+    knowledge_base, document, _job = await _seed_document(trash_context.user.id, tmp_path)
     await trash_context.client.delete(f"/api/v1/documents/{document.id}")
     async with session_factory.begin() as session:
         shortened = await session.get(Document, document.id, with_for_update=True)
         assert shortened is not None
         shortened.purge_after = datetime.now(UTC) - timedelta(seconds=1)
 
-    response = await trash_context.client.delete(f"/api/v1/documents/{document.id}/purge")
+    trash = await trash_context.client.get("/api/v1/trash")
+    assert trash.status_code == 200
+    trash_document = next(
+        item for item in trash.json()["documents"] if item["id"] == str(document.id)
+    )
+    assert datetime.fromisoformat(trash_document["purge_after"]) > datetime.now(UTC)
 
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "PURGE_RETENTION_ACTIVE"
+    duplicate = await trash_context.client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base.id}/documents",
+        files={"file": ("重新上传.txt", "相同内容", "text/plain")},
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "DOCUMENT_IN_TRASH"
+
+    purge = await trash_context.client.delete(f"/api/v1/documents/{document.id}/purge")
+    assert purge.status_code == 409
+    assert purge.json()["error"]["code"] == "PURGE_RETENTION_ACTIVE"
+
+    restored = await trash_context.client.post(f"/api/v1/documents/{document.id}/restore")
+    assert restored.status_code == 204
 
 
 @pytest.mark.asyncio
@@ -400,6 +416,47 @@ async def test_knowledge_base_delete_and_restore_coordinates_child_state(
         assert deleted_kb.deleted_at == deleted_document.deleted_at
         assert deleted_kb.purge_after == deleted_document.purge_after
         assert canceled_job is not None and canceled_job.status == "canceled"
+
+    restored = await trash_context.client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base.id}/restore"
+    )
+    assert restored.status_code == 204
+    async with session_factory() as session:
+        restored_kb = await session.get(KnowledgeBase, knowledge_base.id)
+        restored_document = await session.get(Document, document.id)
+    assert restored_kb is not None and restored_kb.deleted_at is None
+    assert restored_document is not None and restored_document.deleted_at is None
+
+
+@pytest.mark.asyncio
+async def test_maintenance_cannot_shorten_knowledge_base_or_child_retention(
+    tmp_path, trash_context: TrashContext
+) -> None:
+    knowledge_base, document, _job = await _seed_document(trash_context.user.id, tmp_path)
+    assert (
+        await trash_context.client.delete(f"/api/v1/knowledge-bases/{knowledge_base.id}")
+    ).status_code == 204
+    async with session_factory.begin() as session:
+        shortened_kb = await session.get(KnowledgeBase, knowledge_base.id, with_for_update=True)
+        shortened_document = await session.get(Document, document.id, with_for_update=True)
+        assert shortened_kb is not None and shortened_document is not None
+        shortened_kb.purge_after = datetime.now(UTC) - timedelta(seconds=1)
+        shortened_document.purge_after = datetime.now(UTC) - timedelta(seconds=1)
+
+    trash = await trash_context.client.get("/api/v1/trash")
+    assert trash.status_code == 200
+    trash_kb = next(
+        item for item in trash.json()["knowledge_bases"] if item["id"] == str(knowledge_base.id)
+    )
+    trash_document = next(
+        item for item in trash.json()["documents"] if item["id"] == str(document.id)
+    )
+    assert datetime.fromisoformat(trash_kb["purge_after"]) > datetime.now(UTC)
+    assert trash_kb["purge_after"] == trash_document["purge_after"]
+
+    purge = await trash_context.client.delete(f"/api/v1/knowledge-bases/{knowledge_base.id}/purge")
+    assert purge.status_code == 409
+    assert purge.json()["error"]["code"] == "PURGE_RETENTION_ACTIVE"
 
     restored = await trash_context.client.post(
         f"/api/v1/knowledge-bases/{knowledge_base.id}/restore"

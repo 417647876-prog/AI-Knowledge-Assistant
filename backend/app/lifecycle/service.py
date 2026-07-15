@@ -1,5 +1,5 @@
 import stat
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
@@ -24,6 +24,17 @@ ACTIVE_JOB_STATUSES = ("pending", "processing", "retry_wait")
 
 class SessionFactory(Protocol):
     def __call__(self) -> AsyncSession: ...
+
+
+def effective_purge_after(
+    deleted_at: datetime | None,
+    purge_after: datetime | None,
+    retention_days: int,
+) -> datetime | None:
+    if deleted_at is None:
+        return None
+    minimum_purge_after = deleted_at + timedelta(days=retention_days)
+    return max(purge_after or minimum_purge_after, minimum_purge_after)
 
 
 def resolve_upload_file(upload_directory: Path, stored_file_name: str) -> Path:
@@ -214,7 +225,11 @@ async def _cancel_jobs(session, scope, resource_id: UUID | None, now) -> None:
 
 
 async def restore_document(
-    session: AsyncSession, *, owner_user_id: UUID, document_id: UUID
+    session: AsyncSession,
+    *,
+    owner_user_id: UUID,
+    document_id: UUID,
+    retention_days: int = 7,
 ) -> Document:
     existing = await _owned_document(session, owner_user_id, document_id, for_update=False)
     knowledge_base = await _owned_knowledge_base(
@@ -230,7 +245,8 @@ async def restore_document(
             status_code=409,
         )
     now = await _database_now(session)
-    if document.purge_after is None or document.purge_after <= now:
+    purge_after = effective_purge_after(document.deleted_at, document.purge_after, retention_days)
+    if purge_after is None or purge_after <= now:
         raise AppError(
             code="DOCUMENT_RETENTION_EXPIRED",
             message="文档恢复期已结束，只能永久清理。",
@@ -265,7 +281,11 @@ async def restore_document(
 
 
 async def restore_knowledge_base(
-    session: AsyncSession, *, owner_user_id: UUID, knowledge_base_id: UUID
+    session: AsyncSession,
+    *,
+    owner_user_id: UUID,
+    knowledge_base_id: UUID,
+    retention_days: int = 7,
 ) -> KnowledgeBase:
     knowledge_base = await _owned_knowledge_base(
         session, owner_user_id, knowledge_base_id, for_update=True
@@ -273,7 +293,10 @@ async def restore_knowledge_base(
     if knowledge_base.deleted_at is None:
         return knowledge_base
     now = await _database_now(session)
-    if knowledge_base.purge_after is None or knowledge_base.purge_after <= now:
+    purge_after = effective_purge_after(
+        knowledge_base.deleted_at, knowledge_base.purge_after, retention_days
+    )
+    if purge_after is None or purge_after <= now:
         raise AppError(
             code="KNOWLEDGE_BASE_RETENTION_EXPIRED",
             message="知识库恢复期已结束，只能永久清理。",
@@ -380,14 +403,15 @@ async def _request_purge(
     max_attempts,
     retention_days,
 ):
-    if deleted_at is None or purge_after is None:
+    effective_deadline = effective_purge_after(deleted_at, purge_after, retention_days)
+    if effective_deadline is None:
         raise AppError(
             code="RESOURCE_NOT_IN_TRASH",
             message="资源不在回收站中。",
             status_code=409,
         )
     now = await _database_now(session)
-    if max(purge_after, deleted_at + timedelta(days=retention_days)) > now:
+    if effective_deadline > now:
         raise AppError(
             code="PURGE_RETENTION_ACTIVE",
             message="恢复期内不能永久清理。",
@@ -596,13 +620,14 @@ async def _validate_purge_lease(session, job, lease) -> None:
 
 
 def _validate_purge_time(deleted_at, purge_after, now, retention_days: int) -> None:
-    if deleted_at is None or purge_after is None:
+    effective_deadline = effective_purge_after(deleted_at, purge_after, retention_days)
+    if effective_deadline is None:
         raise AppError(
             code="RESOURCE_NOT_IN_TRASH",
             message="资源不在回收站中。",
             status_code=409,
         )
-    if max(purge_after, deleted_at + timedelta(days=retention_days)) > now:
+    if effective_deadline > now:
         raise AppError(
             code="PURGE_RETENTION_ACTIVE",
             message="恢复期内不能永久清理。",

@@ -8,8 +8,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
+from app.core.config import get_settings
 from app.db.models import Document, KnowledgeBase, User
 from app.db.session import get_session
+from app.lifecycle.service import effective_purge_after
 
 router = APIRouter(prefix="/api/v1/trash", tags=["trash"])
 
@@ -39,14 +41,15 @@ async def list_trash(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> TrashResponse:
-    now = func.clock_timestamp()
+    now = await session.scalar(select(func.clock_timestamp()))
+    assert now is not None
+    retention_days = get_settings().trash_retention_days
     knowledge_bases = (
         await session.scalars(
             select(KnowledgeBase)
             .where(
                 KnowledgeBase.owner_id == current_user.id,
                 KnowledgeBase.deleted_at.is_not(None),
-                KnowledgeBase.purge_after > now,
             )
             .order_by(KnowledgeBase.deleted_at.desc(), KnowledgeBase.id)
         )
@@ -58,21 +61,30 @@ async def list_trash(
             .where(
                 KnowledgeBase.owner_id == current_user.id,
                 Document.deleted_at.is_not(None),
-                Document.purge_after > now,
             )
             .order_by(Document.deleted_at.desc(), Document.id)
         )
     ).all()
+    knowledge_base_deadlines = {
+        item.id: effective_purge_after(item.deleted_at, item.purge_after, retention_days)
+        for item in knowledge_bases
+    }
+    document_deadlines = {
+        item.id: effective_purge_after(item.deleted_at, item.purge_after, retention_days)
+        for item in documents
+    }
     return TrashResponse(
         knowledge_bases=[
             TrashKnowledgeBase(
                 id=item.id,
                 name=item.name,
                 deleted_at=item.deleted_at,
-                purge_after=item.purge_after,
+                purge_after=knowledge_base_deadlines[item.id],
             )
             for item in knowledge_bases
-            if item.deleted_at is not None and item.purge_after is not None
+            if item.deleted_at is not None
+            and knowledge_base_deadlines[item.id] is not None
+            and knowledge_base_deadlines[item.id] > now
         ],
         documents=[
             TrashDocument(
@@ -80,9 +92,11 @@ async def list_trash(
                 knowledge_base_id=item.knowledge_base_id,
                 file_name=item.original_file_name,
                 deleted_at=item.deleted_at,
-                purge_after=item.purge_after,
+                purge_after=document_deadlines[item.id],
             )
             for item in documents
-            if item.deleted_at is not None and item.purge_after is not None
+            if item.deleted_at is not None
+            and document_deadlines[item.id] is not None
+            and document_deadlines[item.id] > now
         ],
     )

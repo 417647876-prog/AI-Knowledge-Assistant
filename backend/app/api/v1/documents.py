@@ -1,6 +1,5 @@
 import hashlib
 import logging
-from datetime import timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -22,6 +21,7 @@ from app.db.models import Document, DocumentJob, User
 from app.db.session import get_session
 from app.jobs.repository import enqueue_job
 from app.lifecycle.service import (
+    effective_purge_after,
     request_purge_document,
     restore_document,
     soft_delete_document,
@@ -136,10 +136,13 @@ async def upload_document(
         (
             item
             for item in trashed_duplicates
-            if item.deleted_at is not None
-            and max(
-                item.purge_after or item.deleted_at + timedelta(days=settings.trash_retention_days),
-                item.deleted_at + timedelta(days=settings.trash_retention_days),
+            if (
+                effective_purge_after(
+                    item.deleted_at,
+                    item.purge_after,
+                    settings.trash_retention_days,
+                )
+                or database_now
             )
             > database_now
         ),
@@ -330,7 +333,12 @@ async def restore_deleted_document(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Response:
     try:
-        await restore_document(session, owner_user_id=current_user.id, document_id=document_id)
+        await restore_document(
+            session,
+            owner_user_id=current_user.id,
+            document_id=document_id,
+            retention_days=get_settings().trash_retention_days,
+        )
         await session.commit()
     except AppError as error:
         actor_user_id = current_user.id
