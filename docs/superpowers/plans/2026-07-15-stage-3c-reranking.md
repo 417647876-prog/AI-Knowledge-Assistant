@@ -56,7 +56,7 @@ async def rerank_chunks(
 ) -> list[RetrievedChunk]: ...
 ```
 
-- [ ] **Step 1：写分数排序、同分稳定、长度不一致和 top_k 非法测试**
+- [x] **Step 1：写分数排序、同分稳定、长度不一致和 top_k 非法测试**
 
 ```python
 async def test_rerank_chunks_replaces_score_and_orders_descending() -> None:
@@ -67,11 +67,11 @@ async def test_rerank_chunks_replaces_score_and_orders_descending() -> None:
     assert result[0].relevance_score == 0.9
 ```
 
-- [ ] **Step 2：实现批量调用、长度校验和稳定排序**
+- [x] **Step 2：实现批量调用、长度校验和稳定排序**
 
 使用 `dataclasses.replace` 写入新分数；排序键为 `(-score, 原候选序号)`；Provider 返回数量不一致时抛出 `AppError(code="RERANKER_PROVIDER_ERROR", status_code=502)`。
 
-- [ ] **Step 3：验证并提交**
+- [x] **Step 3：验证并提交**
 
 运行：`uv run pytest tests/unit/test_reranking.py -q`
 
