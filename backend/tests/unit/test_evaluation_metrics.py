@@ -2,6 +2,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.evaluation import metrics
 from app.evaluation.metrics import (
     ceiling_aware_target,
     citation_hit_rate,
@@ -110,3 +111,29 @@ def test_ceiling_aware_target_rejects_invalid_ratios(
 ) -> None:
     with pytest.raises(ValueError):
         ceiling_aware_target(baseline, required_gain)
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate", "expected"),
+    [
+        (0.8, 0.84, 0.05),
+        (0.8, 0.8, 0.0),
+        (0.8, 0.72, -0.1),
+        (0.0, 0.0, 0.0),
+        (0.0, 0.2, 1.0),
+    ],
+)
+def test_relative_gain(baseline: float, candidate: float, expected: float) -> None:
+    assert metrics.relative_gain(baseline, candidate) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate"),
+    [(-0.1, 0.5), (0.5, 1.1)],
+)
+def test_relative_gain_rejects_invalid_metric(
+    baseline: float,
+    candidate: float,
+) -> None:
+    with pytest.raises(ValueError, match="0 到 1"):
+        metrics.relative_gain(baseline, candidate)

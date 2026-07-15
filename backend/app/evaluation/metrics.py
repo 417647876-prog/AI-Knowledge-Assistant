@@ -12,6 +12,14 @@ def ceiling_aware_target(baseline: float, required_gain: float) -> float:
     return min(1.0, baseline + required_gain)
 
 
+def relative_gain(baseline: float, candidate: float) -> float:
+    if not 0 <= baseline <= 1 or not 0 <= candidate <= 1:
+        raise ValueError("baseline 和 candidate 必须位于 0 到 1 之间")
+    if baseline == 0:
+        return 0.0 if candidate == 0 else 1.0
+    return (candidate - baseline) / baseline
+
+
 def _matches(expected: ExpectedSource, file_name: str, content: str) -> bool:
     return expected.file_name == file_name and expected.contains in content
 

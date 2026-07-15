@@ -408,7 +408,7 @@ git commit -m "feat: 为评估报告增加知识库快照"
 - Consumes: `EvaluationReport` 1.1、`EvaluationCategory`、`ceiling_aware_target`。
 - Produces: `Stage3QualityPolicy`、`QualityWaiver`、`GateResult`、`Stage3Comparison`、`load_stage3_quality_policy` 和 `compare_stage3_reports`。
 
-- [ ] **Step 1：先写相对提升边界测试**
+- [x] **Step 1：先写相对提升边界测试**
 
 在 `backend/tests/unit/test_evaluation_metrics.py` 增加：
 
@@ -445,7 +445,7 @@ uv run pytest tests/unit/test_evaluation_metrics.py -q
 
 Expected: import FAIL，指出 `relative_gain` 不存在。
 
-- [ ] **Step 2：实现唯一的相对提升公式**
+- [x] **Step 2：实现唯一的相对提升公式**
 
 在 `backend/app/evaluation/metrics.py` 增加：
 
@@ -462,7 +462,7 @@ Run: `uv run pytest tests/unit/test_evaluation_metrics.py -q`
 
 Expected: PASS。
 
-- [ ] **Step 3：写策略模型与加载失败测试**
+- [x] **Step 3：写策略模型与加载失败测试**
 
 创建 `backend/tests/unit/test_evaluation_policy.py`，先定义：
 
@@ -566,7 +566,7 @@ uv run pytest tests/unit/test_evaluation_policy.py -q
 
 Expected: import FAIL，指出 `app.evaluation.policy` 不存在。
 
-- [ ] **Step 4：创建版本化质量策略**
+- [x] **Step 4：创建版本化质量策略**
 
 `backend/config/evaluation/stage3-quality-policy.json` 内容固定为：
 
@@ -604,7 +604,7 @@ Expected: import FAIL，指出 `app.evaluation.policy` 不存在。
 }
 ```
 
-- [ ] **Step 5：实现严格策略模型**
+- [x] **Step 5：实现严格策略模型**
 
 `backend/app/evaluation/policy.py` 定义：
 
@@ -659,7 +659,7 @@ Run: `uv run pytest tests/unit/test_evaluation_policy.py -q`
 
 Expected: PASS。
 
-- [ ] **Step 6：写四报告兼容性失败测试**
+- [x] **Step 6：写四报告兼容性失败测试**
 
 `backend/tests/unit/test_evaluation_comparison.py` 在同文件定义以下测试工厂：
 
@@ -708,7 +708,7 @@ uv run pytest tests/unit/test_evaluation_comparison.py -q
 
 Expected: import FAIL，指出 `app.evaluation.comparison` 不存在。
 
-- [ ] **Step 7：实现可比性检查和分类指标**
+- [x] **Step 7：实现可比性检查和分类指标**
 
 `backend/app/evaluation/comparison.py` 使用稳定常量：
 
@@ -741,7 +741,7 @@ RERANK_ENV_KEYS = (
 
 `MetricDelta` 固定字段：`recall_at_5`、`mrr_at_5`、`citation_hit_rate`、`refusal_accuracy`、`latency_p50_ms`、`latency_p95_ms`；每个值是当前模式减 vector。
 
-- [ ] **Step 8：写 gate 与豁免测试**
+- [x] **Step 8：写 gate 与豁免测试**
 
 至少实现以下测试：
 
@@ -791,7 +791,7 @@ def test_stage3c_waiver_does_not_cover_regression(
 - rewrite Recall/引用/拒答任一低于绝对门即失败。
 - `failure_case_ids` 只含 `rewrite.recall`、`rewrite.citation`、`rewrite.refusal` 对应的 case ID。
 
-- [ ] **Step 9：实现 12 个稳定 gate**
+- [x] **Step 9：实现 12 个稳定 gate**
 
 | gate ID | actual | target |
 |---|---:|---:|
@@ -846,7 +846,7 @@ class Stage3Comparison(BaseModel):
 
 3C MRR 达标为 `passed`；未达 5% 但实际不小于 0、rerank MRR 不低于 hybrid、引用不低于 hybrid 且策略豁免有效时为 `waived`；其余为 `failed`。`comparison.passed` 只在所有 gate 均为 passed 或 waived 时为真。
 
-- [ ] **Step 10：验证、更新看板并提交**
+- [x] **Step 10：验证、更新看板并提交**
 
 Run:
 
