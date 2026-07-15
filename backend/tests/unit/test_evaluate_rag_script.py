@@ -18,6 +18,7 @@ from scripts.evaluate_rag import (
     parse_args,
     run_evaluation,
     run_evaluation_command,
+    run_from_args,
     write_report,
 )
 
@@ -175,6 +176,7 @@ def test_write_report_uses_schema_and_excludes_configuration_secrets(tmp_path) -
                 case_id="keyword-001",
                 retrieved_files=["员工手册.docx"],
                 citation_files=["员工手册.docx"],
+                accepted_chunk_count=1,
                 recall_at_k=1.0,
                 reciprocal_rank=1.0,
                 refused=False,
@@ -211,11 +213,13 @@ def test_write_report_uses_schema_and_excludes_configuration_secrets(tmp_path) -
 
 def test_safe_environment_records_reranker_candidate_count_and_model() -> None:
     settings = Settings(
+        _env_file=None,
         embedding_device="cpu",
         embedding_batch_size=17,
         rag_reranker_provider="local",
         rag_reranker_model="BAAI/bge-reranker-base",
         rag_candidate_k=20,
+        rag_reranker_min_score=-0.25,
     )
 
     environment = build_safe_environment(settings)
@@ -224,6 +228,13 @@ def test_safe_environment_records_reranker_candidate_count_and_model() -> None:
     assert environment["embedding_batch_size"] == "17"
     assert environment["rag_candidate_k"] == "20"
     assert environment["rag_reranker_model"] == "BAAI/bge-reranker-base"
+    assert environment["rag_reranker_min_score"] == "-0.25"
+
+
+def test_safe_environment_records_disabled_reranker_acceptance_threshold() -> None:
+    environment = build_safe_environment(Settings(_env_file=None))
+
+    assert environment["rag_reranker_min_score"] == "disabled"
 
 
 def test_rerank_mode_uses_hybrid_candidates_and_strict_local_reranker() -> None:
@@ -316,11 +327,81 @@ async def test_rerank_evaluation_metrics_use_final_reranked_order(tmp_path) -> N
     )
 
     assert report.cases[0].retrieved_files == ["正确.md", "错误.md"]
+    assert report.cases[0].accepted_chunk_count == len(report.cases[0].retrieved_files)
     assert report.cases[0].citation_files == ["正确.md"]
     assert report.mrr_at_5 == 1.0
     assert len(retriever.calls) == 1
     assert retriever.calls[0]["top_k"] == 20
     assert embedding_provider.queries == ["年假有几天？"]
+
+
+@pytest.mark.asyncio
+async def test_run_from_args_injects_reranker_acceptance_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_service_kwargs: dict[str, object] = {}
+
+    async def dependency():
+        yield object()
+
+    class SessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc_value, traceback):
+            return None
+
+    def capture_service(**kwargs):
+        captured_service_kwargs.update(kwargs)
+        return object()
+
+    async def fake_run_evaluation(**kwargs) -> EvaluationReport:
+        return EvaluationReport(
+            mode="rerank",
+            dataset_sha256="a" * 64,
+            top_k=5,
+            case_count=1,
+            recall_at_5=1.0,
+            mrr_at_5=1.0,
+            citation_hit_rate=1.0,
+            refusal_accuracy=1.0,
+            latency_p50_ms=1.0,
+            latency_p95_ms=1.0,
+            environment={},
+            cases=[],
+        )
+
+    monkeypatch.setattr(
+        "scripts.evaluate_rag.get_question_embedding_provider", lambda settings: dependency()
+    )
+    monkeypatch.setattr(
+        "scripts.evaluate_rag.get_question_chat_provider", lambda settings: dependency()
+    )
+    monkeypatch.setattr(
+        "scripts.evaluate_rag.get_question_rewriter",
+        lambda settings, chat_provider: asyncio.sleep(0, result=object()),
+    )
+    monkeypatch.setattr("scripts.evaluate_rag.get_question_reranker", lambda settings: object())
+    monkeypatch.setattr("scripts.evaluate_rag.session_factory", SessionContext)
+    monkeypatch.setattr("scripts.evaluate_rag.build_retriever", lambda session, settings: object())
+    monkeypatch.setattr("scripts.evaluate_rag.RagService", capture_service)
+    monkeypatch.setattr("scripts.evaluate_rag.run_evaluation", fake_run_evaluation)
+
+    args = parse_args(
+        [
+            "--dataset",
+            "tests/fixtures/evaluation/stage3.jsonl",
+            "--knowledge-base-id",
+            str(uuid4()),
+            "--mode",
+            "rerank",
+            "--output",
+            "reports/stage3c-rerank.json",
+        ]
+    )
+    await run_from_args(args, Settings(_env_file=None, rag_reranker_min_score=-0.25))
+
+    assert captured_service_kwargs["reranker_min_score"] == -0.25
 
 
 @pytest.mark.asyncio

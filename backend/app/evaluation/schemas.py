@@ -65,6 +65,7 @@ class CaseResult(BaseModel):
     case_id: str
     retrieved_files: list[str]
     citation_files: list[str]
+    accepted_chunk_count: int = Field(ge=0)
     recall_at_k: float = Field(ge=0, le=1)
     reciprocal_rank: float = Field(ge=0, le=1)
     refused: bool

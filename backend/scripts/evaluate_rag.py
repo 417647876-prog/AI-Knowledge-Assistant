@@ -121,6 +121,11 @@ def build_safe_environment(settings: Settings) -> dict[str, str]:
         "rag_reranker_batch_size": str(settings.rag_reranker_batch_size),
         "rag_candidate_k": str(settings.rag_candidate_k),
         "rag_reranker_allow_fallback": str(settings.rag_reranker_allow_fallback),
+        "rag_reranker_min_score": (
+            "disabled"
+            if settings.rag_reranker_min_score is None
+            else str(settings.rag_reranker_min_score)
+        ),
     }
 
 
@@ -185,6 +190,7 @@ async def run_from_args(args: argparse.Namespace, settings: Settings) -> Evaluat
                 reranker=reranker,
                 candidate_k=evaluation_settings.rag_candidate_k,
                 reranker_allow_fallback=evaluation_settings.rag_reranker_allow_fallback,
+                reranker_min_score=evaluation_settings.rag_reranker_min_score,
             )
             return await run_evaluation(
                 dataset=args.dataset,
