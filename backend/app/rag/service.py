@@ -84,23 +84,6 @@ class RagService:
                 chunks=chunks,
                 top_k=min(top_k, len(chunks)),
             )
-            accepted_chunks = accept_reranked_chunks(
-                reranked_chunks,
-                min_score=self._reranker_min_score,
-            )
-            if len(accepted_chunks) < len(reranked_chunks):
-                logger.info(
-                    "Reranker 接受门已过滤低分候选。",
-                    extra={
-                        "reranker_provider": type(self._reranker).__name__,
-                        "reranker_min_score": self._reranker_min_score,
-                        "candidate_count": len(reranked_chunks),
-                        "accepted_count": len(accepted_chunks),
-                        "rejected_count": len(reranked_chunks) - len(accepted_chunks),
-                        "request_id": get_request_id(),
-                    },
-                )
-            return accepted_chunks
         except AppError as error:
             if error.code != "RERANKER_PROVIDER_ERROR" or not self._reranker_allow_fallback:
                 raise
@@ -113,6 +96,24 @@ class RagService:
                 },
             )
             return chunks[:top_k]
+
+        accepted_chunks = accept_reranked_chunks(
+            reranked_chunks,
+            min_score=self._reranker_min_score,
+        )
+        if len(accepted_chunks) < len(reranked_chunks):
+            logger.info(
+                "Reranker 接受门已过滤低分候选。",
+                extra={
+                    "reranker_provider": type(self._reranker).__name__,
+                    "reranker_min_score": self._reranker_min_score,
+                    "candidate_count": len(reranked_chunks),
+                    "accepted_count": len(accepted_chunks),
+                    "rejected_count": len(reranked_chunks) - len(accepted_chunks),
+                    "request_id": get_request_id(),
+                },
+            )
+        return accepted_chunks
 
     async def _answer_from_chunks(
         self, question: str, chunks: list[RetrievedChunk]

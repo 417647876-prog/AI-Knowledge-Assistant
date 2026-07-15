@@ -458,6 +458,38 @@ async def test_allowed_invalid_reranker_scores_fall_back_in_original_order() -> 
 
 
 @pytest.mark.asyncio
+async def test_acceptance_gate_error_never_uses_provider_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = AppError(
+        code="RERANKER_PROVIDER_ERROR",
+        message="接受门失败。",
+        status_code=502,
+    )
+
+    def fail_acceptance_gate(chunks, *, min_score):
+        raise error
+
+    monkeypatch.setattr("app.rag.service.accept_reranked_chunks", fail_acceptance_gate)
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever([_chunk()]),
+        chat_provider=CountingChatProvider("不应回退生成"),
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=StubReranker(scores=[0.9]),
+        candidate_k=1,
+        reranker_allow_fallback=True,
+    )
+
+    with pytest.raises(AppError) as raised:
+        await service.answer(uuid4(), "问题", 1)
+
+    assert raised.value is error
+
+
+@pytest.mark.asyncio
 async def test_stream_uses_enabled_reranker_order_and_top_k() -> None:
     chunks = [_chunk(), _chunk(), _chunk()]
     retriever = StubRetriever(chunks)
