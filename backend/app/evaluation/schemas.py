@@ -124,3 +124,22 @@ class EvaluationReport(BaseModel):
                 if case.citation_hit_rate is None:
                     raise ValueError("1.1 案例必须包含 citation_hit_rate")
         return self
+
+
+class Stage3AcceptanceManifest(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    run_id: UUID
+    snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    artifacts: dict[str, str]
+    gate_statuses: dict[str, GateStatus]
+    passed: bool
+
+    @field_validator("artifacts")
+    @classmethod
+    def validate_artifact_hashes(cls, value: dict[str, str]) -> dict[str, str]:
+        valid_digits = set("0123456789abcdef")
+        if len(value) != 5:
+            raise ValueError("manifest 必须包含五个产物")
+        if any(len(digest) != 64 or set(digest) - valid_digits for digest in value.values()):
+            raise ValueError("manifest 包含无效 SHA-256")
+        return value

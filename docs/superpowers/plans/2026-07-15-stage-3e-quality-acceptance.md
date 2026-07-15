@@ -1084,7 +1084,7 @@ git commit -m "feat: 生成阶段3脱敏验收报告"
 
 这些辅助对象只创建 `tmp_path` 文件和 Pydantic 模型，不访问真实数据库或模型。
 
-- [ ] **Step 1：写 CLI 参数与旧 CLI 兼容测试**
+- [x] **Step 1：写 CLI 参数与旧 CLI 兼容测试**
 
 `backend/tests/unit/test_accept_stage3_script.py`：
 
@@ -1137,7 +1137,7 @@ uv run pytest tests/unit/test_accept_stage3_script.py -q
 
 Expected: import FAIL，指出 `scripts.accept_stage3` 不存在。
 
-- [ ] **Step 2：写顺序运行和共享溯源失败测试**
+- [x] **Step 2：写顺序运行和共享溯源失败测试**
 
 用 `AsyncMock` 注入基准快照和单模式执行器：
 
@@ -1173,7 +1173,7 @@ async def test_runs_four_modes_in_order_with_shared_snapshot_and_run_id(
 
 `compute_baseline_snapshot` 只使用 `session_factory` 和 Task 1 的快照函数读取 S0；每个 `run_from_args` 自己再次执行模式前后检查。
 
-- [ ] **Step 3：写退出码语义测试**
+- [x] **Step 3：写退出码语义测试**
 
 `main` 的测试固定为：
 
@@ -1209,7 +1209,7 @@ def test_main_returns_one_on_input_error_without_secret(
 
 控制台错误只使用异常类别或 `sanitized_failures`，不能拼接底层异常消息。
 
-- [ ] **Step 4：写原子输出与 manifest 失败测试**
+- [x] **Step 4：写原子输出与 manifest 失败测试**
 
 测试：
 
@@ -1256,7 +1256,7 @@ def test_replace_failure_does_not_update_manifest(tmp_path, monkeypatch) -> None
 
 另测：输入/兼容性错误不调用写入；质量失败仍写五个产物；临时目录退出后消失；`user-report.json` 不被删除。
 
-- [ ] **Step 5：增加 manifest 模型**
+- [x] **Step 5：增加 manifest 模型**
 
 `backend/app/evaluation/schemas.py` 复用 Task 1 的 `GateStatus`，增加：
 
@@ -1292,7 +1292,7 @@ class AcceptanceRun:
     manifest_path: Path
 ```
 
-- [ ] **Step 6：实现编排顺序和固定路径**
+- [x] **Step 6：实现编排顺序和固定路径**
 
 `backend/scripts/accept_stage3.py` 固定：
 
@@ -1329,7 +1329,7 @@ def run_acceptance_command(
         return runner.run(run_acceptance(args, settings))
 ```
 
-- [ ] **Step 7：实现安全原子写入**
+- [x] **Step 7：实现安全原子写入**
 
 `write_acceptance_bundle`：
 
@@ -1344,7 +1344,7 @@ def run_acceptance_command(
 
 若中途替换失败，旧 manifest 必须保持不变；消费者用 manifest 判断这组文件是否完整。
 
-- [ ] **Step 8：实现退出码和最小摘要**
+- [x] **Step 8：实现退出码和最小摘要**
 
 `main` 必须：
 
@@ -1356,7 +1356,7 @@ def run_acceptance_command(
 
 `format_acceptance_error` 对 `FileNotFoundError`、`ValueError`、`ValidationError`、`OSError` 返回固定中文类别，不拼接原始异常文本。
 
-- [ ] **Step 9：运行 Task 4 聚焦回归**
+- [x] **Step 9：运行 Task 4 聚焦回归**
 
 Run:
 
@@ -1372,7 +1372,7 @@ git diff --check
 
 Expected: 测试 PASS；两个帮助命令返回 0；新 CLI 无门槛覆盖参数；旧 CLI 仍有四模式；Ruff 和 diff 通过。
 
-- [ ] **Step 10：更新看板并提交**
+- [x] **Step 10：更新看板并提交**
 
 看板更新为总进度 `25 / 26`、3E `4 / 5`，勾选 Task 4，记录 0/1/2、顺序运行、manifest 最后写和旧 CLI 兼容证据，下一步为 Task 5/`Sol｜xhigh`。勾选本 Task 全部步骤。
 

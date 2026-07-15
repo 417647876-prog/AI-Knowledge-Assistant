@@ -251,6 +251,23 @@ def test_parse_args_accepts_vector_baseline_inputs() -> None:
     assert rewrite_args.mode == "rewrite"
 
 
+def test_existing_single_mode_cli_remains_flat() -> None:
+    args = parse_args(
+        [
+            "--dataset",
+            "stage3.jsonl",
+            "--knowledge-base-id",
+            str(uuid4()),
+            "--mode",
+            "rewrite",
+            "--output",
+            "rewrite.json",
+        ]
+    )
+
+    assert args.mode == "rewrite"
+
+
 def test_parse_args_rejects_unknown_mode_and_top_k_below_five() -> None:
     knowledge_base_id = uuid4()
     required_args = [
