@@ -166,14 +166,14 @@ candidate_k: int
 reranker_allow_fallback: bool
 ```
 
-- [ ] **Step 1：写禁用、启用、严格失败和允许回退四组测试**
-- [ ] **Step 2：启用时以 `max(top_k, candidate_k)` 召回候选**
-- [ ] **Step 3：Rerank 后截取请求的最终 `top_k`**
-- [ ] **Step 4：仅捕获 `RERANKER_PROVIDER_ERROR` 执行配置回退**
+- [x] **Step 1：写禁用、启用、严格失败和允许回退四组测试**
+- [x] **Step 2：启用时以 `max(top_k, candidate_k)` 召回候选**
+- [x] **Step 3：Rerank 后截取请求的最终 `top_k`**
+- [x] **Step 4：仅捕获 `RERANKER_PROVIDER_ERROR` 执行配置回退**
 
 允许回退时使用原融合顺序的前 `top_k`；其他 AppError 不得被吞掉。日志只记录错误码、Provider 名和 request ID 可关联信息，不记录问题全文或片段内容。
 
-- [ ] **Step 5：运行主链路与 API 测试并提交**
+- [x] **Step 5：运行主链路与 API 测试并提交**
 
 运行：`uv run pytest tests/unit/test_rag_service.py tests/integration/test_question_api.py tests/integration/test_resource_permissions.py -q`
 

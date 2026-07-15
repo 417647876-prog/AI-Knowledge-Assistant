@@ -27,6 +27,24 @@ class StubRetriever:
         return self.chunks
 
 
+class StubReranker:
+    def __init__(
+        self,
+        *,
+        scores: list[float] | None = None,
+        error: AppError | None = None,
+    ) -> None:
+        self.scores = scores or []
+        self.error = error
+        self.calls: list[tuple[str, list[str]]] = []
+
+    async def rerank(self, query: str, documents: list[str]) -> list[float]:
+        self.calls.append((query, documents))
+        if self.error is not None:
+            raise self.error
+        return self.scores
+
+
 class CountingChatProvider:
     def __init__(self, answer: str) -> None:
         self.answer = answer
@@ -84,6 +102,9 @@ async def test_answer_retrieves_generates_and_maps_real_citations() -> None:
         chat_provider=chat,
         question_rewriter=RecordingRewriter("不应调用"),
         score_threshold=0.55,
+        reranker=None,
+        candidate_k=20,
+        reranker_allow_fallback=True,
     )
     knowledge_base_id = uuid4()
 
@@ -112,6 +133,9 @@ async def test_answer_refuses_without_chunks_and_does_not_call_chat() -> None:
         chat_provider=chat,
         question_rewriter=RecordingRewriter("不应调用"),
         score_threshold=0.55,
+        reranker=None,
+        candidate_k=20,
+        reranker_allow_fallback=True,
     )
 
     result = await service.answer(uuid4(), "不存在的制度", 5)
@@ -132,6 +156,9 @@ async def test_answer_rejects_missing_knowledge_base() -> None:
         chat_provider=CountingChatProvider("unused"),
         question_rewriter=RecordingRewriter("不应调用"),
         score_threshold=0.55,
+        reranker=None,
+        candidate_k=20,
+        reranker_allow_fallback=True,
     )
 
     with pytest.raises(AppError) as error:
@@ -154,6 +181,9 @@ async def test_stream_rewrites_retrieves_generates_citations_and_timings() -> No
         chat_provider=chat,
         question_rewriter=rewriter,
         score_threshold=0.55,
+        reranker=None,
+        candidate_k=20,
+        reranker_allow_fallback=True,
     )
     history = [
         ConversationMessage(role="user", content="介绍向量检索"),
@@ -195,6 +225,9 @@ async def test_stream_without_history_skips_rewriter_and_uses_zero_ms() -> None:
         chat_provider=StreamingCountingChatProvider("", []),
         question_rewriter=rewriter,
         score_threshold=0.55,
+        reranker=None,
+        candidate_k=20,
+        reranker_allow_fallback=True,
     )
 
     events = [item async for item in service.stream_answer(uuid4(), "首问", 5, [])]
@@ -218,6 +251,9 @@ async def test_closing_service_stream_closes_chat_stream() -> None:
         chat_provider=chat,
         question_rewriter=RecordingRewriter("问题"),
         score_threshold=0.55,
+        reranker=None,
+        candidate_k=20,
+        reranker_allow_fallback=True,
     )
     stream = service.stream_answer(uuid4(), "问题", 5, [])
     while (await anext(stream)).event != "token":
@@ -226,3 +262,138 @@ async def test_closing_service_stream_closes_chat_stream() -> None:
     await stream.aclose()
 
     assert chat.stream_closed is True
+
+
+@pytest.mark.asyncio
+async def test_disabled_reranker_keeps_requested_top_k_and_original_order() -> None:
+    chunks = [_chunk(), _chunk()]
+    retriever = StubRetriever(chunks)
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=retriever,
+        chat_provider=CountingChatProvider("答案。[1][2]"),
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=None,
+        candidate_k=20,
+        reranker_allow_fallback=True,
+    )
+
+    result = await service.answer(uuid4(), "  年假有几天？  ", 2)
+
+    assert retriever.calls[0]["top_k"] == 2
+    assert [item.document_id for item in result.citations] == [
+        chunks[0].document_id,
+        chunks[1].document_id,
+    ]
+    assert result.retrieved_chunk_count == 2
+
+
+@pytest.mark.asyncio
+async def test_enabled_reranker_retrieves_candidates_reorders_and_limits_top_k() -> None:
+    chunks = [_chunk(), _chunk(), _chunk()]
+    retriever = StubRetriever(chunks)
+    reranker = StubReranker(scores=[0.1, 0.9, 0.3])
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=retriever,
+        chat_provider=CountingChatProvider("答案。[1][2]"),
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=reranker,
+        candidate_k=3,
+        reranker_allow_fallback=False,
+    )
+
+    result = await service.answer(uuid4(), "  年假有几天？  ", 2)
+
+    assert retriever.calls[0]["top_k"] == 3
+    assert reranker.calls == [("年假有几天？", [chunk.content for chunk in chunks])]
+    assert [item.document_id for item in result.citations] == [
+        chunks[1].document_id,
+        chunks[2].document_id,
+    ]
+    assert [item.relevance_score for item in result.citations] == [0.9, 0.3]
+    assert result.retrieved_chunk_count == 2
+
+
+@pytest.mark.asyncio
+async def test_strict_reranker_failure_is_propagated() -> None:
+    error = AppError(
+        code="RERANKER_PROVIDER_ERROR",
+        message="重排序失败。",
+        status_code=502,
+    )
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever([_chunk()]),
+        chat_provider=CountingChatProvider("unused"),
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=StubReranker(error=error),
+        candidate_k=20,
+        reranker_allow_fallback=False,
+    )
+
+    with pytest.raises(AppError) as raised:
+        await service.answer(uuid4(), "敏感问题全文", 1)
+
+    assert raised.value is error
+
+
+@pytest.mark.asyncio
+async def test_allowed_reranker_failure_falls_back_without_logging_content(caplog) -> None:
+    chunks = [_chunk(), _chunk(), _chunk()]
+    error = AppError(
+        code="RERANKER_PROVIDER_ERROR",
+        message="重排序失败。",
+        status_code=502,
+    )
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever(chunks),
+        chat_provider=CountingChatProvider("答案。[1][2]"),
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=StubReranker(error=error),
+        candidate_k=3,
+        reranker_allow_fallback=True,
+    )
+
+    result = await service.answer(uuid4(), "敏感问题全文", 2)
+
+    assert [item.document_id for item in result.citations] == [
+        chunks[0].document_id,
+        chunks[1].document_id,
+    ]
+    assert result.retrieved_chunk_count == 2
+    assert len(caplog.records) == 1
+    assert caplog.records[0].error_code == "RERANKER_PROVIDER_ERROR"
+    assert caplog.records[0].reranker_provider == "StubReranker"
+    assert "敏感问题全文" not in caplog.text
+    assert all(chunk.content not in caplog.text for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_allowed_fallback_does_not_swallow_other_app_errors() -> None:
+    error = AppError(code="OTHER_ERROR", message="其他错误。", status_code=502)
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever([_chunk()]),
+        chat_provider=CountingChatProvider("unused"),
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=StubReranker(error=error),
+        candidate_k=20,
+        reranker_allow_fallback=True,
+    )
+
+    with pytest.raises(AppError) as raised:
+        await service.answer(uuid4(), "问题", 1)
+
+    assert raised.value is error

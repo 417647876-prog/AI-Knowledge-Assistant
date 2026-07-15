@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 from time import perf_counter
 from uuid import UUID
@@ -8,6 +9,7 @@ from app.ai.contracts import (
     ConversationMessage,
     EmbeddingProvider,
     QuestionRewriter,
+    RerankerProvider,
     StreamingChatProvider,
 )
 from app.core.exceptions import AppError
@@ -15,10 +17,12 @@ from app.db.models.knowledge_base import KnowledgeBase
 from app.rag.citations import map_citations
 from app.rag.contracts import Retriever
 from app.rag.prompt import build_rag_prompt
+from app.rag.reranking import rerank_chunks
 from app.rag.schemas import QuestionAnswer
 from app.rag.streaming import CitationTracker, StreamEvent, citation_payload
 
 NO_EVIDENCE_ANSWER = "未找到足够依据，无法根据当前知识库回答该问题。"
+logger = logging.getLogger(__name__)
 
 
 def _elapsed_ms(started: float) -> int:
@@ -35,6 +39,9 @@ class RagService:
         chat_provider: StreamingChatProvider,
         question_rewriter: QuestionRewriter,
         score_threshold: float,
+        reranker: RerankerProvider | None,
+        candidate_k: int,
+        reranker_allow_fallback: bool,
     ) -> None:
         self._session = session
         self._embedding_provider = embedding_provider
@@ -42,6 +49,9 @@ class RagService:
         self._chat_provider = chat_provider
         self._question_rewriter = question_rewriter
         self._score_threshold = score_threshold
+        self._reranker = reranker
+        self._candidate_k = candidate_k
+        self._reranker_allow_fallback = reranker_allow_fallback
 
     async def _ensure_knowledge_base(self, knowledge_base_id: UUID) -> None:
         if await self._session.get(KnowledgeBase, knowledge_base_id) is None:
@@ -53,13 +63,35 @@ class RagService:
 
     async def _retrieve(self, knowledge_base_id: UUID, question: str, top_k: int):
         query_embedding = await self._embedding_provider.embed_query(question)
-        return await self._retriever.search(
+        retrieval_top_k = max(top_k, self._candidate_k) if self._reranker is not None else top_k
+        chunks = await self._retriever.search(
             knowledge_base_id=knowledge_base_id,
             query=question,
             query_embedding=query_embedding,
-            top_k=top_k,
+            top_k=retrieval_top_k,
             score_threshold=self._score_threshold,
         )
+        if self._reranker is None or not chunks:
+            return chunks
+
+        try:
+            return await rerank_chunks(
+                self._reranker,
+                query=question,
+                chunks=chunks,
+                top_k=min(top_k, len(chunks)),
+            )
+        except AppError as error:
+            if error.code != "RERANKER_PROVIDER_ERROR" or not self._reranker_allow_fallback:
+                raise
+            logger.warning(
+                "Reranker 调用失败，已按配置回退。",
+                extra={
+                    "error_code": error.code,
+                    "reranker_provider": type(self._reranker).__name__,
+                },
+            )
+            return chunks[:top_k]
 
     async def answer(self, knowledge_base_id: UUID, question: str, top_k: int) -> QuestionAnswer:
         await self._ensure_knowledge_base(knowledge_base_id)

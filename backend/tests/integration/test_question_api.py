@@ -8,6 +8,8 @@ import pytest
 from sqlalchemy import delete
 
 from app.ai.contracts import ConversationMessage
+from app.ai.embeddings import FakeEmbeddingProvider
+from app.ai.rerankers import FakeRerankerProvider
 from app.api.v1.questions import build_retriever, get_rag_service
 from app.core.config import Settings, get_settings
 from app.core.security import create_access_token, hash_password
@@ -40,6 +42,27 @@ def test_retriever_factory_selects_vector_or_hybrid_mode() -> None:
     assert isinstance(vector, VectorRetriever)
     assert isinstance(hybrid, HybridRetriever)
     assert hybrid._rank_constant == 37
+
+
+@pytest.mark.asyncio
+async def test_rag_service_factory_wires_reranker_settings() -> None:
+    reranker = FakeRerankerProvider()
+    service = await get_rag_service(
+        session=object(),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        chat_provider=object(),
+        question_rewriter=object(),
+        reranker=reranker,
+        settings=Settings(
+            _env_file=None,
+            rag_candidate_k=12,
+            rag_reranker_allow_fallback=False,
+        ),
+    )
+
+    assert service._reranker is reranker
+    assert service._candidate_k == 12
+    assert service._reranker_allow_fallback is False
 
 
 class StubRagService:

@@ -180,6 +180,7 @@ async def get_rag_service(
     embedding_provider: Annotated[EmbeddingProvider, Depends(get_question_embedding_provider)],
     chat_provider: Annotated[StreamingChatProvider, Depends(get_question_chat_provider)],
     question_rewriter: Annotated[QuestionRewriter, Depends(get_question_rewriter)],
+    reranker: Annotated[RerankerProvider | None, Depends(get_question_reranker)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> RagService:
     return RagService(
@@ -189,6 +190,9 @@ async def get_rag_service(
         chat_provider=chat_provider,
         question_rewriter=question_rewriter,
         score_threshold=settings.rag_score_threshold,
+        reranker=reranker,
+        candidate_k=settings.rag_candidate_k,
+        reranker_allow_fallback=settings.rag_reranker_allow_fallback,
     )
 
 
