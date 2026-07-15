@@ -756,7 +756,7 @@ git add README.md docs/阶段3执行进度.md docs/superpowers/plans/2026-07-15-
 git commit -m "docs: 记录Reranker接受门真实验收"
 ```
 
-- [ ] **Step 9: 推送当前功能分支**
+- [x] **Step 9: 推送当前功能分支**
 
 Run: `git push origin codex/stage-3c-reranking`
 
