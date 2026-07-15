@@ -8,13 +8,13 @@ from app.rag.schemas import RetrievedChunk
 
 
 class StubReranker:
-    def __init__(self, scores: list[float]) -> None:
+    def __init__(self, scores: list[object]) -> None:
         self.scores = scores
         self.calls: list[tuple[str, list[str]]] = []
 
     async def rerank(self, query: str, documents: list[str]) -> list[float]:
         self.calls.append((query, documents))
-        return self.scores
+        return self.scores  # type: ignore[return-value]
 
 
 def make_chunk(number: int, *, score: float = 0.1) -> RetrievedChunk:
@@ -72,6 +72,29 @@ async def test_rerank_chunks_rejects_score_count_mismatch() -> None:
 
     assert exc_info.value.code == "RERANKER_PROVIDER_ERROR"
     assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_score", [float("nan"), float("inf"), float("-inf"), "secret-score"]
+)
+async def test_rerank_chunks_rejects_invalid_scores_without_leaking_values(
+    invalid_score: object,
+) -> None:
+    secret_query = "secret-query"
+
+    with pytest.raises(AppError) as exc_info:
+        await rerank_chunks(
+            StubReranker([invalid_score]),
+            query=secret_query,
+            chunks=[make_chunk(1)],
+            top_k=1,
+        )
+
+    assert exc_info.value.code == "RERANKER_PROVIDER_ERROR"
+    assert exc_info.value.status_code == 502
+    assert str(invalid_score) not in exc_info.value.message
+    assert secret_query not in exc_info.value.message
 
 
 @pytest.mark.asyncio

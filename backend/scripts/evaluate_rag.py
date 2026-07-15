@@ -107,6 +107,8 @@ def build_safe_environment(settings: Settings) -> dict[str, str]:
         "app_env": settings.app_env,
         "embedding_provider": settings.embedding_provider,
         "embedding_model": settings.embedding_model,
+        "embedding_device": settings.embedding_device,
+        "embedding_batch_size": str(settings.embedding_batch_size),
         "chat_provider": settings.chat_provider,
         "chat_model": settings.chat_model,
         "embedding_dimensions": str(settings.embedding_dimensions),

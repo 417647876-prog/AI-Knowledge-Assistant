@@ -211,6 +211,8 @@ def test_write_report_uses_schema_and_excludes_configuration_secrets(tmp_path) -
 
 def test_safe_environment_records_reranker_candidate_count_and_model() -> None:
     settings = Settings(
+        embedding_device="cpu",
+        embedding_batch_size=17,
         rag_reranker_provider="local",
         rag_reranker_model="BAAI/bge-reranker-base",
         rag_candidate_k=20,
@@ -218,6 +220,8 @@ def test_safe_environment_records_reranker_candidate_count_and_model() -> None:
 
     environment = build_safe_environment(settings)
 
+    assert environment["embedding_device"] == "cpu"
+    assert environment["embedding_batch_size"] == "17"
     assert environment["rag_candidate_k"] == "20"
     assert environment["rag_reranker_model"] == "BAAI/bge-reranker-base"
 

@@ -192,17 +192,17 @@ reranker_allow_fallback: bool
 - 修改：`docs/阶段3执行进度.md`
 - 修改：`README.md`
 
-- [ ] **Step 1：增加 `--mode rerank` 并在报告记录候选数和模型名**
-- [ ] **Step 2：生成 3B 与 3C 对比报告**
+- [x] **Step 1：增加 `--mode rerank` 并在报告记录候选数和模型名**
+- [x] **Step 2：生成 3B 与 3C 对比报告**
 
 运行：`uv run python -m scripts.evaluate_rag --dataset tests/fixtures/evaluation/stage3.jsonl --knowledge-base-id $env:EVALUATION_KNOWLEDGE_BASE_ID --mode rerank --output reports/stage3c-rerank.json`
 
-- [ ] **Step 3：检查门槛**
+- [x] **Step 3：已检查门槛，但未通过**
 
 MRR@5 相对 3B 提升至少 5%，引用命中率不得下降；同时记录 CPU 环境下 P50/P95。未达标时不得进入 3D。
 
-- [ ] **Step 4：运行完整测试、Ruff 和数据库集成测试**
-- [ ] **Step 5：更新看板并提交**
+- [x] **Step 4：运行完整测试、Ruff 和数据库集成测试**
+- [x] **Step 5：更新看板并提交**
 
 通过后将 3C 标为 `已完成`。只有 2D 同步检查通过，3D 才能改为 `进行中`；否则 3D 标记为 `阻塞`。
 

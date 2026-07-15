@@ -32,7 +32,7 @@ class StubReranker:
     def __init__(
         self,
         *,
-        scores: list[float] | None = None,
+        scores: list[object] | None = None,
         error: AppError | None = None,
     ) -> None:
         self.scores = scores or []
@@ -43,7 +43,7 @@ class StubReranker:
         self.calls.append((query, documents))
         if self.error is not None:
             raise self.error
-        return self.scores
+        return self.scores  # type: ignore[return-value]
 
 
 class CountingChatProvider:
@@ -383,6 +383,59 @@ async def test_allowed_reranker_failure_falls_back_without_logging_content(caplo
     assert "敏感问题全文" not in caplog.text
     assert "绝密异常消息" not in caplog.text
     assert all(chunk.content not in caplog.text for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_allowed_invalid_reranker_scores_fall_back_in_original_order() -> None:
+    chunks = [_chunk(), _chunk(), _chunk()]
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever(chunks),
+        chat_provider=CountingChatProvider("答案。[1][2]"),
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=StubReranker(scores=[0.1, float("inf"), 0.3]),
+        candidate_k=3,
+        reranker_allow_fallback=True,
+    )
+
+    result = await service.answer(uuid4(), "年假有几天？", 2)
+
+    assert [item.document_id for item in result.citations] == [
+        chunks[0].document_id,
+        chunks[1].document_id,
+    ]
+    assert result.retrieved_chunk_count == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_uses_enabled_reranker_order_and_top_k() -> None:
+    chunks = [_chunk(), _chunk(), _chunk()]
+    retriever = StubRetriever(chunks)
+    reranker = StubReranker(scores=[0.1, 0.9, 0.3])
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=retriever,
+        chat_provider=StreamingCountingChatProvider("unused", ["答案。[1][2]"]),
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=reranker,
+        candidate_k=3,
+        reranker_allow_fallback=False,
+    )
+
+    events = [item async for item in service.stream_answer(uuid4(), "年假有几天？", 2, [])]
+    citations = [item.data for item in events if item.event == "citation"]
+
+    assert retriever.calls[0]["top_k"] == 3
+    assert reranker.calls == [("年假有几天？", [chunk.content for chunk in chunks])]
+    assert [item["document_id"] for item in citations] == [
+        str(chunks[1].document_id),
+        str(chunks[2].document_id),
+    ]
+    assert events[-1].data["retrieved_chunk_count"] == 2
 
 
 @pytest.mark.asyncio

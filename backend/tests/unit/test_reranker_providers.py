@@ -1,4 +1,6 @@
+import asyncio
 import threading
+import time
 
 import pytest
 
@@ -39,6 +41,25 @@ class FakeCrossEncoder:
         self.predict_thread_ids.append(threading.get_ident())
         self.calls.append((pairs, kwargs))
         return self._scores
+
+
+class ConcurrencyTrackingCrossEncoder(FakeCrossEncoder):
+    def __init__(self) -> None:
+        super().__init__()
+        self._activity_lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def predict(self, pairs: list[list[str]], **kwargs: object) -> list[float]:
+        with self._activity_lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.05)
+            return super().predict(pairs, **kwargs)
+        finally:
+            with self._activity_lock:
+                self.active -= 1
 
 
 @pytest.mark.asyncio
@@ -107,6 +128,46 @@ async def test_local_reranker_factory_reuses_provider_and_model(
 
     assert first is second
     assert model_factory_calls == [("BAAI/cached-reranker", "cpu")]
+
+
+@pytest.mark.asyncio
+async def test_local_reranker_serializes_predict_calls_for_same_provider() -> None:
+    model = ConcurrencyTrackingCrossEncoder()
+    provider = LocalBgeRerankerProvider(
+        model_name="same-provider",
+        device="cpu",
+        batch_size=8,
+        model_factory=lambda _model_name, _device: model,
+    )
+
+    await asyncio.gather(
+        provider.rerank("问题一", ["甲", "乙"]),
+        provider.rerank("问题二", ["丙", "丁"]),
+    )
+
+    assert model.max_active == 1
+
+
+@pytest.mark.asyncio
+async def test_local_reranker_does_not_share_predict_lock_between_configurations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = get_local_reranker_provider
+    factory.cache_clear()
+    model = ConcurrencyTrackingCrossEncoder()
+    monkeypatch.setattr(rerankers, "_load_cross_encoder", lambda _name, _device: model)
+    first = factory("configuration-one", "cpu", 8)
+    second = factory("configuration-two", "cpu", 8)
+    try:
+        await asyncio.gather(
+            first.rerank("问题一", ["甲", "乙"]),
+            second.rerank("问题二", ["丙", "丁"]),
+        )
+    finally:
+        factory.cache_clear()
+
+    assert first is not second
+    assert model.max_active == 2
 
 
 @pytest.mark.asyncio

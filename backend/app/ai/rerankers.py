@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from collections.abc import Callable
 from functools import lru_cache
 from typing import Any
@@ -55,6 +56,7 @@ class LocalBgeRerankerProvider:
         self._model_factory = model_factory or _load_cross_encoder
         self._model: Any | None = None
         self._model_lock = asyncio.Lock()
+        self._predict_lock = threading.Lock()
 
     async def _get_model(self) -> Any:
         if self._model is not None:
@@ -65,19 +67,22 @@ class LocalBgeRerankerProvider:
                 self._model = await asyncio.to_thread(self._model_factory, self._model_name, device)
         return self._model
 
+    def _predict(self, model: Any, pairs: list[list[str]]) -> Any:
+        with self._predict_lock:
+            return model.predict(
+                pairs,
+                batch_size=self._batch_size,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            )
+
     async def rerank(self, query: str, documents: list[str]) -> list[float]:
         if not documents:
             return []
         try:
             model = await self._get_model()
             pairs = [[query, document] for document in documents]
-            result = await asyncio.to_thread(
-                model.predict,
-                pairs,
-                batch_size=self._batch_size,
-                show_progress_bar=False,
-                convert_to_numpy=True,
-            )
+            result = await asyncio.to_thread(self._predict, model, pairs)
             raw_scores = result.tolist() if hasattr(result, "tolist") else result
             return [float(score) for score in raw_scores]
         except Exception as error:
