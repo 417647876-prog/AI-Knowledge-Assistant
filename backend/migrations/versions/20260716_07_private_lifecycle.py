@@ -223,24 +223,46 @@ def upgrade() -> None:
             selected_admin_role text;
             selected_owner_id uuid;
         BEGIN
-            SELECT role INTO selected_admin_role
-            FROM users
-            WHERE id = NEW.admin_user_id
-            FOR SHARE;
-            IF selected_admin_role IS DISTINCT FROM 'admin' THEN
-                RAISE EXCEPTION 'support access can only be granted to an admin'
-                    USING ERRCODE = '23514',
-                          CONSTRAINT = 'ck_support_access_grants_admin_role';
+            IF TG_OP = 'INSERT' THEN
+                NEW.created_at := clock_timestamp();
             END IF;
 
-            SELECT owner_id INTO selected_owner_id
-            FROM knowledge_bases
-            WHERE id = NEW.knowledge_base_id
-            FOR SHARE;
-            IF selected_owner_id IS DISTINCT FROM NEW.owner_user_id THEN
-                RAISE EXCEPTION 'support access owner must own the knowledge base'
+            IF TG_OP = 'UPDATE'
+               AND NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                RAISE EXCEPTION 'support access creation time is immutable'
                     USING ERRCODE = '23514',
-                          CONSTRAINT = 'ck_support_access_grants_knowledge_base_owner';
+                          CONSTRAINT = 'ck_support_access_grants_created_at_immutable';
+            END IF;
+
+            IF TG_OP = 'UPDATE'
+               AND OLD.revoked_at IS NOT NULL
+               AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+                RAISE EXCEPTION 'revoked support access cannot be reactivated or moved'
+                    USING ERRCODE = '23514',
+                          CONSTRAINT = 'ck_support_access_grants_revocation_one_way';
+            END IF;
+
+            IF TG_OP = 'INSERT'
+               OR (NEW.revoked_at IS NULL AND NEW.expires_at > clock_timestamp()) THEN
+                SELECT role INTO selected_admin_role
+                FROM users
+                WHERE id = NEW.admin_user_id
+                FOR SHARE;
+                IF selected_admin_role IS DISTINCT FROM 'admin' THEN
+                    RAISE EXCEPTION 'support access can only be granted to an admin'
+                        USING ERRCODE = '23514',
+                              CONSTRAINT = 'ck_support_access_grants_admin_role';
+                END IF;
+
+                SELECT owner_id INTO selected_owner_id
+                FROM knowledge_bases
+                WHERE id = NEW.knowledge_base_id
+                FOR SHARE;
+                IF selected_owner_id IS DISTINCT FROM NEW.owner_user_id THEN
+                    RAISE EXCEPTION 'support access owner must own the knowledge base'
+                        USING ERRCODE = '23514',
+                              CONSTRAINT = 'ck_support_access_grants_knowledge_base_owner';
+                END IF;
             END IF;
             RETURN NEW;
         END;
@@ -250,7 +272,7 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE TRIGGER trg_support_access_grants_validate_scope
-        BEFORE INSERT OR UPDATE OF knowledge_base_id, owner_user_id, admin_user_id
+        BEFORE INSERT OR UPDATE
         ON support_access_grants
         FOR EACH ROW
         EXECUTE FUNCTION enforce_support_access_grant_scope()
@@ -270,8 +292,8 @@ def upgrade() -> None:
                    FROM support_access_grants
                    WHERE admin_user_id = OLD.id
                      AND revoked_at IS NULL
-                     AND created_at <= now()
-                     AND expires_at > now()
+                     AND created_at <= clock_timestamp()
+                     AND expires_at > clock_timestamp()
                ) THEN
                 RAISE EXCEPTION 'an admin with active support access cannot change role'
                     USING ERRCODE = '23514',
@@ -304,8 +326,8 @@ def upgrade() -> None:
                    FROM support_access_grants
                    WHERE knowledge_base_id = OLD.id
                      AND revoked_at IS NULL
-                     AND created_at <= now()
-                     AND expires_at > now()
+                     AND created_at <= clock_timestamp()
+                     AND expires_at > clock_timestamp()
                ) THEN
                 RAISE EXCEPTION 'a knowledge base with active support access cannot change owner'
                     USING ERRCODE = '23514',
@@ -379,7 +401,8 @@ def downgrade() -> None:
     active_grant_count = connection.scalar(
         sa.text(
             "SELECT count(*) FROM support_access_grants "
-            "WHERE revoked_at IS NULL AND created_at <= now() AND expires_at > now()"
+            "WHERE revoked_at IS NULL "
+            "AND created_at <= clock_timestamp() AND expires_at > clock_timestamp()"
         )
     )
     if recycle_state_count or active_grant_count:
