@@ -6,6 +6,7 @@ import hashlib
 import json
 from math import isfinite
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from app.ai.contracts import RerankerProvider
 from app.ai.rerankers import get_local_reranker_provider
@@ -72,8 +73,8 @@ async def run_calibration(
             raise ValueError("Reranker 返回的分数数量与文档数量不一致")
         try:
             scores = [float(score) for score in raw_scores]
-        except (TypeError, ValueError) as error:
-            raise ValueError("Reranker 返回的分数必须为有限数值") from error
+        except (TypeError, ValueError):
+            raise ValueError("Reranker 返回的分数必须为有限数值") from None
         if not all(isfinite(score) for score in scores):
             raise ValueError("Reranker 返回的分数必须为有限数值")
         for (original_index, _), score in zip(indexed_documents, scores, strict=True):
@@ -90,10 +91,30 @@ async def run_calibration(
 
 def write_report(report: CalibrationReport, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=output.parent,
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            json.dump(
+                report.model_dump(mode="json"),
+                temporary_file,
+                ensure_ascii=False,
+                indent=2,
+            )
+            temporary_file.write("\n")
+        temporary_path.replace(output)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def format_safe_error(error: Exception) -> str:
@@ -107,6 +128,7 @@ def format_safe_error(error: Exception) -> str:
 def main(arguments: list[str] | None = None) -> None:
     args = parse_args(arguments)
     try:
+        args.output.unlink(missing_ok=True)
         provider = get_local_reranker_provider(args.model, args.device, args.batch_size)
         report = asyncio.run(
             run_calibration(

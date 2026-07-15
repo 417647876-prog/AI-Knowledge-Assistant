@@ -1,4 +1,5 @@
 import json
+import traceback
 from pathlib import Path
 
 import pytest
@@ -86,7 +87,7 @@ def test_load_calibration_cases_sanitizes_validation_error(tmp_path: Path) -> No
     write_dataset(
         dataset,
         [
-            f'{{"id":"INVALID","question":"年假期限","document":"{secret}","relevant":true}}',
+            f'{{"id":"positive-1","question":"年假期限","document":"{secret}"}}',
             '{"id":"negative-1","question":"年假期限","document":"密码十二位","relevant":false}',
         ],
     )
@@ -94,7 +95,9 @@ def test_load_calibration_cases_sanitizes_validation_error(tmp_path: Path) -> No
     with pytest.raises(ValueError, match="校准数据集格式无效") as raised:
         load_calibration_cases(dataset)
 
+    assert raised.value.__cause__ is None
     assert secret not in str(raised.value)
+    assert secret not in "".join(traceback.format_exception(raised.value))
 
 
 def make_cases(labels: list[bool]) -> list[CalibrationCase]:
@@ -152,6 +155,22 @@ def test_select_acceptance_threshold_rejects_score_count_mismatch() -> None:
 
     assert "问题 0" not in str(raised.value)
     assert "0.5" not in str(raised.value)
+
+
+def test_select_acceptance_threshold_suppresses_invalid_score_cause() -> None:
+    sensitive_score = "private-invalid-score"
+
+    with pytest.raises(ValueError, match="分数必须为有限数值") as raised:
+        reranker_calibration.select_acceptance_threshold(
+            make_cases([False, True]),
+            [sensitive_score, 1.0],  # type: ignore[list-item]
+            model_name="BAAI/test",
+            device="cpu",
+            dataset_sha256="c" * 64,
+        )
+
+    assert raised.value.__cause__ is None
+    assert sensitive_score not in "".join(traceback.format_exception(raised.value))
 
 
 @pytest.mark.parametrize("invalid_score", [float("nan"), float("inf"), float("-inf")])

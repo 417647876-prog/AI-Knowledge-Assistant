@@ -1,5 +1,6 @@
 import hashlib
 import json
+import traceback
 from pathlib import Path
 
 import pytest
@@ -128,10 +129,13 @@ async def test_run_calibration_batches_by_question_and_restores_case_order(
     ]
 
 
-@pytest.mark.parametrize("bad_scores", [[1.0], [1.0, float("nan")]])
+@pytest.mark.parametrize(
+    "bad_scores",
+    [[1.0], [1.0, float("nan")], ["private-provider-score", 1.0]],
+)
 @pytest.mark.asyncio
 async def test_run_calibration_rejects_invalid_provider_scores_without_echoing_data(
-    tmp_path: Path, bad_scores: list[float]
+    tmp_path: Path, bad_scores: list[object]
 ) -> None:
     dataset = tmp_path / "calibration.jsonl"
     secret = "private-calibration-document"
@@ -152,7 +156,7 @@ async def test_run_calibration_rejects_invalid_provider_scores_without_echoing_d
             },
         ],
     )
-    provider = StubReranker({"校准问题": bad_scores})
+    provider = StubReranker({"校准问题": bad_scores})  # type: ignore[dict-item]
 
     with pytest.raises(ValueError, match="Reranker 返回") as raised:
         await calibrate_reranker.run_calibration(
@@ -162,8 +166,12 @@ async def test_run_calibration_rejects_invalid_provider_scores_without_echoing_d
             provider=provider,
         )
 
+    assert raised.value.__cause__ is None
     assert secret not in str(raised.value)
     assert str(bad_scores) not in str(raised.value)
+    formatted_traceback = "".join(traceback.format_exception(raised.value))
+    assert secret not in formatted_traceback
+    assert "private-provider-score" not in formatted_traceback
 
 
 def test_main_writes_utf8_json_only_after_success(
@@ -238,3 +246,107 @@ def test_main_fails_without_writing_report_when_no_threshold_exists(
     assert raised.value.code != 0
     assert secret not in str(raised.value)
     assert not output.exists()
+
+
+def test_main_removes_stale_report_before_provider_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "calibration.jsonl"
+    output = tmp_path / "report.json"
+    write_dataset(dataset, paired_cases())
+    output.write_text('{"stale":true}\n', encoding="utf-8")
+
+    def fail_provider_creation(model_name: str, device: str, batch_size: int) -> None:
+        raise RuntimeError("private-provider-error")
+
+    monkeypatch.setattr(
+        calibrate_reranker,
+        "get_local_reranker_provider",
+        fail_provider_creation,
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        calibrate_reranker.main(["--dataset", str(dataset), "--output", str(output)])
+
+    assert "private-provider-error" not in str(raised.value)
+    assert not output.exists()
+
+
+def test_main_removes_stale_report_when_no_threshold_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "calibration.jsonl"
+    output = tmp_path / "report.json"
+    write_dataset(
+        dataset,
+        [
+            {
+                "id": "positive-1",
+                "question": "校准问题",
+                "document": "相关片段",
+                "relevant": True,
+            },
+            {
+                "id": "negative-1",
+                "question": "校准问题",
+                "document": "无关片段",
+                "relevant": False,
+            },
+        ],
+    )
+    output.write_text('{"stale":true}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        calibrate_reranker,
+        "get_local_reranker_provider",
+        lambda model_name, device, batch_size: StubReranker({"校准问题": [0.1, 0.9]}),
+    )
+
+    with pytest.raises(SystemExit):
+        calibrate_reranker.main(["--dataset", str(dataset), "--output", str(output)])
+
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("failure_stage", ["write", "replace"])
+def test_main_cleans_partial_report_and_temporary_file_after_output_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    dataset = tmp_path / "calibration.jsonl"
+    output = tmp_path / "reports" / "calibration.json"
+    write_dataset(dataset, paired_cases())
+    output.parent.mkdir()
+    output.write_text('{"stale":true}\n', encoding="utf-8")
+    provider = StubReranker(
+        {
+            "年假怎么计算？": [1.0, -2.0],
+            "密码有什么要求？": [2.0, -1.0],
+        }
+    )
+    monkeypatch.setattr(
+        calibrate_reranker,
+        "get_local_reranker_provider",
+        lambda model_name, device, batch_size: provider,
+    )
+
+    if failure_stage == "write":
+
+        def fail_json_write(payload: object, stream: object, **kwargs: object) -> None:
+            stream.write('{"partial":')
+            raise OSError("private-write-error")
+
+        monkeypatch.setattr(calibrate_reranker.json, "dump", fail_json_write)
+    else:
+
+        def fail_replace(self: Path, target: Path) -> Path:
+            raise OSError("private-replace-error")
+
+        monkeypatch.setattr(Path, "replace", fail_replace)
+
+    with pytest.raises(SystemExit) as raised:
+        calibrate_reranker.main(["--dataset", str(dataset), "--output", str(output)])
+
+    assert "private" not in str(raised.value)
+    assert not output.exists()
+    assert list(output.parent.iterdir()) == []

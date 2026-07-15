@@ -43,8 +43,8 @@ def load_calibration_cases(path: Path) -> list[CalibrationCase]:
             continue
         try:
             case = CalibrationCase.model_validate_json(raw_line)
-        except (ValidationError, ValueError) as error:
-            raise ValueError("校准数据集格式无效") from error
+        except (ValidationError, ValueError):
+            raise ValueError("校准数据集格式无效") from None
         if case.id in seen_ids:
             raise ValueError("校准案例 ID 不能重复")
         seen_ids.add(case.id)
@@ -72,8 +72,8 @@ def select_acceptance_threshold(
 
     try:
         normalized_scores = [float(score) for score in scores]
-    except (TypeError, ValueError) as error:
-        raise ValueError("校准分数必须为有限数值") from error
+    except (TypeError, ValueError):
+        raise ValueError("校准分数必须为有限数值") from None
     if not all(isfinite(score) for score in normalized_scores):
         raise ValueError("校准分数必须为有限数值")
 
