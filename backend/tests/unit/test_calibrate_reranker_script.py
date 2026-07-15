@@ -1,0 +1,397 @@
+import hashlib
+import json
+import traceback
+from pathlib import Path
+
+import pytest
+
+from scripts import calibrate_reranker
+
+
+class StubReranker:
+    def __init__(self, scores_by_question: dict[str, list[float]]) -> None:
+        self._scores_by_question = scores_by_question
+        self.calls: list[tuple[str, list[str]]] = []
+
+    async def rerank(self, query: str, documents: list[str]) -> list[float]:
+        self.calls.append((query, documents))
+        return list(self._scores_by_question[query])
+
+
+def write_dataset(path: Path, cases: list[dict[str, object]]) -> bytes:
+    raw = "".join(json.dumps(case, ensure_ascii=False) + "\n" for case in cases).encode()
+    path.write_bytes(raw)
+    return raw
+
+
+def paired_cases() -> list[dict[str, object]]:
+    return [
+        {
+            "id": "leave-positive",
+            "question": "年假怎么计算？",
+            "document": "年假为五天。",
+            "relevant": True,
+        },
+        {
+            "id": "password-positive",
+            "question": "密码有什么要求？",
+            "document": "密码长度不少于十二位。",
+            "relevant": True,
+        },
+        {
+            "id": "leave-negative",
+            "question": "年假怎么计算？",
+            "document": "机房访客需要登记。",
+            "relevant": False,
+        },
+        {
+            "id": "password-negative",
+            "question": "密码有什么要求？",
+            "document": "员工每周最多远程办公两天。",
+            "relevant": False,
+        },
+    ]
+
+
+def test_parse_args_uses_fixed_defaults_and_accepts_overrides() -> None:
+    args = calibrate_reranker.parse_args(["--dataset", "cases.jsonl", "--output", "report.json"])
+
+    assert args.dataset == Path("cases.jsonl")
+    assert args.output == Path("report.json")
+    assert args.model == "BAAI/bge-reranker-base"
+    assert args.device == "cpu"
+    assert args.batch_size == 16
+
+    overridden = calibrate_reranker.parse_args(
+        [
+            "--dataset",
+            "cases.jsonl",
+            "--output",
+            "report.json",
+            "--model",
+            "BAAI/test",
+            "--device",
+            "cuda",
+            "--batch-size",
+            "256",
+        ]
+    )
+    assert overridden.model == "BAAI/test"
+    assert overridden.device == "cuda"
+    assert overridden.batch_size == 256
+
+
+@pytest.mark.parametrize("batch_size", ["0", "257", "not-a-number"])
+def test_parse_args_rejects_batch_size_outside_range(batch_size: str) -> None:
+    with pytest.raises(SystemExit):
+        calibrate_reranker.parse_args(
+            [
+                "--dataset",
+                "cases.jsonl",
+                "--output",
+                "report.json",
+                "--batch-size",
+                batch_size,
+            ]
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_calibration_batches_by_question_and_restores_case_order(
+    tmp_path: Path,
+) -> None:
+    dataset = tmp_path / "calibration.jsonl"
+    raw = write_dataset(dataset, paired_cases())
+    provider = StubReranker(
+        {
+            "年假怎么计算？": [1.0, -2.0],
+            "密码有什么要求？": [2.0, -1.0],
+        }
+    )
+
+    report = await calibrate_reranker.run_calibration(
+        dataset=dataset,
+        model_name="BAAI/test-reranker",
+        device="cpu",
+        provider=provider,
+    )
+
+    assert report.recommended_min_score == pytest.approx(0.0)
+    assert report.false_accept_rate == 0.0
+    assert report.positive_accept_rate == 1.0
+    assert report.dataset_sha256 == hashlib.sha256(raw).hexdigest()
+    assert provider.calls == [
+        ("年假怎么计算？", ["年假为五天。", "机房访客需要登记。"]),
+        (
+            "密码有什么要求？",
+            ["密码长度不少于十二位。", "员工每周最多远程办公两天。"],
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "bad_scores",
+    [[1.0], [1.0, float("nan")], ["private-provider-score", 1.0]],
+)
+@pytest.mark.asyncio
+async def test_run_calibration_rejects_invalid_provider_scores_without_echoing_data(
+    tmp_path: Path, bad_scores: list[object]
+) -> None:
+    dataset = tmp_path / "calibration.jsonl"
+    secret = "private-calibration-document"
+    write_dataset(
+        dataset,
+        [
+            {
+                "id": "positive-1",
+                "question": "校准问题",
+                "document": secret,
+                "relevant": True,
+            },
+            {
+                "id": "negative-1",
+                "question": "校准问题",
+                "document": "无关片段",
+                "relevant": False,
+            },
+        ],
+    )
+    provider = StubReranker({"校准问题": bad_scores})  # type: ignore[dict-item]
+
+    with pytest.raises(ValueError, match="Reranker 返回") as raised:
+        await calibrate_reranker.run_calibration(
+            dataset=dataset,
+            model_name="BAAI/test",
+            device="cpu",
+            provider=provider,
+        )
+
+    assert raised.value.__cause__ is None
+    assert secret not in str(raised.value)
+    assert str(bad_scores) not in str(raised.value)
+    formatted_traceback = "".join(traceback.format_exception(raised.value))
+    assert secret not in formatted_traceback
+    assert "private-provider-score" not in formatted_traceback
+
+
+def test_main_writes_utf8_json_only_after_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "calibration.jsonl"
+    output = tmp_path / "reports" / "calibration.json"
+    write_dataset(dataset, paired_cases())
+    provider = StubReranker(
+        {
+            "年假怎么计算？": [1.0, -2.0],
+            "密码有什么要求？": [2.0, -1.0],
+        }
+    )
+    monkeypatch.setattr(
+        calibrate_reranker,
+        "get_local_reranker_provider",
+        lambda model_name, device, batch_size: provider,
+    )
+
+    calibrate_reranker.main(
+        [
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+            "--model",
+            "中文测试模型",
+        ]
+    )
+
+    serialized = output.read_text(encoding="utf-8")
+    payload = json.loads(serialized)
+    assert payload["model_name"] == "中文测试模型"
+    assert "中文测试模型" in serialized
+    assert "\\u4e2d" not in serialized
+    assert serialized.endswith("\n")
+
+
+def test_main_fails_without_writing_report_when_no_threshold_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "calibration.jsonl"
+    output = tmp_path / "report.json"
+    secret = "private-calibration-document"
+    write_dataset(
+        dataset,
+        [
+            {
+                "id": "positive-1",
+                "question": "校准问题",
+                "document": secret,
+                "relevant": True,
+            },
+            {
+                "id": "negative-1",
+                "question": "校准问题",
+                "document": "无关片段",
+                "relevant": False,
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        calibrate_reranker,
+        "get_local_reranker_provider",
+        lambda model_name, device, batch_size: StubReranker({"校准问题": [0.1, 0.9]}),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        calibrate_reranker.main(["--dataset", str(dataset), "--output", str(output)])
+
+    assert raised.value.code != 0
+    assert secret not in str(raised.value)
+    assert not output.exists()
+
+
+def test_main_removes_stale_report_before_provider_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "calibration.jsonl"
+    output = tmp_path / "report.json"
+    write_dataset(dataset, paired_cases())
+    output.write_text('{"stale":true}\n', encoding="utf-8")
+
+    def fail_provider_creation(model_name: str, device: str, batch_size: int) -> None:
+        raise RuntimeError("private-provider-error")
+
+    monkeypatch.setattr(
+        calibrate_reranker,
+        "get_local_reranker_provider",
+        fail_provider_creation,
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        calibrate_reranker.main(["--dataset", str(dataset), "--output", str(output)])
+
+    assert "private-provider-error" not in str(raised.value)
+    assert not output.exists()
+
+
+def test_main_removes_stale_report_when_no_threshold_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "calibration.jsonl"
+    output = tmp_path / "report.json"
+    write_dataset(
+        dataset,
+        [
+            {
+                "id": "positive-1",
+                "question": "校准问题",
+                "document": "相关片段",
+                "relevant": True,
+            },
+            {
+                "id": "negative-1",
+                "question": "校准问题",
+                "document": "无关片段",
+                "relevant": False,
+            },
+        ],
+    )
+    output.write_text('{"stale":true}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        calibrate_reranker,
+        "get_local_reranker_provider",
+        lambda model_name, device, batch_size: StubReranker({"校准问题": [0.1, 0.9]}),
+    )
+
+    with pytest.raises(SystemExit):
+        calibrate_reranker.main(["--dataset", str(dataset), "--output", str(output)])
+
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("failure_stage", ["write", "replace"])
+def test_main_cleans_partial_report_and_temporary_file_after_output_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    dataset = tmp_path / "calibration.jsonl"
+    output = tmp_path / "reports" / "calibration.json"
+    write_dataset(dataset, paired_cases())
+    output.parent.mkdir()
+    output.write_text('{"stale":true}\n', encoding="utf-8")
+    provider = StubReranker(
+        {
+            "年假怎么计算？": [1.0, -2.0],
+            "密码有什么要求？": [2.0, -1.0],
+        }
+    )
+    monkeypatch.setattr(
+        calibrate_reranker,
+        "get_local_reranker_provider",
+        lambda model_name, device, batch_size: provider,
+    )
+
+    if failure_stage == "write":
+
+        def fail_json_write(payload: object, stream: object, **kwargs: object) -> None:
+            stream.write('{"partial":')
+            raise OSError("private-write-error")
+
+        monkeypatch.setattr(calibrate_reranker.json, "dump", fail_json_write)
+    else:
+
+        def fail_replace(self: Path, target: Path) -> Path:
+            raise OSError("private-replace-error")
+
+        monkeypatch.setattr(Path, "replace", fail_replace)
+
+    with pytest.raises(SystemExit) as raised:
+        calibrate_reranker.main(["--dataset", str(dataset), "--output", str(output)])
+
+    assert "private" not in str(raised.value)
+    assert not output.exists()
+    assert list(output.parent.iterdir()) == []
+
+
+def test_main_rejects_equivalent_dataset_and_output_paths_without_touching_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "calibration.jsonl"
+    original_bytes = write_dataset(
+        dataset,
+        [
+            {
+                "id": "positive-1",
+                "question": "校准问题",
+                "document": "private-input-document",
+                "relevant": True,
+            },
+            {
+                "id": "negative-1",
+                "question": "校准问题",
+                "document": "无关片段",
+                "relevant": False,
+            },
+        ],
+    )
+    (tmp_path / "alias").mkdir()
+    monkeypatch.chdir(tmp_path)
+    equivalent_output = Path("alias") / ".." / dataset.name
+    provider_calls: list[tuple[str, str, int]] = []
+
+    def capture_provider_creation(model_name: str, device: str, batch_size: int) -> StubReranker:
+        provider_calls.append((model_name, device, batch_size))
+        return StubReranker({"校准问题": [1.0, -1.0]})
+
+    monkeypatch.setattr(
+        calibrate_reranker,
+        "get_local_reranker_provider",
+        capture_provider_creation,
+    )
+    assert dataset.resolve(strict=False) == equivalent_output.resolve(strict=False)
+
+    with pytest.raises(SystemExit) as raised:
+        calibrate_reranker.main(["--dataset", str(dataset), "--output", str(equivalent_output)])
+
+    preserved_bytes = dataset.read_bytes() if dataset.exists() else None
+    assert "private-input-document" not in str(raised.value)
+    assert (provider_calls, preserved_bytes) == ([], original_bytes)

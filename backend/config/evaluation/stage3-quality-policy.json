@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "final_mode": "rewrite",
+  "minimum_case_count": 30,
+  "required_categories": [
+    "keyword",
+    "semantic",
+    "refusal",
+    "multi_turn",
+    "interference"
+  ],
+  "historical_thresholds": {
+    "stage3b_keyword_gain": 0.10,
+    "stage3c_mrr_relative_gain": 0.05,
+    "stage3d_multi_turn_gain": 0.15
+  },
+  "final_thresholds": {
+    "recall_at_5": 0.85,
+    "citation_hit_rate": 0.90,
+    "refusal_accuracy": 0.90
+  },
+  "waivers": [
+    {
+      "gate_id": "stage3c.mrr_relative_gain",
+      "approved_on": "2026-07-15",
+      "minimum_allowed": 0.0,
+      "reason": "固定 30 条评估集中 hybrid 已有 28 条 RR=1，rerank 的 MRR 相对提升为 0%，用户接受当前无提升风险。",
+      "evidence": "docs/阶段3执行进度.md"
+    }
+  ]
+}

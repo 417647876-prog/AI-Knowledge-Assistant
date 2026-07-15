@@ -82,6 +82,7 @@ export const useConversationsStore = defineStore('conversations', () => {
         if (event.event === 'status') answer.phase = event.data.phase
         if (event.event === 'rewrite') {
           answer.standaloneQuestion = event.data.standalone_question
+          answer.rewriteUsedFallback = event.data.used_fallback
           answer.timings = {
             rewrite_ms: event.data.elapsed_ms, retrieval_ms: 0, generation_ms: 0, total_ms: 0,
           }
@@ -174,7 +175,8 @@ export const useConversationsStore = defineStore('conversations', () => {
 
     const replacement: AssistantMessage = {
       ...old, content: '', status: 'streaming', phase: null, citations: [], standaloneQuestion: null,
-      retrievedChunkCount: null, timings: null, errorCode: null, requestId: null,
+      rewriteUsedFallback: undefined, retrievedChunkCount: null, timings: null,
+      errorCode: null, requestId: null,
     }
     messages.value[index] = replacement
     persistActive()

@@ -33,6 +33,22 @@ def test_sse_encoder_keeps_chinese_and_uses_single_json_data_line() -> None:
     assert encoded.count("data:") == 1
 
 
+def test_sse_encoder_serializes_rewrite_fallback_without_history_content() -> None:
+    encoded = encode_sse(
+        StreamEvent(
+            "rewrite",
+            {
+                "standalone_question": "它有什么缺点？",
+                "elapsed_ms": 12,
+                "used_fallback": True,
+            },
+        )
+    ).decode()
+
+    assert '"used_fallback":true' in encoded
+    assert "history" not in encoded
+
+
 def test_citation_payload_serializes_uuid() -> None:
     tracker = CitationTracker([chunk("制度.txt")])
 

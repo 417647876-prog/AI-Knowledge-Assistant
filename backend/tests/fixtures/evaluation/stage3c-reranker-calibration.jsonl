@@ -1,0 +1,24 @@
+{"id":"policy-01-leave-days-positive","question":"01 号年假制度规定服务满一年可休几天？","document":"人事制度：员工入职满一年后，享有 5 天带薪年假。","relevant":true}
+{"id":"lexical-01-leave-days-negative","question":"01 号年假制度规定服务满一年可休几天？","document":"员工每周最多可申请 2 天远程办公。","relevant":false}
+{"id":"policy-02-password-length-positive","question":"02 号信息安全规范限定口令至少几个字符？","document":"密码长度不少于 12 位，并且每 90 天更新一次。","relevant":true}
+{"id":"obvious-02-password-length-negative","question":"02 号信息安全规范限定口令至少几个字符？","document":"病假申请应在当天 10:00 前通知直属主管，并在返岗后补交证明材料。","relevant":false}
+{"id":"semantic-password-cycle-positive","question":"账号口令到了多长周期就要重新设置？","document":"密码长度不少于 12 位，并且每 90 天更新一次。","relevant":true}
+{"id":"lexical-password-cycle-negative","question":"账号口令到了多长周期就要重新设置？","document":"离开工位超过 5 分钟时，必须锁定电脑屏幕。","relevant":false}
+{"id":"semantic-screen-lock-positive","question":"电脑无人操作达到哪项时长条件必须锁屏？","document":"离开工位超过 5 分钟时，必须锁定电脑屏幕。","relevant":true}
+{"id":"obvious-screen-lock-negative","question":"电脑无人操作达到哪项时长条件必须锁屏？","document":"人事制度：员工入职满一年后，享有 5 天带薪年假。","relevant":false}
+{"id":"semantic-clock-deadline-positive","question":"正常出勤最晚应在几点完成签到？","document":"员工应在工作日 9:30 前完成打卡；迟到超过 30 分钟需提交补卡说明。","relevant":true}
+{"id":"lexical-clock-deadline-negative","question":"正常出勤最晚应在几点完成签到？","document":"病假申请应在当天 10:00 前通知直属主管，并在返岗后补交证明材料。","relevant":false}
+{"id":"semantic-late-procedure-positive","question":"到岗晚了半小时以上需要补办哪项说明？","document":"员工应在工作日 9:30 前完成打卡；迟到超过 30 分钟需提交补卡说明。","relevant":true}
+{"id":"obvious-late-procedure-negative","question":"到岗晚了半小时以上需要补办哪项说明？","document":"密码长度不少于 12 位，并且每 90 天更新一次。","relevant":false}
+{"id":"semantic-sick-notice-positive","question":"当天因病不能出勤，最晚何时告知直属负责人？","document":"病假申请应在当天 10:00 前通知直属主管，并在返岗后补交证明材料。","relevant":true}
+{"id":"lexical-sick-notice-negative","question":"当天因病不能出勤，最晚何时告知直属负责人？","document":"员工应在工作日 9:30 前完成打卡；迟到超过 30 分钟需提交补卡说明。","relevant":false}
+{"id":"semantic-sick-proof-positive","question":"病休结束返回岗位之后还需补充哪类材料？","document":"病假申请应在当天 10:00 前通知直属主管，并在返岗后补交证明材料。","relevant":true}
+{"id":"obvious-sick-proof-negative","question":"病休结束返回岗位之后还需补充哪类材料？","document":"年假应在当年使用，特殊情况可由直属主管审批后顺延。","relevant":false}
+{"id":"semantic-leave-year-positive","question":"年度休假原则上应安排在哪一个年度内？","document":"年假应在当年使用，特殊情况可由直属主管审批后顺延。","relevant":true}
+{"id":"obvious-leave-year-negative","question":"年度休假原则上应安排在哪一个年度内？","document":"密码长度不少于 12 位，并且每 90 天更新一次。","relevant":false}
+{"id":"semantic-leave-carry-positive","question":"未按期休完的年休通过什么流程可以延后？","document":"年假应在当年使用，特殊情况可由直属主管审批后顺延。","relevant":true}
+{"id":"obvious-leave-carry-negative","question":"未按期休完的年休通过什么流程可以延后？","document":"离开工位超过 5 分钟时，必须锁定电脑屏幕。","relevant":false}
+{"id":"semantic-remote-days-positive","question":"居家处理工作每星期获批天数的上限是多少？","document":"员工每周最多可申请 2 天远程办公。","relevant":true}
+{"id":"lexical-remote-days-negative","question":"居家处理工作每星期获批天数的上限是多少？","document":"人事制度：员工入职满一年后，享有 5 天带薪年假。","relevant":false}
+{"id":"semantic-remote-vpn-positive","question":"在外办公连接公司内部系统应采用哪种通道？","document":"员工必须通过公司 VPN 访问内部系统，并在工作时段保持在线。","relevant":true}
+{"id":"obvious-remote-vpn-negative","question":"在外办公连接公司内部系统应采用哪种通道？","document":"员工应在工作日 9:30 前完成打卡；迟到超过 30 分钟需提交补卡说明。","relevant":false}

@@ -10,6 +10,8 @@ defineProps<{ message: AssistantMessage }>()
       <dl>
         <dt>改写后的问题</dt>
         <dd>{{ message.standaloneQuestion ?? '处理中' }}</dd>
+        <dt>问题改写回退</dt>
+        <dd>{{ message.rewriteUsedFallback ? '已回退到原问题' : '未回退' }}</dd>
         <dt>检索片段数</dt>
         <dd>{{ message.retrievedChunkCount ?? '处理中' }}</dd>
         <dt>问题改写耗时</dt>

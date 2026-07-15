@@ -13,6 +13,7 @@ from app.ai.contracts import (
     ConversationMessage,
     EmbeddingProvider,
     QuestionRewriter,
+    RerankerProvider,
     StreamingChatProvider,
 )
 from app.ai.embeddings import (
@@ -20,6 +21,7 @@ from app.ai.embeddings import (
     OpenAICompatibleEmbeddingProvider,
     get_local_embedding_provider,
 )
+from app.ai.rerankers import FakeRerankerProvider, get_local_reranker_provider
 from app.ai.rewrite import ChatQuestionRewriter, FakeQuestionRewriter
 from app.api.auth_dependencies import get_current_user
 from app.api.sse import iter_sse
@@ -27,6 +29,9 @@ from app.authorization.service import get_accessible_knowledge_base
 from app.core.config import Settings, get_settings
 from app.db.models import User
 from app.db.session import get_session
+from app.rag.contracts import Retriever
+from app.rag.hybrid_retriever import HybridRetriever
+from app.rag.keyword_retriever import KeywordRetriever
 from app.rag.retriever import VectorRetriever
 from app.rag.service import RagService
 
@@ -145,20 +150,50 @@ async def get_question_rewriter(
     return ChatQuestionRewriter(chat_provider)
 
 
+def get_question_reranker(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RerankerProvider | None:
+    if settings.rag_reranker_provider == "disabled":
+        return None
+    if settings.rag_reranker_provider == "fake":
+        return FakeRerankerProvider()
+    return get_local_reranker_provider(
+        settings.rag_reranker_model,
+        settings.rag_reranker_device,
+        settings.rag_reranker_batch_size,
+    )
+
+
+def build_retriever(session: AsyncSession, settings: Settings) -> Retriever:
+    vector = VectorRetriever(session)
+    if settings.rag_retrieval_mode == "vector":
+        return vector
+    return HybridRetriever(
+        vector,
+        KeywordRetriever(session),
+        rank_constant=settings.rag_rrf_rank_constant,
+    )
+
+
 async def get_rag_service(
     session: Annotated[AsyncSession, Depends(get_session)],
     embedding_provider: Annotated[EmbeddingProvider, Depends(get_question_embedding_provider)],
     chat_provider: Annotated[StreamingChatProvider, Depends(get_question_chat_provider)],
     question_rewriter: Annotated[QuestionRewriter, Depends(get_question_rewriter)],
     settings: Annotated[Settings, Depends(get_settings)],
+    reranker: Annotated[RerankerProvider | None, Depends(get_question_reranker)] = None,
 ) -> RagService:
     return RagService(
         session=session,
         embedding_provider=embedding_provider,
-        retriever=VectorRetriever(session),
+        retriever=build_retriever(session, settings),
         chat_provider=chat_provider,
         question_rewriter=question_rewriter,
         score_threshold=settings.rag_score_threshold,
+        reranker=reranker,
+        candidate_k=settings.rag_candidate_k,
+        reranker_allow_fallback=settings.rag_reranker_allow_fallback,
+        reranker_min_score=settings.rag_reranker_min_score,
     )
 
 

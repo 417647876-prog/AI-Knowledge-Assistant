@@ -43,6 +43,49 @@ def test_settings_use_stage_1d_rag_defaults() -> None:
     assert settings.rag_top_k_max == 20
     assert settings.rag_score_threshold == 0.55
     assert settings.rag_question_max_length == 2000
+    assert settings.rag_retrieval_mode == "vector"
+    assert settings.rag_rrf_rank_constant == 60
+
+
+def test_settings_use_stage_3c_reranker_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.rag_reranker_provider == "disabled"
+    assert settings.rag_reranker_model == "BAAI/bge-reranker-base"
+    assert settings.rag_reranker_device == "auto"
+    assert settings.rag_reranker_batch_size == 16
+    assert settings.rag_candidate_k == 20
+    assert settings.rag_reranker_allow_fallback is True
+    assert settings.rag_reranker_min_score is None
+
+
+@pytest.mark.parametrize("invalid_score", [float("nan"), float("inf"), float("-inf")])
+def test_settings_reject_non_finite_reranker_min_score(invalid_score: float) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, rag_reranker_min_score=invalid_score)
+
+
+def test_settings_accepts_finite_reranker_min_score() -> None:
+    settings = Settings(_env_file=None, rag_reranker_min_score=-2.75)
+
+    assert settings.rag_reranker_min_score == -2.75
+
+
+@pytest.mark.parametrize("candidate_k", [0, 101])
+def test_settings_reject_invalid_candidate_k_bounds(candidate_k: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, rag_candidate_k=candidate_k)
+
+
+def test_settings_reject_candidate_k_below_default_top_k() -> None:
+    with pytest.raises(ValidationError, match="rag_candidate_k"):
+        Settings(_env_file=None, rag_top_k_default=6, rag_candidate_k=5)
+
+
+@pytest.mark.parametrize("rank_constant", [0, 1001])
+def test_settings_reject_invalid_rrf_rank_constant(rank_constant: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, rag_rrf_rank_constant=rank_constant)
 
 
 def test_settings_require_key_for_deepseek() -> None:

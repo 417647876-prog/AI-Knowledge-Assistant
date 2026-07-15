@@ -19,6 +19,10 @@ class EmbeddingProvider(Protocol):
     async def embed_query(self, text: str) -> list[float]: ...
 
 
+class RerankerProvider(Protocol):
+    async def rerank(self, query: str, documents: list[str]) -> list[float]: ...
+
+
 class ChatProvider(Protocol):
     async def generate(self, system_prompt: str, user_prompt: str) -> str: ...
 
@@ -28,6 +32,4 @@ class StreamingChatProvider(ChatProvider, Protocol):
 
 
 class QuestionRewriter(Protocol):
-    async def rewrite(
-        self, history: list[ConversationMessage], question: str
-    ) -> str: ...
+    async def rewrite(self, history: list[ConversationMessage], question: str) -> str: ...

@@ -12,8 +12,185 @@
 - 阶段 2A：Vue 3 单页工作台、上传与问答界面。
 - 阶段 2B：管理员账号、JWT 登录、可撤销刷新会话、角色权限和知识库隔离。
 - 阶段 2C：持久化文档列表、处理状态恢复、失败重处理和安全删除。
+- 阶段 2D：SSE 流式回答、浏览器会话历史、多轮问题改写和检索耗时事件。
+- 阶段 3A：30 条中文评估数据、Recall/MRR/引用/拒答指标和纯向量基线 CLI。
+- 阶段 3B：PostgreSQL 中文关键词检索、向量/关键词 RRF 融合与质量验收。
+- 阶段 3C：本地 BGE Reranker、接受门校准与生产安全回退；MRR 质量门由用户明确豁免。
+- 阶段 3D：选择性多轮问题改写、精确失败回退、SSE 展示与真实质量门验收。
+- 阶段 3E：同快照四模式综合验收、12 个质量门、原子 manifest 和脱敏中文报告。
 
 当前闭环为：管理员初始化账号 → 用户登录 → 创建自己的知识库 → 上传文档 → 解析和向量入库 → 检索问答 → 返回可追溯引用。系统不提供公开注册，普通用户只能访问自己的资源，管理员可以查看和操作全部知识库。
+
+## 阶段 3A 纯向量评估
+
+阶段 3A 使用固定的 30 条中文案例评估关键词、语义、拒答、多轮和干扰问题。先准备已导入
+`backend/tests/fixtures/documents/01-` 至 `05-` 测试资料的知识库，再执行：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Set-Location backend
+$env:EVALUATION_KNOWLEDGE_BASE_ID = "知识库 UUID"
+uv run python -m scripts.evaluate_rag `
+  --dataset tests/fixtures/evaluation/stage3.jsonl `
+  --knowledge-base-id $env:EVALUATION_KNOWLEDGE_BASE_ID `
+  --mode vector `
+  --output reports/stage3a-vector-baseline.json
+Remove-Item Env:EVALUATION_KNOWLEDGE_BASE_ID
+```
+
+报告记录 Recall@5、MRR@5、引用命中率、拒答准确率和检索延迟，但不会记录数据库连接串或
+API Key。`backend/reports/*.json` 是本地运行产物，默认不提交 Git；执行状态和基线指标见
+[阶段 3 执行进度](docs/阶段3执行进度.md)。
+
+## 阶段 3B 混合检索状态
+
+阶段 3B 已实现确定性中文 Token、PostgreSQL `tsvector` 与 GIN 索引、关键词 Retriever、
+RRF 融合，以及 `vector`/`hybrid` 可回退配置。默认仍使用纯向量检索；显式设置
+`RAG_RETRIEVAL_MODE=hybrid` 才启用混合检索。两个数据库 Retriever 共用请求级
+`AsyncSession`，因此采用顺序双路查询后再融合，避免同一会话并发执行 SQL。
+
+固定 30 条数据的本地验收结果如下：
+
+| 模式 | Recall@5 | MRR@5 | 引用命中率 | 拒答准确率 |
+|---|---:|---:|---:|---:|
+| vector | 83.33% | 83.33% | 83.33% | 83.33% |
+| hybrid | 93.33% | 93.33% | 93.33% | 93.33% |
+
+关键词分类的纯向量 Recall@5 已经是 100%，因此 3B 使用上限感知质量门：混合检索的关键词
+Recall@5 必须达到 `min(100%, 纯向量关键词 Recall@5 + 10 个百分点)`，同时总体 Recall@5、
+引用命中率和拒答准确率均不得低于纯向量。混合检索保持关键词 Recall@5 为 100%，四项总体
+指标均由 83.33% 提升到 93.33%，阶段 3B 已通过验收。
+
+## 阶段 3C 重排序验收与收尾状态
+
+评估 CLI 的 `--mode rerank` 会使用 hybrid 检索取得候选，启用本地 BGE 重排序，并关闭
+fallback，避免模型失败时静默生成非重排报告。固定 30 条数据的 CPU 实测使用
+`candidate_k=20`、`BAAI/bge-reranker-base`：
+
+rerank 报告通过单次最终链路计算：embedding → hybrid candidate_k → BGE → Top K；检索文件、
+Recall/MRR、引用都来自最终重排结果，CPU P50/P95 覆盖 embedding、候选检索与 reranker，
+不再使用独立的 raw hybrid Top5 计时。
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Set-Location backend
+$env:EVALUATION_KNOWLEDGE_BASE_ID = "知识库 UUID"
+$env:EMBEDDING_DEVICE = "cpu"
+$env:RAG_RERANKER_DEVICE = "cpu"
+uv run python -m scripts.evaluate_rag `
+  --dataset tests/fixtures/evaluation/stage3.jsonl `
+  --knowledge-base-id $env:EVALUATION_KNOWLEDGE_BASE_ID `
+  --mode rerank `
+  --output reports/stage3c-rerank.json
+```
+
+| 模式 | MRR@5 | 引用命中率 | CPU P50 | CPU P95 |
+|---|---:|---:|---:|---:|
+| 3B hybrid | 93.33% | 93.33% | 15.20 ms | 18.12 ms |
+| 3C rerank | 93.33% | 93.33% | 62.77 ms | 106.07 ms |
+
+MRR@5 相对提升为 0.00%，未达到至少 5% 的质量门；引用命中率未下降。28 条案例在 3B
+已经排名第一，`refusal-03` 的单个误召回无法仅靠排序剔除，`multi-turn-06` 则没有候选可供
+重排。
+
+2026-07-15，用户明确决定不再继续追逐该质量门，并接受当前指标风险，将 3C 按
+“已收尾（质量门豁免）”处理。该决策不表示质量门通过，也没有修改测试、质量门或固定评估
+数据。该风险记录继续保留，但不再阻塞后续阶段；阶段 3D 已于 2026-07-15 独立完成验收。
+
+### 3C.1 Reranker 接受门与离线校准
+
+Reranker 接受门默认关闭，即 `RAG_RERANKER_MIN_SCORE` 未设置时保持现有重排行为。该阈值
+属于 `BAAI/bge-reranker-base` 的原始相关性分数，不是概率，也不能与向量检索的
+`RAG_SCORE_THRESHOLD` 混用。应使用独立校准集在目标模型和设备上离线生成建议值：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Set-Location backend
+uv run python -m scripts.calibrate_reranker `
+  --dataset tests/fixtures/evaluation/stage3c-reranker-calibration.jsonl `
+  --model BAAI/bge-reranker-base `
+  --device cpu `
+  --batch-size 16 `
+  --output reports/stage3c1-reranker-calibration.json
+```
+
+只有校准报告满足负样本错误接受率为 0、正样本接受率至少 0.8，并给出有限的
+`recommended_min_score` 时，才应显式设置 `RAG_RERANKER_MIN_SCORE`。Provider 调用失败仍按
+`RAG_RERANKER_ALLOW_FALLBACK` 处理；Provider 成功但候选低于接受门时不会 fallback 到原候选。
+若全部候选被拒绝，普通问答、流式问答和评估链路都会复用现有安全拒答，不调用回答模型。
+
+## 阶段 3D 选择性问题改写验收
+
+`--mode rewrite` 复用 3C 的 hybrid 候选检索和本地 BGE Reranker，仅对带历史且命中选择性
+规则的 `multi_turn` 案例调用问题改写。改写后的独立问题只用于 Embedding、Retriever 和
+Reranker；最终回答 Prompt 仍使用用户原问题。`QUESTION_REWRITE_ERROR` 会安全回退到原问题，
+其他错误保持原错误链路，不会被吞掉。
+
+未改写与改写报告必须使用同一数据集、Top K 和安全环境摘要，并通过同一条最终重排链路计算
+Recall/MRR/引用和检索延迟：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Set-Location backend
+$env:EVALUATION_KNOWLEDGE_BASE_ID = "知识库 UUID"
+uv run python -m scripts.evaluate_rag `
+  --dataset tests/fixtures/evaluation/stage3.jsonl `
+  --knowledge-base-id $env:EVALUATION_KNOWLEDGE_BASE_ID `
+  --mode rerank `
+  --output reports/stage3d-no-rewrite.json
+uv run python -m scripts.evaluate_rag `
+  --dataset tests/fixtures/evaluation/stage3.jsonl `
+  --knowledge-base-id $env:EVALUATION_KNOWLEDGE_BASE_ID `
+  --mode rewrite `
+  --output reports/stage3d-rewrite.json
+Remove-Item Env:EVALUATION_KNOWLEDGE_BASE_ID
+```
+
+2026-07-15 的 30 条真实评测结果如下；报告是 `backend/reports` 下的 Git 忽略本地产物：
+
+| 模式 | 总体 Recall@5 | MRR@5 | 多轮 Recall@5 | 引用命中率 | 拒答准确率 | P50 | P95 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| no-rewrite（rerank） | 93.33% | 93.33% | 83.33% | 96.67% | 93.33% | 124.76 ms | 1140.21 ms |
+| rewrite | 96.67% | 96.67% | 100% | 96.67% | 96.67% | 82.89 ms | 249.08 ms |
+
+多轮质量门使用 `ceiling_aware_target(83.33%, 15 个百分点)` 得到 98.33%，rewrite 实测 100%，
+提升 16.67 个百分点并通过。rewrite 的引用命中率和拒答准确率也都不低于 3C 正式报告的
+93.33%。延迟是本次真实 CPU 运行的观测值，不作为 3D 通过条件；报告不会记录数据库连接串或
+API Key。阶段 3D 已完成；最终综合指标和阶段 3 收口结论见下一节。
+
+## 阶段 3 RAG 质量验收
+
+阶段 3E 用同一份 30 条数据、同一个 run ID 和同一个知识库快照，按
+`vector → hybrid → rerank → rewrite` 顺序生成四份 schema 1.1 报告，再自动计算 3A～3E 的
+12 个质量门。2026-07-15 的最终 rewrite 指标为 Recall@5 96.67%、引用命中率 100.00%、
+拒答准确率 96.67%，三项绝对门均通过。
+
+3C 的 MRR 相对提升仍是 0.00%，没有达到至少 5% 的原质量门，因此结论始终是
+“质量门未通过、已获风险豁免”，不等于技术通过。豁免只在 MRR 不负增长且引用不下降时适用。
+最终推荐 `rewrite`；当本地重排或问题改写链路需要故障隔离时，回退到 `vector`。
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Set-Location backend
+$env:STAGE3_KNOWLEDGE_BASE_ID = "准备好的评估知识库 UUID"
+uv run python -m scripts.accept_stage3 `
+  --dataset tests/fixtures/evaluation/stage3.jsonl `
+  --knowledge-base-id $env:STAGE3_KNOWLEDGE_BASE_ID `
+  --policy config/evaluation/stage3-quality-policy.json `
+  --reports-dir reports `
+  --markdown-output ..\docs\阶段3质量验收报告.md
+$acceptanceExitCode = $LASTEXITCODE
+Remove-Item Env:STAGE3_KNOWLEDGE_BASE_ID
+Write-Output "accept_stage3 exit code: $acceptanceExitCode"
+```
+
+退出码 `0` 表示所有非豁免质量门通过，`1` 表示输入、环境、快照或输出错误，`2` 表示存在未豁免
+的质量门失败。质量失败仍会保留产物用于诊断，不应修改固定数据集或策略阈值制造通过。
+
+四份 JSON 和 `stage3e-manifest.json` 保存在被 Git 忽略的 `backend/reports`，只作为本地原始证据；
+可提交的公开材料是[阶段 3 质量验收报告](docs/阶段3质量验收报告.md)和
+[阶段 3 验证与演示](docs/阶段3验证与演示.md)。manifest 最后写入，并记录五个公开产物的
+SHA-256，便于判断一组报告是否完整且同源。
 
 ## 本地启动
 
@@ -154,12 +331,25 @@ uv run ruff check app tests migrations scripts
 uv run ruff format --check app tests migrations scripts
 ```
 
-数据库集成测试需要先启动 Docker PostgreSQL：
+数据库集成测试会校验“最后一个管理员”和全局列表等约束，必须使用空的临时数据库，不能直接复用包含演示数据的开发库：
 
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
 docker compose -f deploy/docker-compose.yml up -d
-Set-Location backend
-uv run alembic upgrade head
-$env:RUN_DATABASE_TESTS = "1"; uv run pytest tests/integration -q; Remove-Item Env:RUN_DATABASE_TESTS
+$testDatabase = "knowledge_integration_test"
+docker compose -f deploy/docker-compose.yml exec -T postgres dropdb --if-exists --force -U knowledge $testDatabase
+docker compose -f deploy/docker-compose.yml exec -T postgres createdb -U knowledge $testDatabase
+try {
+  $env:DATABASE_URL = "postgresql+psycopg://knowledge:knowledge@localhost:5432/$testDatabase"
+  Set-Location backend
+  uv run alembic upgrade head
+  $env:RUN_DATABASE_TESTS = "1"
+  uv run pytest tests/integration -q
+}
+finally {
+  Remove-Item Env:RUN_DATABASE_TESTS -ErrorAction SilentlyContinue
+  Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue
+  Set-Location (git rev-parse --show-toplevel)
+  docker compose -f deploy/docker-compose.yml exec -T postgres dropdb --if-exists --force -U knowledge $testDatabase
+}
 ```

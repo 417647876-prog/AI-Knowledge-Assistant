@@ -2,8 +2,8 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import VECTOR
-from sqlalchemy import ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Computed, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,3 +32,8 @@ class DocumentChunk(TimestampMixin, Base):
         "metadata", JSONB, nullable=False, default=dict
     )
     embedding: Mapped[list[float]] = mapped_column(VECTOR(512), nullable=False)
+    search_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    search_vector: Mapped[Any] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('simple', search_text)", persisted=True),
+    )
