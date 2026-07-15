@@ -128,6 +128,8 @@ def format_safe_error(error: Exception) -> str:
 def main(arguments: list[str] | None = None) -> None:
     args = parse_args(arguments)
     try:
+        if args.dataset.resolve(strict=False) == args.output.resolve(strict=False):
+            raise ValueError("校准数据集与报告输出路径不能相同")
         args.output.unlink(missing_ok=True)
         provider = get_local_reranker_provider(args.model, args.device, args.batch_size)
         report = asyncio.run(

@@ -350,3 +350,48 @@ def test_main_cleans_partial_report_and_temporary_file_after_output_failure(
     assert "private" not in str(raised.value)
     assert not output.exists()
     assert list(output.parent.iterdir()) == []
+
+
+def test_main_rejects_equivalent_dataset_and_output_paths_without_touching_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "calibration.jsonl"
+    original_bytes = write_dataset(
+        dataset,
+        [
+            {
+                "id": "positive-1",
+                "question": "校准问题",
+                "document": "private-input-document",
+                "relevant": True,
+            },
+            {
+                "id": "negative-1",
+                "question": "校准问题",
+                "document": "无关片段",
+                "relevant": False,
+            },
+        ],
+    )
+    (tmp_path / "alias").mkdir()
+    monkeypatch.chdir(tmp_path)
+    equivalent_output = Path("alias") / ".." / dataset.name
+    provider_calls: list[tuple[str, str, int]] = []
+
+    def capture_provider_creation(model_name: str, device: str, batch_size: int) -> StubReranker:
+        provider_calls.append((model_name, device, batch_size))
+        return StubReranker({"校准问题": [1.0, -1.0]})
+
+    monkeypatch.setattr(
+        calibrate_reranker,
+        "get_local_reranker_provider",
+        capture_provider_creation,
+    )
+    assert dataset.resolve(strict=False) == equivalent_output.resolve(strict=False)
+
+    with pytest.raises(SystemExit) as raised:
+        calibrate_reranker.main(["--dataset", str(dataset), "--output", str(equivalent_output)])
+
+    preserved_bytes = dataset.read_bytes() if dataset.exists() else None
+    assert "private-input-document" not in str(raised.value)
+    assert (provider_calls, preserved_bytes) == ([], original_bytes)
