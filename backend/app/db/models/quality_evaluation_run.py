@@ -2,7 +2,18 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CHAR, Boolean, CheckConstraint, DateTime, Index, Integer, String, func, text
+from sqlalchemy import (
+    CHAR,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -15,6 +26,7 @@ class QualityEvaluationRun(Base):
     __table_args__ = (
         CheckConstraint("duration_ms >= 0", name="duration_non_negative"),
         CheckConstraint("completed_at >= started_at", name="completion_after_start"),
+        UniqueConstraint("report_hash", name="uq_quality_evaluation_runs_report_hash"),
         Index("ix_quality_evaluation_runs_completed_at", "completed_at"),
     )
 

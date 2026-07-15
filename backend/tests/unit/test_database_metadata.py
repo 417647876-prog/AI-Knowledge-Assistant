@@ -274,6 +274,8 @@ def test_usage_model_uses_fixed_precision_and_non_cascading_resource_links() -> 
     assert (columns.settled_cost.type.precision, columns.settled_cost.type.scale) == (20, 6)
     assert isinstance(columns.price_snapshot.type, JSONB)
     assert columns.message_id.nullable is False
+    assert len(columns.conversation_id.foreign_keys) == 0
+    assert len(columns.message_id.foreign_keys) == 0
 
     checks = _check_sql(LlmUsageEvent)
     assert "purpose IN ('rewrite', 'answer')" in checks
@@ -286,6 +288,7 @@ def test_usage_model_uses_fixed_precision_and_non_cascading_resource_links() -> 
         "cache_miss_input_tokens >= 0",
         "output_tokens >= 0",
         "reasoning_tokens >= 0",
+        "reasoning_tokens <= output_tokens",
         "total_tokens >= 0",
         "total_tokens = cache_hit_input_tokens + cache_miss_input_tokens + output_tokens",
         "reserved_cost >= 0",
@@ -294,9 +297,11 @@ def test_usage_model_uses_fixed_precision_and_non_cascading_resource_links() -> 
     }.issubset(checks)
     assert (
         "(status = 'succeeded' AND usage_complete) OR "
-        "(status <> 'succeeded' AND NOT usage_complete)"
+        "status = 'failed_after_request' OR "
+        "(status IN ('reserved', 'usage_unknown', 'failed_before_request') "
+        "AND NOT usage_complete)"
     ) in checks
-    for column_name in ("user_id", "knowledge_base_id", "conversation_id", "message_id"):
+    for column_name in ("user_id", "knowledge_base_id"):
         foreign_key = next(iter(columns[column_name].foreign_keys))
         assert foreign_key.ondelete != "CASCADE"
 
@@ -415,6 +420,13 @@ def test_quota_and_offline_quality_models_use_safe_summary_types() -> None:
     assert isinstance(evaluation_columns.model_config_summary.type, JSONB)
     assert isinstance(evaluation_columns.metrics.type, JSONB)
     assert _index(QualityEvaluationRun, "ix_quality_evaluation_runs_completed_at")
+    report_hash_unique = next(
+        constraint
+        for constraint in QualityEvaluationRun.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+        and [column.name for column in constraint.columns] == ["report_hash"]
+    )
+    assert report_hash_unique.name == "uq_quality_evaluation_runs_report_hash"
 
 
 def test_document_chunk_embedding_is_512_dimensions() -> None:

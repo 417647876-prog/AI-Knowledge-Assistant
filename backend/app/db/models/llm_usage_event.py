@@ -35,6 +35,7 @@ class LlmUsageEvent(Base):
         CheckConstraint("cache_miss_input_tokens >= 0", name="cache_miss_tokens_non_negative"),
         CheckConstraint("output_tokens >= 0", name="output_tokens_non_negative"),
         CheckConstraint("reasoning_tokens >= 0", name="reasoning_tokens_non_negative"),
+        CheckConstraint("reasoning_tokens <= output_tokens", name="reasoning_tokens_within_output"),
         CheckConstraint("total_tokens >= 0", name="total_tokens_non_negative"),
         CheckConstraint(
             "total_tokens = cache_hit_input_tokens + cache_miss_input_tokens + output_tokens",
@@ -47,7 +48,9 @@ class LlmUsageEvent(Base):
         CheckConstraint("duration_ms IS NULL OR duration_ms >= 0", name="duration_non_negative"),
         CheckConstraint(
             "(status = 'succeeded' AND usage_complete) OR "
-            "(status <> 'succeeded' AND NOT usage_complete)",
+            "status = 'failed_after_request' OR "
+            "(status IN ('reserved', 'usage_unknown', 'failed_before_request') "
+            "AND NOT usage_complete)",
             name="usage_completeness_matches_status",
         ),
         CheckConstraint(
@@ -74,12 +77,8 @@ class LlmUsageEvent(Base):
     knowledge_base_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("knowledge_bases.id"), nullable=False
     )
-    conversation_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=False
-    )
-    message_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("conversation_messages.id"), nullable=False
-    )
+    conversation_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    message_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     purpose: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False)
     model: Mapped[str] = mapped_column(String(100), nullable=False)

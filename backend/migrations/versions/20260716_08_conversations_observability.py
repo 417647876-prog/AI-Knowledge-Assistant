@@ -35,7 +35,7 @@ def _create_scope_triggers() -> None:
             SELECT owner_id INTO expected_user_id
             FROM knowledge_bases
             WHERE id = NEW.knowledge_base_id
-            FOR KEY SHARE;
+            FOR SHARE;
             IF NOT FOUND OR expected_user_id IS DISTINCT FROM NEW.user_id THEN
                 RAISE EXCEPTION 'conversation user does not own knowledge base'
                     USING ERRCODE = '23514';
@@ -50,6 +50,28 @@ def _create_scope_triggers() -> None:
         CREATE TRIGGER trg_conversations_validate_scope
         BEFORE INSERT OR UPDATE ON conversations
         FOR EACH ROW EXECUTE FUNCTION validate_conversation_scope()
+        """
+    )
+    op.execute(
+        """
+        CREATE FUNCTION preserve_conversation_knowledge_base_owner() RETURNS trigger AS $$
+        BEGIN
+            IF NEW.owner_id IS DISTINCT FROM OLD.owner_id AND EXISTS (
+                SELECT 1 FROM conversations WHERE knowledge_base_id = OLD.id
+            ) THEN
+                RAISE EXCEPTION 'knowledge base owner is referenced by conversations'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER trg_knowledge_bases_preserve_conversation_owner
+        BEFORE UPDATE OF owner_id ON knowledge_bases
+        FOR EACH ROW EXECUTE FUNCTION preserve_conversation_knowledge_base_owner()
         """
     )
     op.execute(
@@ -109,6 +131,9 @@ def _create_scope_triggers() -> None:
             ) THEN
                 RAISE EXCEPTION 'observability resource scope is immutable'
                     USING ERRCODE = '23514';
+            END IF;
+            IF TG_OP = 'UPDATE' THEN
+                RETURN NEW;
             END IF;
 
             SELECT user_id, knowledge_base_id
@@ -350,6 +375,10 @@ def upgrade() -> None:
             "reasoning_tokens >= 0", name=op.f("ck_llm_usage_events_reasoning_tokens_non_negative")
         ),
         sa.CheckConstraint(
+            "reasoning_tokens <= output_tokens",
+            name=op.f("ck_llm_usage_events_reasoning_tokens_within_output"),
+        ),
+        sa.CheckConstraint(
             "total_tokens >= 0", name=op.f("ck_llm_usage_events_total_tokens_non_negative")
         ),
         sa.CheckConstraint(
@@ -369,7 +398,9 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "(status = 'succeeded' AND usage_complete) OR "
-            "(status <> 'succeeded' AND NOT usage_complete)",
+            "status = 'failed_after_request' OR "
+            "(status IN ('reserved', 'usage_unknown', 'failed_before_request') "
+            "AND NOT usage_complete)",
             name=op.f("ck_llm_usage_events_usage_completeness_matches_status"),
         ),
         sa.CheckConstraint(
@@ -377,9 +408,7 @@ def upgrade() -> None:
             "(status <> 'reserved' AND completed_at IS NOT NULL)",
             name=op.f("ck_llm_usage_events_completion_timestamp_matches_status"),
         ),
-        sa.ForeignKeyConstraint(["conversation_id"], ["conversations.id"]),
         sa.ForeignKeyConstraint(["knowledge_base_id"], ["knowledge_bases.id"]),
-        sa.ForeignKeyConstraint(["message_id"], ["conversation_messages.id"]),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -584,6 +613,7 @@ def upgrade() -> None:
             name=op.f("ck_quality_evaluation_runs_completion_after_start"),
         ),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("report_hash", name=op.f("uq_quality_evaluation_runs_report_hash")),
     )
     op.create_index(
         "ix_quality_evaluation_runs_completed_at", "quality_evaluation_runs", ["completed_at"]
@@ -621,6 +651,10 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION validate_conversation_message()")
     op.execute("DROP TRIGGER trg_conversations_validate_scope ON conversations")
     op.execute("DROP FUNCTION validate_conversation_scope()")
+    op.execute(
+        "DROP TRIGGER IF EXISTS trg_knowledge_bases_preserve_conversation_owner ON knowledge_bases"
+    )
+    op.execute("DROP FUNCTION IF EXISTS preserve_conversation_knowledge_base_owner()")
 
     op.drop_index("ix_quality_evaluation_runs_completed_at", table_name="quality_evaluation_runs")
     op.drop_table("quality_evaluation_runs")
