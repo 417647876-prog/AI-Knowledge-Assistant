@@ -25,7 +25,7 @@
       "approved_on": "2026-07-15",
       "minimum_allowed": 0.0,
       "reason": "固定 30 条评估集中 hybrid 已有 28 条 RR=1，rerank 的 MRR 相对提升为 0%，用户接受当前无提升风险。",
-      "evidence": "docs/阶段3执行进度.md"
+      "evidence": "docs/实施计划/阶段3执行进度.md"
     }
   ]
 }

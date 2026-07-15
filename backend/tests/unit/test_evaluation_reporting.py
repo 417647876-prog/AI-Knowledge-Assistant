@@ -125,7 +125,7 @@ def make_render_comparison(
         approved_on=date(2026, 7, 15),
         minimum_allowed=0.0,
         reason="重排没有退化，保留风险豁免并持续观察",
-        evidence=Path("docs/阶段3执行进度.md"),
+        evidence=Path("docs/实施计划/阶段3执行进度.md"),
     )
     gates = []
     for gate_id in GATE_IDS:

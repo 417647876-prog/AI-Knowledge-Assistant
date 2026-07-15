@@ -49,7 +49,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 
 状态只可能是 `pending`、`parsing`、`embedding`、`ready`、`failed`。重新处理使用 `POST /api/v1/documents/{document_id}/reprocess`，删除使用 `DELETE /api/v1/documents/{document_id}`。后端会在同一事务中删除文档、任务和切片；文件清理失败会回滚数据库删除。处理中的文档删除返回 `409 DOCUMENT_PROCESSING`。
 
-本阶段的详细设计见 [阶段 2C 文档管理计划](../docs/superpowers/plans/2026-07-14-stage-2c-document-management.md)，可重复执行的命令和浏览器步骤见 [阶段 2C 验证与演示](../docs/阶段2C验证与演示.md)。
+本阶段的详细设计见 [阶段 2C 文档管理计划](../docs/实施计划/2026-07-14-阶段2C文档管理.md)，可重复执行的命令和浏览器步骤见 [阶段 2C 验证与演示](../docs/验收与演示/阶段2C验证与演示.md)。
 
 ## 同域部署与手机访问边界
 
@@ -67,4 +67,4 @@ npm.cmd run type-check
 npm.cmd run build
 ```
 
-完整的数据库显式重置风险、管理员初始化、认证 smoke 和权限验收步骤见 [阶段 2B 验证与演示](../docs/阶段2B验证与演示.md)。
+完整的数据库显式重置风险、管理员初始化、认证 smoke 和权限验收步骤见 [阶段 2B 验证与演示](../docs/验收与演示/阶段2B验证与演示.md)。

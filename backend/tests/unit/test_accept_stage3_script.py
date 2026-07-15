@@ -37,7 +37,7 @@ def valid_arguments(root: Path | None = None) -> list[str]:
         "--reports-dir",
         str(root / "reports"),
         "--markdown-output",
-        str(root / "docs/阶段3质量验收报告.md"),
+        str(root / "docs/验收与演示/阶段3质量验收报告.md"),
     ]
 
 
@@ -199,7 +199,7 @@ def _manifest(comparison: Stage3Comparison):
             "stage3e-hybrid.json": "1" * 64,
             "stage3e-rerank.json": "2" * 64,
             "stage3e-rewrite.json": "3" * 64,
-            "docs/阶段3质量验收报告.md": "4" * 64,
+            "docs/验收与演示/阶段3质量验收报告.md": "4" * 64,
         },
         gate_statuses={gate.gate_id: gate.status for gate in comparison.gates},
         passed=comparison.passed,
@@ -214,7 +214,7 @@ def _run(*, passed: bool):
         comparison=comparison,
         manifest=_manifest(comparison),
         report_paths={mode: root / f"stage3e-{mode}.json" for mode in MODES},
-        markdown_path=root / "docs/阶段3质量验收报告.md",
+        markdown_path=root / "docs/验收与演示/阶段3质量验收报告.md",
         manifest_path=root / "stage3e-manifest.json",
     )
 
@@ -234,14 +234,14 @@ def write_bundle_fixture(tmp_path: Path):
         comparison,
         markdown,
         reports_dir=tmp_path / "reports",
-        markdown_output=tmp_path / "docs/阶段3质量验收报告.md",
+        markdown_output=tmp_path / "docs/验收与演示/阶段3质量验收报告.md",
     )
 
 
 def assert_all_artifact_hashes_match(manifest, run) -> None:
     paths = {
         **{path.name: path for path in run.report_paths.values()},
-        "docs/阶段3质量验收报告.md": run.markdown_path,
+        "docs/验收与演示/阶段3质量验收报告.md": run.markdown_path,
     }
     assert set(paths) == set(manifest.artifacts)
     for name, path in paths.items():
@@ -358,7 +358,7 @@ def test_writes_manifest_last_and_hashes_all_artifacts(
         "stage3e-hybrid.json",
         "stage3e-rerank.json",
         "stage3e-rewrite.json",
-        "docs/阶段3质量验收报告.md",
+        "docs/验收与演示/阶段3质量验收报告.md",
     }
     assert_all_artifact_hashes_match(manifest, run)
 
@@ -415,7 +415,7 @@ def test_quality_failure_still_writes_all_artifacts(tmp_path: Path) -> None:
         comparison,
         markdown,
         reports_dir=tmp_path / "reports",
-        markdown_output=tmp_path / "docs/阶段3质量验收报告.md",
+        markdown_output=tmp_path / "docs/验收与演示/阶段3质量验收报告.md",
     )
 
     assert run.manifest.passed is False

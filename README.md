@@ -40,7 +40,7 @@ Remove-Item Env:EVALUATION_KNOWLEDGE_BASE_ID
 
 报告记录 Recall@5、MRR@5、引用命中率、拒答准确率和检索延迟，但不会记录数据库连接串或
 API Key。`backend/reports/*.json` 是本地运行产物，默认不提交 Git；执行状态和基线指标见
-[阶段 3 执行进度](docs/阶段3执行进度.md)。
+[阶段 3 执行进度](docs/实施计划/阶段3执行进度.md)。
 
 ## 阶段 3B 混合检索状态
 
@@ -178,7 +178,7 @@ uv run python -m scripts.accept_stage3 `
   --knowledge-base-id $env:STAGE3_KNOWLEDGE_BASE_ID `
   --policy config/evaluation/stage3-quality-policy.json `
   --reports-dir reports `
-  --markdown-output ..\docs\阶段3质量验收报告.md
+  --markdown-output ..\docs\验收与演示\阶段3质量验收报告.md
 $acceptanceExitCode = $LASTEXITCODE
 Remove-Item Env:STAGE3_KNOWLEDGE_BASE_ID
 Write-Output "accept_stage3 exit code: $acceptanceExitCode"
@@ -188,8 +188,8 @@ Write-Output "accept_stage3 exit code: $acceptanceExitCode"
 的质量门失败。质量失败仍会保留产物用于诊断，不应修改固定数据集或策略阈值制造通过。
 
 四份 JSON 和 `stage3e-manifest.json` 保存在被 Git 忽略的 `backend/reports`，只作为本地原始证据；
-可提交的公开材料是[阶段 3 质量验收报告](docs/阶段3质量验收报告.md)和
-[阶段 3 验证与演示](docs/阶段3验证与演示.md)。manifest 最后写入，并记录五个公开产物的
+可提交的公开材料是[阶段 3 质量验收报告](docs/验收与演示/阶段3质量验收报告.md)和
+[阶段 3 验证与演示](docs/验收与演示/阶段3验证与演示.md)。manifest 最后写入，并记录五个公开产物的
 SHA-256，便于判断一组报告是否完整且同源。
 
 ## 本地启动
@@ -250,7 +250,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 
 打开 <http://127.0.0.1:5173> 后先登录。管理员可在“用户管理”中创建、启停账号、切换角色和重置密码；普通用户只能看到自己的知识库。工作台会重新加载历史文档，并恢复处理中任务的状态轮询；失败文档可重新处理，删除会要求确认且不允许删除处理中任务。
 
-更完整的初始化、安全重置、权限验收和验证命令见 [阶段 2B 验证与演示](docs/阶段2B验证与演示.md)、[前端使用说明](frontend/README.md)、[阶段 2C 文档管理计划](docs/superpowers/plans/2026-07-14-stage-2c-document-management.md) 和 [阶段 2C 验证与演示](docs/阶段2C验证与演示.md)。
+更完整的初始化、安全重置、权限验收和验证命令见 [阶段 2B 验证与演示](docs/验收与演示/阶段2B验证与演示.md)、[前端使用说明](frontend/README.md)、[阶段 2C 文档管理计划](docs/实施计划/2026-07-14-阶段2C文档管理.md) 和 [阶段 2C 验证与演示](docs/验收与演示/阶段2C验证与演示.md)。
 
 ## 离线冒烟验证
 
@@ -289,15 +289,29 @@ Remove-Variable securePassword
 
 手机在同一局域网访问也需要额外绑定非回环地址、防火墙规则和可信 Origin；这些操作会扩大网络暴露面，不属于本阶段默认启动步骤。不要把开发命令直接用于公网。
 
+## 文档导航
+
+| 目录 | 内容 |
+|---|---|
+| `docs/设计/` | 总体设计、阶段设计和后续路线图 |
+| `docs/实施计划/` | 各阶段的详细实施步骤，保留历史记录 |
+| `docs/验收与演示/` | 本地运行、验收与面试演示说明 |
+| `docs/学习记录/` | 学习笔记和 C# 转 AI 的过程记录 |
+| `docs/课程材料/` | RAG 架构图等辅助学习材料 |
+
 ## 学习资料
 
-- [项目学习笔记](docs/学习笔记.md)
-- [第一阶段 RAG 后端设计](docs/superpowers/specs/2026-07-10-rag-backend-design.md)
-- [阶段 1B 文档解析设计](docs/superpowers/specs/2026-07-12-stage-1b-knowledge-base-document-parsing-design.md)
-- [阶段 1C 向量入库设计](docs/superpowers/specs/2026-07-13-stage-1c-chunking-vector-ingestion-design.md)
-- [阶段 1D 本地语义检索与问答设计](docs/superpowers/specs/2026-07-13-stage-1d-retrieval-question-answering-design.md)
-- [阶段 1E 验证与演示指南](docs/阶段1E验证与演示.md)
-- [学习任务与资源](MISSION.md)
+- [项目学习笔记](docs/学习记录/学习笔记.md)
+- [RAG 后端总体设计](docs/设计/2026-07-10-RAG后端总体设计.md)
+- [阶段 1B 文档解析设计](docs/设计/2026-07-12-阶段1B文档解析设计.md)
+- [阶段 1C 向量入库设计](docs/设计/2026-07-13-阶段1C向量入库设计.md)
+- [阶段 1D 检索问答设计](docs/设计/2026-07-13-阶段1D检索问答设计.md)
+- [阶段 1E 验证与演示](docs/验收与演示/阶段1E验证与演示.md)
+- [阶段 2B 验证与演示](docs/验收与演示/阶段2B验证与演示.md)
+- [面试演示作品路线图](docs/设计/2026-07-14-面试演示作品路线图.md)
+- [项目任务与资源](项目任务与资源.md)
+- [项目笔记](项目笔记.md)
+- [参考资料](参考资料.md)
 
 ## 1D API
 

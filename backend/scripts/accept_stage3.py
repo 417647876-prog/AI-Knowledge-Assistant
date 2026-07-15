@@ -31,7 +31,7 @@ REPORT_NAMES: dict[EvaluationMode, str] = {
     "rewrite": "stage3e-rewrite.json",
 }
 MANIFEST_NAME = "stage3e-manifest.json"
-MARKDOWN_ARTIFACT_NAME = "docs/阶段3质量验收报告.md"
+MARKDOWN_ARTIFACT_NAME = "docs/验收与演示/阶段3质量验收报告.md"
 
 
 @dataclass(frozen=True)

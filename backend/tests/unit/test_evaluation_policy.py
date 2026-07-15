@@ -35,7 +35,7 @@ def valid_policy_dict() -> dict[str, object]:
                 "approved_on": "2026-07-15",
                 "minimum_allowed": 0.0,
                 "reason": "固定评估集无 MRR 提升，用户接受受限风险。",
-                "evidence": "docs/阶段3执行进度.md",
+                "evidence": "docs/实施计划/阶段3执行进度.md",
             }
         ],
     }
@@ -48,7 +48,7 @@ def write_policy(
     create_evidence: bool = True,
 ) -> Path:
     if create_evidence:
-        evidence = root / "docs/阶段3执行进度.md"
+        evidence = root / "docs/实施计划/阶段3执行进度.md"
         evidence.parent.mkdir(parents=True, exist_ok=True)
         evidence.write_text("# 测试证据\n", encoding="utf-8")
     path = root / "policy.json"
