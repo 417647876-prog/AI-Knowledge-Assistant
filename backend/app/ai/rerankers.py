@@ -89,8 +89,11 @@ class LocalBgeRerankerProvider:
             raise _provider_error() from error
 
 
+_local_reranker_provider_cache_lock = threading.Lock()
+
+
 @lru_cache(maxsize=4)
-def get_local_reranker_provider(
+def _get_local_reranker_provider_cached(
     model_name: str, device: str, batch_size: int
 ) -> LocalBgeRerankerProvider:
     return LocalBgeRerankerProvider(
@@ -98,3 +101,20 @@ def get_local_reranker_provider(
         device=device,
         batch_size=batch_size,
     )
+
+
+def get_local_reranker_provider(
+    model_name: str, device: str, batch_size: int
+) -> LocalBgeRerankerProvider:
+    with _local_reranker_provider_cache_lock:
+        return _get_local_reranker_provider_cached(model_name, device, batch_size)
+
+
+def _clear_local_reranker_provider_cache() -> None:
+    with _local_reranker_provider_cache_lock:
+        _get_local_reranker_provider_cached.cache_clear()
+
+
+get_local_reranker_provider.cache_clear = (  # type: ignore[attr-defined]
+    _clear_local_reranker_provider_cache
+)

@@ -130,6 +130,59 @@ async def test_local_reranker_factory_reuses_provider_and_model(
     assert model_factory_calls == [("BAAI/cached-reranker", "cpu")]
 
 
+def test_local_reranker_factory_initializes_same_key_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = get_local_reranker_provider
+    factory.cache_clear()
+    constructor_calls = 0
+    counter_lock = threading.Lock()
+    first_entered = threading.Event()
+    second_entered = threading.Event()
+    release_first = threading.Event()
+    results: list[object | None] = [None, None]
+    errors: list[BaseException] = []
+
+    def constructor(**_kwargs: object) -> object:
+        nonlocal constructor_calls
+        with counter_lock:
+            constructor_calls += 1
+            call_number = constructor_calls
+        if call_number == 1:
+            first_entered.set()
+            if not release_first.wait(timeout=2):
+                raise TimeoutError("首个构造未被释放")
+        else:
+            second_entered.set()
+        return object()
+
+    def resolve(index: int) -> None:
+        try:
+            results[index] = factory("same-key", "cpu", 8)
+        except BaseException as error:
+            errors.append(error)
+
+    monkeypatch.setattr(rerankers, "LocalBgeRerankerProvider", constructor)
+    first = threading.Thread(target=resolve, args=(0,))
+    second = threading.Thread(target=resolve, args=(1,))
+    try:
+        first.start()
+        assert first_entered.wait(timeout=1)
+        second.start()
+        second_entered.wait(timeout=0.5)
+        release_first.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+    finally:
+        release_first.set()
+        factory.cache_clear()
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert (constructor_calls, results[0] is results[1]) == (1, True)
+
+
 @pytest.mark.asyncio
 async def test_local_reranker_serializes_predict_calls_for_same_provider() -> None:
     model = ConcurrencyTrackingCrossEncoder()
