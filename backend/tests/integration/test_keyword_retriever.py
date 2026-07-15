@@ -179,3 +179,42 @@ async def test_search_returns_empty_for_query_without_tokens() -> None:
         )
 
     assert results == []
+
+
+@pytest.mark.asyncio
+async def test_search_filters_candidates_with_too_little_query_token_coverage(
+    knowledge_base_owner: User,
+) -> None:
+    async with session_factory() as session:
+        knowledge_base = KnowledgeBase(
+            name=f"关键词覆盖率库-{uuid4()}", owner_id=knowledge_base_owner.id
+        )
+        session.add(knowledge_base)
+        await session.flush()
+        document = await _add_document(session, knowledge_base.id, "差旅制度.txt")
+        strong_match = _chunk(
+            chunk_id=UUID(int=21),
+            document=document,
+            knowledge_base_id=knowledge_base.id,
+            content="差旅住宿报销标准为每晚 500 元",
+        )
+        weak_match = _chunk(
+            chunk_id=UUID(int=22),
+            document=document,
+            knowledge_base_id=knowledge_base.id,
+            content="员工必须通过公司 VPN 访问内部系统",
+        )
+        session.add_all([strong_match, weak_match])
+        await session.flush()
+
+        results = await KeywordRetriever(session).search(
+            knowledge_base_id=knowledge_base.id,
+            query="公司差旅住宿报销标准是多少？",
+            query_embedding=[],
+            top_k=5,
+            score_threshold=0.55,
+        )
+
+        await session.rollback()
+
+    assert [item.chunk_id for item in results] == [strong_match.id]

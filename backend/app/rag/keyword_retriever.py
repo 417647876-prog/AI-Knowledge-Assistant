@@ -1,3 +1,4 @@
+import math
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -7,6 +8,9 @@ from app.db.models.document import Document
 from app.db.models.document_chunk import DocumentChunk
 from app.knowledge.search_tokens import build_search_text
 from app.rag.schemas import RetrievedChunk
+
+_MIN_QUERY_TOKEN_COVERAGE = 0.2
+_TOKEN_RANK_WEIGHT = 0.1
 
 
 class KeywordRetriever:
@@ -26,6 +30,7 @@ class KeywordRetriever:
         if not tokens:
             return []
 
+        minimum_matches = math.ceil(len(tokens) * _MIN_QUERY_TOKEN_COVERAGE)
         ts_query = func.to_tsquery("simple", " | ".join(tokens))
         rank = func.ts_rank_cd(DocumentChunk.search_vector, ts_query).label("relevance_score")
         statement = (
@@ -33,6 +38,7 @@ class KeywordRetriever:
             .join(Document, Document.id == DocumentChunk.document_id)
             .where(DocumentChunk.knowledge_base_id == knowledge_base_id)
             .where(DocumentChunk.search_vector.bool_op("@@")(ts_query))
+            .where(rank >= minimum_matches * _TOKEN_RANK_WEIGHT)
             .order_by(rank.desc(), DocumentChunk.id.asc())
             .limit(top_k)
         )
