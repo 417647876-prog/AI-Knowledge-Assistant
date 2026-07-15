@@ -1,7 +1,7 @@
 import pytest
 
 from app.ai.contracts import ConversationMessage
-from app.ai.rewrite import ChatQuestionRewriter, FakeQuestionRewriter
+from app.ai.rewrite import ChatQuestionRewriter, FakeQuestionRewriter, should_rewrite
 from app.core.exceptions import AppError
 
 
@@ -27,6 +27,34 @@ class AppErrorChatProvider:
             message="vendor-secret",
             status_code=503,
         )
+
+
+@pytest.mark.parametrize(
+    ("question", "has_history", "expected"),
+    [
+        ("它有什么缺点？", False, False),
+        ("它有什么缺点？", True, True),
+        ("多久更新一次？", True, True),
+        ("上述制度如何申请？", True, True),
+        ("员工入职满一年有多少天带薪年假？", True, False),
+        ("   ", True, False),
+    ],
+)
+def test_should_rewrite_is_selective(
+    question: str,
+    has_history: bool,
+    expected: bool,
+) -> None:
+    history = (
+        [
+            ConversationMessage(role="user", content="介绍相关制度。"),
+            ConversationMessage(role="assistant", content="这是制度摘要。"),
+        ]
+        if has_history
+        else []
+    )
+
+    assert should_rewrite(question, history) is expected
 
 
 def test_conversation_message_rejects_invalid_role() -> None:

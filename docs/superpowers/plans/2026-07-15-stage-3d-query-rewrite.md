@@ -126,7 +126,7 @@ git commit -m "docs: 确认阶段3D开发门禁"
 def should_rewrite(question: str, history: list[ConversationMessage]) -> bool: ...
 ```
 
-- [ ] **Step 1：写首轮、完整问题、短追问和指代词测试**
+- [x] **Step 1：写首轮、完整问题、短追问和指代词测试**
 
 无历史时永不改写；有历史且问题不超过 12 个字符时改写；有历史且包含 `它`、`这个`、`那个`、`上述`、`前面`、`该制度`、`怎么办` 或 `呢` 时改写；其他完整问题不改写。
 
@@ -164,7 +164,7 @@ def test_should_rewrite_is_selective(
 
 预期：FAIL，原因是无法从 `app.ai.rewrite` 导入 `should_rewrite`。
 
-- [ ] **Step 2：实现纯规则并验证**
+- [x] **Step 2：实现纯规则并验证**
 
 在 `backend/app/ai/rewrite.py` 增加唯一策略入口：
 
@@ -192,7 +192,7 @@ def should_rewrite(question: str, history: list[ConversationMessage]) -> bool:
 
 预期：全部通过；现有 Prompt 注入防护、空结果和 Provider 异常包装测试不得退化。
 
-- [ ] **Step 3：提交**
+- [x] **Step 3：提交**
 
 提交：`git commit -m "feat: 仅在需要时改写多轮问题"`
 
