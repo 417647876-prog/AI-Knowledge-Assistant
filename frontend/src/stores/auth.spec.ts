@@ -9,6 +9,7 @@ vi.mock('../api/auth', () => ({
 import { login, logout, refresh } from '../api/auth'
 import { apiRequest } from '../api/client'
 import { useAuthStore } from './auth'
+import { useConversationsStore } from './conversations'
 import { useWorkspaceStore } from './workspace'
 
 const userSession: AuthSession = {
@@ -183,6 +184,7 @@ describe('auth store', () => {
     vi.mocked(logout).mockRejectedValue(apiError)
     const store = useAuthStore()
     const workspace = useWorkspaceStore()
+    const clearUser = vi.spyOn(useConversationsStore(), 'clearUser')
     await store.login('alice', 'secret')
     workspace.knowledgeBases = [{
       id: 'kb-1', name: '制度', description: null,
@@ -196,6 +198,21 @@ describe('auth store', () => {
     expect(store.user).toBeNull()
     expect(workspace.knowledgeBases).toEqual([])
     expect(workspace.activeKnowledgeBaseId).toBeNull()
+    expect(clearUser).toHaveBeenCalledWith('u-1')
+  })
+
+  it('认证刷新失败后清理当前用户的会话历史', async () => {
+    vi.mocked(login).mockResolvedValue(userSession)
+    vi.mocked(refresh).mockRejectedValue(new Error('refresh failed'))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 401 })))
+    const store = useAuthStore()
+    const clearUser = vi.spyOn(useConversationsStore(), 'clearUser')
+    await store.login('alice', 'secret')
+
+    await expect(apiRequest('/protected')).rejects.toMatchObject({ status: 401 })
+
+    expect(clearUser).toHaveBeenCalledWith('u-1')
+    expect(store.user).toBeNull()
   })
 
   it('invalidates an in-flight refresh before logging out on the server', async () => {

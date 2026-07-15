@@ -7,13 +7,17 @@ import httpx
 import pytest
 from sqlalchemy import delete
 
-from app.api.v1.questions import get_rag_service
-from app.core.config import get_settings
+from app.ai.contracts import ConversationMessage
+from app.api.v1.questions import build_retriever, get_rag_service
+from app.core.config import Settings, get_settings
 from app.core.security import create_access_token, hash_password
 from app.db.models import USER_ROLE, KnowledgeBase, RefreshSession, User
 from app.db.session import session_factory
 from app.main import create_app
+from app.rag.hybrid_retriever import HybridRetriever
+from app.rag.retriever import VectorRetriever
 from app.rag.schemas import Citation, QuestionAnswer
+from app.rag.streaming import StreamEvent
 
 pytestmark = [
     pytest.mark.integration,
@@ -24,9 +28,24 @@ pytestmark = [
 ]
 
 
+def test_retriever_factory_selects_vector_or_hybrid_mode() -> None:
+    session = object()
+
+    vector = build_retriever(session, Settings(_env_file=None, rag_retrieval_mode="vector"))
+    hybrid = build_retriever(
+        session,
+        Settings(_env_file=None, rag_retrieval_mode="hybrid", rag_rrf_rank_constant=37),
+    )
+
+    assert isinstance(vector, VectorRetriever)
+    assert isinstance(hybrid, HybridRetriever)
+    assert hybrid._rank_constant == 37
+
+
 class StubRagService:
     def __init__(self) -> None:
         self.calls: list[tuple[object, str, int]] = []
+        self.stream_calls: list[tuple[object, str, int, object]] = []
         self.document_id = uuid4()
 
     async def answer(self, knowledge_base_id, question: str, top_k: int) -> QuestionAnswer:
@@ -44,6 +63,32 @@ class StubRagService:
                 )
             ],
             retrieved_chunk_count=1,
+        )
+
+    async def stream_answer(self, knowledge_base_id, question, top_k, history):
+        self.stream_calls.append((knowledge_base_id, question, top_k, history))
+        yield StreamEvent(
+            "rewrite",
+            {
+                "standalone_question": "它呢？",
+                "elapsed_ms": 10,
+                "used_fallback": True,
+            },
+        )
+        yield StreamEvent("retrieval", {"retrieved_chunk_count": 1, "elapsed_ms": 20})
+        yield StreamEvent("token", {"delta": "答案。[1]"})
+        yield StreamEvent(
+            "done",
+            {
+                "citations": [],
+                "retrieved_chunk_count": 1,
+                "timings": {
+                    "rewrite_ms": 10,
+                    "retrieval_ms": 20,
+                    "generation_ms": 30,
+                    "total_ms": 60,
+                },
+            },
         )
 
 
@@ -135,6 +180,88 @@ async def test_question_api_rejects_blank_question_and_oversized_top_k(
     response = await question_context.client.post(
         f"/api/v1/knowledge-bases/{question_context.knowledge_base_id}/questions",
         json={"question": "   ", "top_k": 21},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_stream_question_rejects_anonymous_request_as_http_error() -> None:
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/knowledge-bases/{uuid4()}/questions/stream",
+            json={"question": "匿名请求"},
+        )
+
+    assert response.status_code == 401
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_stream_question_returns_sse_and_forwards_valid_history(
+    question_context: QuestionContext,
+) -> None:
+    response = await question_context.client.post(
+        f"/api/v1/knowledge-bases/{question_context.knowledge_base_id}/questions/stream",
+        json={
+            "question": "它呢？",
+            "top_k": 3,
+            "history": [
+                {"role": "user", "content": "首问"},
+                {"role": "assistant", "content": "首答"},
+            ],
+        },
+        headers={"X-Request-ID": "stream-req-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert "event: rewrite" in response.text
+    assert '"standalone_question":"它呢？"' in response.text
+    assert '"used_fallback":true' in response.text
+    assert '"request_id":"stream-req-1"' in response.text
+    assert question_context.service.stream_calls == [
+        (
+            question_context.knowledge_base_id,
+            "它呢？",
+            3,
+            [
+                ConversationMessage(role="user", content="首问"),
+                ConversationMessage(role="assistant", content="首答"),
+            ],
+        )
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "history",
+    [
+        [{"role": "assistant", "content": "孤立回答"}],
+        [{"role": "user", "content": "缺少回答"}],
+        [{"role": "user", "content": "a" * 2001}, {"role": "assistant", "content": "回答"}],
+        [{"role": "user", "content": "提问"}, {"role": "assistant", "content": "a" * 8001}],
+        [
+            message
+            for _ in range(7)
+            for message in (
+                {"role": "user", "content": "提问"},
+                {"role": "assistant", "content": "回答"},
+            )
+        ],
+    ],
+)
+async def test_stream_question_rejects_invalid_history(
+    question_context: QuestionContext, history: list[dict[str, str]]
+) -> None:
+    response = await question_context.client.post(
+        f"/api/v1/knowledge-bases/{question_context.knowledge_base_id}/questions/stream",
+        json={"question": "追问", "history": history},
     )
 
     assert response.status_code == 422

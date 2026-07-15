@@ -64,11 +64,11 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiRequest<T>(
+export async function authenticatedFetch(
   path: string,
   init?: RequestInit,
   options: { authenticated?: boolean; retryUnauthorized?: boolean } = {},
-): Promise<T> {
+): Promise<Response> {
   const headers = new Headers(init?.headers)
   let requestAccessToken: string | null = null
   if (options.authenticated !== false) {
@@ -78,7 +78,10 @@ export async function apiRequest<T>(
   const requestInit = { ...init, headers }
   let response: Response
   try { response = await fetch(path, requestInit) }
-  catch { throw new ApiError(0, 'NETWORK_ERROR', '服务暂不可用，请稍后重试。') }
+  catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ApiError(0, 'NETWORK_ERROR', '服务暂不可用，请稍后重试。')
+  }
   if (
     response.status === 401
     && options.authenticated !== false
@@ -98,7 +101,10 @@ export async function apiRequest<T>(
     if (refreshedAccessToken) {
       headers.set('Authorization', `Bearer ${refreshedAccessToken}`)
       try { response = await fetch(path, { ...init, headers }) }
-      catch { throw new ApiError(0, 'NETWORK_ERROR', '服务暂不可用，请稍后重试。') }
+      catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') throw error
+        throw new ApiError(0, 'NETWORK_ERROR', '服务暂不可用，请稍后重试。')
+      }
     }
   }
   if (!response.ok) {
@@ -111,6 +117,15 @@ export async function apiRequest<T>(
       payload.error?.request_id ?? response.headers.get('X-Request-ID') ?? undefined,
     )
   }
+  return response
+}
+
+export async function apiRequest<T>(
+  path: string,
+  init?: RequestInit,
+  options: { authenticated?: boolean; retryUnauthorized?: boolean } = {},
+): Promise<T> {
+  const response = await authenticatedFetch(path, init, options)
   if (response.status === 204) return undefined as T
   return await response.json() as T
 }

@@ -46,6 +46,15 @@ body { margin: 0; min-width: 0; min-height: 100vh; }
 .workspace-main { display: grid; gap: 20px; align-content: start; padding: 24px; }
 .workspace-card { padding: 20px; border: 1px solid #e5e7eb; border-radius: 14px; background: #fff; box-shadow: 0 8px 24px rgb(15 23 42 / 5%); }
 .citation-list { display: grid; gap: 12px; margin-top: 16px; }
+.question-panel, .conversation-timeline { display: grid; gap: 16px; }
+.question-toolbar, .question-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.conversation-message { min-width: 0; padding: 14px; border-radius: 12px; }
+.conversation-message.user { margin-left: min(12%, 80px); background: #eef5ff; }
+.conversation-message.assistant { margin-right: min(8%, 60px); background: #f8fafc; }
+.markdown-body { min-width: 0; overflow-wrap: anywhere; }
+.markdown-body pre, .markdown-body table { display: block; max-width: 100%; overflow-x: auto; }
+.retrieval-details dl { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 12px; }
+.conversation-divider { color: #667085; text-align: center; }
 
 @media (max-width: 900px) {
   .workspace-layout { grid-template-columns: 1fr; }
@@ -67,4 +76,6 @@ body { margin: 0; min-width: 0; min-height: 100vh; }
   .admin-user-actions { display: grid; grid-template-columns: 1fr; }
   .admin-user-actions .el-button { width: 100%; }
   .el-dialog { max-width: calc(100vw - 24px); }
+  .conversation-message.user, .conversation-message.assistant { margin-inline: 0; }
+  .retrieval-details dl { grid-template-columns: 1fr; }
 }

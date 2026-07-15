@@ -7,22 +7,29 @@ import DocumentTable from '../components/DocumentTable.vue'
 import DocumentUpload from '../components/DocumentUpload.vue'
 import KnowledgeBaseSidebar from '../components/KnowledgeBaseSidebar.vue'
 import QuestionPanel from '../components/QuestionPanel.vue'
+import { useAuthStore } from '../stores/auth'
+import { useConversationsStore } from '../stores/conversations'
 import { useWorkspaceStore } from '../stores/workspace'
 import WorkspaceView from './WorkspaceView.vue'
 
 describe('WorkspaceView', () => {
-  it('组装知识库工作台并在挂载时加载知识库', () => {
+  it('组装知识库工作台并在挂载时加载知识库与当前文档', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const store = useWorkspaceStore()
+    const auth = useAuthStore()
+    auth.user = { id: 'u-1', username: 'alice', role: 'user', is_active: true }
     store.knowledgeBases = [{
       id: 'kb-1', name: '研发规范', description: null,
       owner_id: 'u-1', owner_username: 'alice',
     }]
     store.activeKnowledgeBaseId = 'kb-1'
     const loadKnowledgeBases = vi.spyOn(store, 'loadKnowledgeBases').mockResolvedValue()
+    const loadDocuments = vi.spyOn(store, 'loadDocuments').mockResolvedValue()
+    const activate = vi.spyOn(useConversationsStore(), 'activate')
 
     const wrapper = mount(WorkspaceView, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
 
     expect(wrapper.findComponent(KnowledgeBaseSidebar).exists()).toBe(true)
     expect(wrapper.findComponent(DocumentUpload).exists()).toBe(true)
@@ -30,6 +37,26 @@ describe('WorkspaceView', () => {
     expect(wrapper.findComponent(QuestionPanel).exists()).toBe(true)
     expect(wrapper.text()).not.toContain('请选择或创建知识库')
     expect(loadKnowledgeBases).toHaveBeenCalledOnce()
+    expect(loadDocuments).toHaveBeenCalledOnce()
+    expect(activate).toHaveBeenCalledWith('u-1', 'kb-1')
+
+    store.activeKnowledgeBaseId = 'kb-2'
+    await wrapper.vm.$nextTick()
+    expect(activate).toHaveBeenLastCalledWith('u-1', 'kb-2')
+  })
+
+  it('未登录或未选择知识库时不激活会话', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useWorkspaceStore()
+    store.activeKnowledgeBaseId = 'kb-1'
+    vi.spyOn(store, 'loadKnowledgeBases').mockResolvedValue()
+    const activate = vi.spyOn(useConversationsStore(), 'activate')
+
+    mount(WorkspaceView, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+
+    expect(activate).not.toHaveBeenCalled()
   })
 
   it('未选择知识库时保留侧栏并显示选择提示', () => {

@@ -39,7 +39,17 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 - Refresh Token 只通过 HttpOnly Cookie 发送；页面刷新时用于恢复会话。
 - 管理员可管理用户并查看所有知识库及所有者；普通用户只能查看和操作自己的知识库。
 - 退出、账号停用或密码重置会撤销长期会话；认证失效后受保护页面会返回登录页。
-- 当前文档列表只保存在浏览器会话状态中，刷新页面后不会重新列出此前上传的文档。
+- 工作台会在进入或切换知识库时重新加载历史文档；刷新页面后仍可看到此前上传的文档。
+- `等待处理`、`解析中`、`向量化中` 的文档会自动恢复状态轮询；失败文档可重新处理。
+- 删除文档需要确认；处理中任务不能删除，避免与后台处理竞争。删除成功后列表会立即移除该行。
+
+## 阶段 2C：文档管理接口
+
+文档列表接口为 `GET /api/v1/knowledge-bases/{knowledge_base_id}/documents`，返回 `items` 数组；每项包含 `document_id`、最新 `job_id`、`file_name`、`status`、`error_code` 和 `error_message`。
+
+状态只可能是 `pending`、`parsing`、`embedding`、`ready`、`failed`。重新处理使用 `POST /api/v1/documents/{document_id}/reprocess`，删除使用 `DELETE /api/v1/documents/{document_id}`。后端会在同一事务中删除文档、任务和切片；文件清理失败会回滚数据库删除。处理中的文档删除返回 `409 DOCUMENT_PROCESSING`。
+
+本阶段的详细设计见 [阶段 2C 文档管理计划](../docs/实施计划/2026-07-14-阶段2C文档管理.md)，可重复执行的命令和浏览器步骤见 [阶段 2C 验证与演示](../docs/验收与演示/阶段2C验证与演示.md)。
 
 ## 同域部署与手机访问边界
 

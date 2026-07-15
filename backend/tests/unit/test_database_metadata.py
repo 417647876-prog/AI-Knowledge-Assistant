@@ -1,4 +1,5 @@
 from sqlalchemy import CHAR, CheckConstraint, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import TSVECTOR
 
 from app.db.base import Base
 from app.db.models import (
@@ -72,3 +73,17 @@ def test_document_chunk_embedding_is_512_dimensions() -> None:
     embedding_type = DocumentChunk.__table__.c.embedding.type
 
     assert embedding_type.dim == 512
+
+
+def test_document_chunk_contains_generated_search_columns() -> None:
+    search_text = DocumentChunk.__table__.c.search_text
+    search_vector = DocumentChunk.__table__.c.search_vector
+
+    assert isinstance(search_text.type, Text)
+    assert search_text.nullable is False
+    assert search_text.default is not None
+    assert search_text.default.arg == ""
+    assert isinstance(search_vector.type, TSVECTOR)
+    assert search_vector.computed is not None
+    assert str(search_vector.computed.sqltext) == "to_tsvector('simple', search_text)"
+    assert search_vector.computed.persisted is True
