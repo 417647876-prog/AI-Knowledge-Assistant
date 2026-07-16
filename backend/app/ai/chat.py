@@ -23,6 +23,39 @@ def _optional_string(mapping: dict[str, object], key: str) -> str | None:
     return value
 
 
+def _lock_stream_value(current: str | None, incoming: str | None, field: str) -> str | None:
+    if not incoming:
+        return current
+    if not current:
+        return incoming
+    if current != incoming:
+        raise TypeError(f"conflicting stream field: {field}")
+    return current
+
+
+async def _iter_sse_data(lines: AsyncIterator[str]) -> AsyncIterator[str]:
+    data_lines: list[str] = []
+    async for line in lines:
+        if line.endswith("\r"):
+            line = line[:-1]
+        if not line:
+            if data_lines:
+                yield "\n".join(data_lines)
+                data_lines = []
+            continue
+        if line.startswith(":"):
+            continue
+
+        field, separator, value = line.partition(":")
+        if separator and value.startswith(" "):
+            value = value[1:]
+        if field == "data":
+            data_lines.append(value)
+
+    if data_lines:
+        yield "\n".join(data_lines)
+
+
 def _parse_usage(raw_usage: object) -> ChatUsage | None:
     if raw_usage is None:
         return None
@@ -184,11 +217,8 @@ class OpenAICompatibleChatProvider:
                 json=self._payload(system_prompt, user_prompt, stream=True),
             ) as response:
                 response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line.removeprefix("data:").strip()
-                    if data == "[DONE]":
+                async for data in _iter_sse_data(response.aiter_lines()):
+                    if data.strip() == "[DONE]":
                         yield ChatStreamChunk(
                             kind="done",
                             finish_reason=finish_reason,
@@ -200,8 +230,11 @@ class OpenAICompatibleChatProvider:
                         raise TypeError("invalid stream payload")
 
                     request_id = _optional_string(payload, "id")
-                    if request_id is not None:
-                        provider_request_id = request_id
+                    provider_request_id = _lock_stream_value(
+                        provider_request_id,
+                        request_id,
+                        "provider_request_id",
+                    )
 
                     choices = payload.get("choices")
                     if not isinstance(choices, list):
@@ -211,8 +244,11 @@ class OpenAICompatibleChatProvider:
                         if not isinstance(choice, dict):
                             raise TypeError("invalid stream choice")
                         current_finish_reason = _optional_string(choice, "finish_reason")
-                        if current_finish_reason is not None:
-                            finish_reason = current_finish_reason
+                        finish_reason = _lock_stream_value(
+                            finish_reason,
+                            current_finish_reason,
+                            "finish_reason",
+                        )
                         delta_payload = choice.get("delta")
                         if delta_payload is not None:
                             if not isinstance(delta_payload, dict):

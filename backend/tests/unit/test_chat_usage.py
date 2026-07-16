@@ -171,6 +171,65 @@ async def test_generate_maps_openai_cached_tokens_to_hit_and_remaining_input_to_
 
 
 @pytest.mark.asyncio
+async def test_generate_marks_excess_cached_tokens_incomplete_without_negative_miss() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "answer"}}],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "prompt_tokens_details": {"cached_tokens": 120},
+                    "completion_tokens": 5,
+                    "completion_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 105,
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleChatProvider(
+            client=client,
+            base_url="https://chat.example",
+            api_key="private-key",
+            model="chat-model",
+        )
+        completion = await provider.generate("system", "user")
+
+    assert completion.usage == ChatUsage(120, 0, 5, 0, 105, False)
+    assert completion.usage.cache_miss_input_tokens >= 0
+
+
+@pytest.mark.asyncio
+async def test_generate_marks_provider_total_mismatch_incomplete() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "answer"}}],
+                "usage": {
+                    "prompt_cache_hit_tokens": 10,
+                    "prompt_cache_miss_tokens": 20,
+                    "completion_tokens": 5,
+                    "completion_tokens_details": {"reasoning_tokens": 1},
+                    "total_tokens": 999,
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleChatProvider(
+            client=client,
+            base_url="https://chat.example",
+            api_key="private-key",
+            model="chat-model",
+        )
+        completion = await provider.generate("system", "user")
+
+    assert completion.usage == ChatUsage(10, 20, 5, 1, 999, False)
+
+
+@pytest.mark.asyncio
 async def test_stream_emits_tokens_then_final_usage_and_done_for_deepseek_sse() -> None:
     body = (
         'data: {"id":"chatcmpl-stream-001","choices":[{"delta":{"content":"答"},'
@@ -223,6 +282,111 @@ async def test_stream_emits_tokens_then_final_usage_and_done_for_deepseek_sse() 
 
 
 @pytest.mark.asyncio
+async def test_stream_assembles_multiline_data_frames_with_crlf_and_comments() -> None:
+    body = (
+        "event: message\r\n"
+        "id: sse-id-is-not-provider-id\r\n"
+        ": keep-alive\r\n"
+        'data: {"id":"frame-001","choices":[\r\n'
+        'data: {"delta":{"content":"跨行"},"finish_reason":"stop"}\r\n'
+        'data: ],"usage":null}\r\n'
+        "\r\n"
+        "retry: 1000\r\n"
+        ": usage follows\r\n"
+        'data: {"id":"frame-001","choices":[],"usage":{\r\n'
+        'data: "prompt_cache_hit_tokens":2,"prompt_cache_miss_tokens":3,\r\n'
+        'data: "completion_tokens":1,\r\n'
+        'data: "completion_tokens_details":{"reasoning_tokens":0},\r\n'
+        'data: "total_tokens":6}}\r\n'
+        "\r\n"
+        "data: [DONE]\r\n"
+        "\r\n"
+        "data: not-json-after-done\r\n"
+        "\r\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    usage = ChatUsage(2, 3, 1, 0, 6, True)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleChatProvider(
+            client=client,
+            base_url="https://chat.example",
+            api_key="private-key",
+            model="chat-model",
+        )
+
+        chunks = [chunk async for chunk in provider.stream("system", "user")]
+
+    assert chunks == [
+        ChatStreamChunk(kind="token", delta="跨行"),
+        ChatStreamChunk(kind="usage", usage=usage),
+        ChatStreamChunk(
+            kind="done",
+            finish_reason="stop",
+            provider_request_id="frame-001",
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_dispatches_complete_final_frame_at_eof_and_allows_same_metadata() -> None:
+    body = (
+        'data: {"id":"eof-001","choices":[{"delta":{"content":"甲"},'
+        '"finish_reason":"stop"}],"usage":null}\n\n'
+        'data: {"id":"eof-001","choices":[{"delta":{"content":"乙"},'
+        '"finish_reason":"stop"}],"usage":null}'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleChatProvider(
+            client=client,
+            base_url="https://chat.example",
+            api_key="private-key",
+            model="chat-model",
+        )
+        chunks = [chunk async for chunk in provider.stream("system", "user")]
+
+    assert chunks == [
+        ChatStreamChunk(kind="token", delta="甲"),
+        ChatStreamChunk(kind="token", delta="乙"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_locks_first_nonempty_request_id_and_finish_reason() -> None:
+    body = (
+        'data: {"id":"","choices":[{"delta":{"content":"甲"},'
+        '"finish_reason":""}],"usage":null}\n\n'
+        'data: {"id":"real-001","choices":[{"delta":{"content":"乙"},'
+        '"finish_reason":"stop"}],"usage":null}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleChatProvider(
+            client=client,
+            base_url="https://chat.example",
+            api_key="private-key",
+            model="chat-model",
+        )
+        chunks = [chunk async for chunk in provider.stream("system", "user")]
+
+    assert chunks[-1] == ChatStreamChunk(
+        kind="done",
+        finish_reason="stop",
+        provider_request_id="real-001",
+    )
+
+
+@pytest.mark.asyncio
 async def test_stream_ending_before_usage_and_done_emits_only_received_tokens() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -270,6 +434,65 @@ async def test_stream_emits_identical_final_usage_only_once() -> None:
         chunks = [chunk async for chunk in provider.stream("system", "user")]
 
     assert [chunk.kind for chunk in chunks] == ["usage", "done"]
+
+
+@pytest.mark.asyncio
+async def test_stream_rejects_same_usage_owned_by_different_provider_request_ids() -> None:
+    usage_payload = (
+        '{"prompt_cache_hit_tokens":2,"prompt_cache_miss_tokens":3,'
+        '"completion_tokens":1,"completion_tokens_details":{"reasoning_tokens":0},'
+        '"total_tokens":6}'
+    )
+    body = (
+        f'data: {{"id":"owner-001","choices":[],"usage":{usage_payload}}}\n\n'
+        f'data: {{"id":"owner-002","choices":[],"usage":{usage_payload}}}\n\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleChatProvider(
+            client=client,
+            base_url="https://chat.example",
+            api_key="private-key",
+            model="chat-model",
+        )
+
+        with pytest.raises(AppError) as captured:
+            _ = [chunk async for chunk in provider.stream("system", "user")]
+
+    assert captured.value.code == "CHAT_PROVIDER_ERROR"
+    assert "owner-001" not in captured.value.message
+    assert "owner-002" not in captured.value.message
+
+
+@pytest.mark.asyncio
+async def test_stream_rejects_conflicting_finish_reasons() -> None:
+    body = (
+        'data: {"id":"finish-001","choices":[{"delta":{},'
+        '"finish_reason":"stop"}],"usage":null}\n\n'
+        'data: {"id":"finish-001","choices":[{"delta":{},'
+        '"finish_reason":"length"}],"usage":null}\n\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleChatProvider(
+            client=client,
+            base_url="https://chat.example",
+            api_key="private-key",
+            model="chat-model",
+        )
+
+        with pytest.raises(AppError) as captured:
+            _ = [chunk async for chunk in provider.stream("system", "user")]
+
+    assert captured.value.code == "CHAT_PROVIDER_ERROR"
+    assert "stop" not in captured.value.message
+    assert "length" not in captured.value.message
 
 
 @pytest.mark.asyncio

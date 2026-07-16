@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.ai.contracts import ChatCompletion, ChatUsage, ConversationMessage
@@ -111,6 +113,41 @@ async def test_rewriter_reports_full_completion_to_usage_callback() -> None:
 
     assert await rewriter.rewrite([], "追问") == "独立问题"
     assert recorded == [completion]
+
+
+@pytest.mark.asyncio
+async def test_rewriter_wraps_usage_callback_error_without_leaking_details() -> None:
+    completion = ChatCompletion("独立问题", None, "stop", "rewrite-002")
+
+    async def fail_callback(result: ChatCompletion) -> None:
+        raise RuntimeError("usage-callback-secret")
+
+    rewriter = ChatQuestionRewriter(
+        CompletionChatProvider(completion),
+        on_completion=fail_callback,
+    )
+
+    with pytest.raises(AppError) as captured:
+        await rewriter.rewrite([], "追问")
+
+    assert captured.value.code == "QUESTION_REWRITE_ERROR"
+    assert "usage-callback-secret" not in captured.value.message
+
+
+@pytest.mark.asyncio
+async def test_rewriter_propagates_usage_callback_cancellation() -> None:
+    completion = ChatCompletion("独立问题", None, "stop", "rewrite-003")
+
+    async def cancel_callback(result: ChatCompletion) -> None:
+        raise asyncio.CancelledError
+
+    rewriter = ChatQuestionRewriter(
+        CompletionChatProvider(completion),
+        on_completion=cancel_callback,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await rewriter.rewrite([], "追问")
 
 
 @pytest.mark.asyncio
