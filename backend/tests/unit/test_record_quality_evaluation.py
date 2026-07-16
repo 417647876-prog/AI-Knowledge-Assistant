@@ -142,6 +142,103 @@ def test_parse_quality_evaluation_keeps_only_sanitized_aggregate_summary() -> No
         assert sensitive not in serialized
 
 
+@pytest.mark.parametrize(
+    "unsafe_value",
+    [
+        "用户问题：如何重置密码？",
+        "模型答案：请联系管理员。",
+        "../../敏感文件.pdf",
+        "财务知识库",
+        "safe-model\n泄漏第二行",
+        "a" * 129,
+    ],
+    ids=["question", "answer", "file-name", "knowledge-base", "newline", "too-long"],
+)
+def test_parse_quality_evaluation_rejects_sensitive_text_in_allowed_identifier_field(
+    unsafe_value: str,
+) -> None:
+    report = deepcopy(_report_data())
+    report["environment"]["chat_model"] = unsafe_value  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="环境摘要"):
+        parse_quality_evaluation(json.dumps(report, ensure_ascii=False).encode(), _policy())
+
+
+def test_parse_quality_evaluation_validates_and_canonicalizes_safe_environment() -> None:
+    report = deepcopy(_report_data())
+    report["environment"] = {
+        "app_env": "production",
+        "embedding_provider": "openai",
+        "embedding_model": "vendor/embedding-v1.5",
+        "embedding_device": "cuda",
+        "embedding_batch_size": "2048",
+        "chat_provider": "deepseek",
+        "chat_model": "deepseek-chat-v4",
+        "embedding_dimensions": "512",
+        "rag_score_threshold": "0.5500",
+        "rag_rrf_rank_constant": "1000",
+        "rag_retrieval_mode": "hybrid",
+        "rag_reranker_provider": "local",
+        "rag_reranker_model": "BAAI/bge-reranker-base",
+        "rag_reranker_device": "cpu",
+        "rag_reranker_batch_size": "256",
+        "rag_candidate_k": "100",
+        "rag_reranker_allow_fallback": "FALSE",
+        "rag_reranker_min_score": "-0.2500",
+        "unknown_key": "must-not-persist",
+    }
+
+    summary = parse_quality_evaluation(json.dumps(report).encode(), _policy())
+
+    assert summary.model_config_summary == {
+        "app_env": "production",
+        "embedding_provider": "openai",
+        "embedding_model": "vendor/embedding-v1.5",
+        "embedding_device": "cuda",
+        "embedding_batch_size": "2048",
+        "chat_provider": "deepseek",
+        "chat_model": "deepseek-chat-v4",
+        "embedding_dimensions": "512",
+        "rag_score_threshold": "0.55",
+        "rag_rrf_rank_constant": "1000",
+        "rag_retrieval_mode": "hybrid",
+        "rag_reranker_provider": "local",
+        "rag_reranker_model": "BAAI/bge-reranker-base",
+        "rag_reranker_device": "cpu",
+        "rag_reranker_batch_size": "256",
+        "rag_candidate_k": "100",
+        "rag_reranker_allow_fallback": "false",
+        "rag_reranker_min_score": "-0.25",
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("app_env", "staging"),
+        ("embedding_batch_size", "01"),
+        ("embedding_dimensions", "1536"),
+        ("rag_score_threshold", "1.1"),
+        ("rag_score_threshold", "NaN"),
+        ("rag_rrf_rank_constant", "0"),
+        ("rag_candidate_k", "101"),
+        ("rag_reranker_allow_fallback", "yes"),
+        ("rag_reranker_min_score", "1e-1"),
+    ],
+)
+def test_parse_quality_evaluation_rejects_invalid_typed_environment_values(
+    field: str,
+    value: str,
+) -> None:
+    report = deepcopy(_report_data())
+    report["environment"][field] = value  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="环境摘要") as captured:
+        parse_quality_evaluation(json.dumps(report).encode(), _policy())
+
+    assert value not in str(captured.value)
+
+
 def test_parse_quality_evaluation_rejects_unknown_fields_recursively() -> None:
     reports = []
     top_level = deepcopy(_report_data())
@@ -314,6 +411,16 @@ def test_parse_quality_evaluation_rejects_invalid_contract_and_records_failed_ga
     failed_gate["recall_at_5"] = 0.84
     summary = parse_quality_evaluation(json.dumps(failed_gate).encode(), _policy())
     assert summary.gate_passed is False
+
+
+def test_parse_quality_evaluation_rejects_matching_non_rewrite_modes_defensively() -> None:
+    report = deepcopy(_report_data())
+    report["mode"] = "vector"
+    policy = _policy()
+    policy.final_mode = "vector"  # type: ignore[assignment]
+
+    with pytest.raises(ValueError, match="rewrite"):
+        parse_quality_evaluation(json.dumps(report).encode(), policy)
 
 
 @pytest.mark.asyncio

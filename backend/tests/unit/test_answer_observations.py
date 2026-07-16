@@ -14,6 +14,7 @@ def test_observation_maps_complete_metrics_without_sensitive_content() -> None:
         candidate_count=4,
         accepted_scores=(0.9, 0.6),
         refused=False,
+        generated_output=True,
         citation_ids=(1, 2),
         rewrite_ms=11,
         retrieval_ms=22,
@@ -64,6 +65,7 @@ def test_observation_derives_unreferenced_and_empty_retrieval_generation_signals
         candidate_count=0,
         accepted_scores=(),
         refused=False,
+        generated_output=True,
         citation_ids=(),
         rewrite_ms=0,
         retrieval_ms=2,
@@ -77,6 +79,27 @@ def test_observation_derives_unreferenced_and_empty_retrieval_generation_signals
     assert metrics.generated_with_empty_retrieval is True
 
 
+def test_observation_requires_generated_output_for_generation_signals() -> None:
+    metrics = ObservationMetrics(
+        was_rewritten=False,
+        rewrite_fallback=False,
+        candidate_count=0,
+        accepted_scores=(),
+        refused=False,
+        generated_output=False,
+        citation_ids=(),
+        rewrite_ms=0,
+        retrieval_ms=0,
+        generation_ms=0,
+        total_ms=0,
+        finish_reason=None,
+        error_code="CHAT_PROVIDER_ERROR",
+    )
+
+    assert metrics.direct_answer_without_citation is False
+    assert metrics.generated_with_empty_retrieval is False
+
+
 def test_observation_clamps_finite_reranker_scores_for_normalized_aggregates() -> None:
     metrics = ObservationMetrics(
         was_rewritten=False,
@@ -84,6 +107,7 @@ def test_observation_clamps_finite_reranker_scores_for_normalized_aggregates() -
         candidate_count=2,
         accepted_scores=(-0.25, 1.5),
         refused=False,
+        generated_output=True,
         citation_ids=(),
         rewrite_ms=1,
         retrieval_ms=2,
@@ -113,6 +137,7 @@ def test_observation_ignores_non_finite_scores_defensively() -> None:
         candidate_count=3,
         accepted_scores=(float("nan"), 0.4, float("inf")),
         refused=False,
+        generated_output=True,
         citation_ids=(),
         rewrite_ms=1,
         retrieval_ms=2,
@@ -145,6 +170,7 @@ def test_observation_ignores_non_finite_scores_defensively() -> None:
             candidate_count=2,
             accepted_scores=(float("nan"), float("-inf")),
             refused=False,
+            generated_output=True,
             citation_ids=(),
             rewrite_ms=1,
             retrieval_ms=2,
@@ -208,6 +234,7 @@ def test_stream_state_exports_only_sanitized_observation_metrics() -> None:
         candidate_count=5,
         accepted_scores=(0.8, 0.4),
         refused=False,
+        generated_output=True,
         citation_ids=(1,),
         rewrite_ms=7,
         retrieval_ms=8,

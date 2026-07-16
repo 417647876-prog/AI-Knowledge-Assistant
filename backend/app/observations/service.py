@@ -14,6 +14,7 @@ class ObservationMetrics:
     candidate_count: int
     accepted_scores: tuple[float | None, ...]
     refused: bool
+    generated_output: bool
     citation_ids: tuple[int, ...]
     rewrite_ms: int
     retrieval_ms: int
@@ -24,11 +25,11 @@ class ObservationMetrics:
 
     @property
     def direct_answer_without_citation(self) -> bool:
-        return not self.refused and not self.citation_ids
+        return self.generated_output and not self.refused and not self.citation_ids
 
     @property
     def generated_with_empty_retrieval(self) -> bool:
-        return not self.refused and not self.accepted_scores
+        return self.generated_output and not self.refused and not self.accepted_scores
 
 
 def build_answer_observation(

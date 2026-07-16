@@ -248,8 +248,21 @@ async def test_stream_commits_placeholders_before_provider_and_finalizes_complet
 @pytest.mark.asyncio
 async def test_provider_failure_marks_failed_without_automatic_retry(
     stream_resources: tuple[User, KnowledgeBase],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user, knowledge_base = stream_resources
+    captured_metrics = []
+
+    async def capture_metrics(session, **kwargs):
+        captured_metrics.append(
+            kwargs["state"].observation_metrics(error_code=kwargs["error_code"])
+        )
+        return await finalize_conversation_stream(session, **kwargs)
+
+    monkeypatch.setattr(
+        "app.api.v1.conversations.finalize_conversation_stream",
+        capture_metrics,
+    )
 
     class FailingService(ControlledRagService):
         async def stream_answer(self, *args, **kwargs):
@@ -306,7 +319,84 @@ async def test_provider_failure_marks_failed_without_automatic_retry(
     assert assistant.error_code == "CHAT_PROVIDER_ERROR"
     assert usage is not None and usage.status == "failed_after_request"
     assert observation is not None and observation.error_code == "CHAT_PROVIDER_ERROR"
+    assert captured_metrics[-1].direct_answer_without_citation is True
+    assert captured_metrics[-1].generated_with_empty_retrieval is True
+    assert "部分" not in repr(captured_metrics[-1])
     assert service.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_before_first_token_records_no_generation_signals(
+    stream_resources: tuple[User, KnowledgeBase],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user, knowledge_base = stream_resources
+    captured_metrics = []
+
+    async def capture_metrics(session, **kwargs):
+        captured_metrics.append(
+            kwargs["state"].observation_metrics(error_code=kwargs["error_code"])
+        )
+        return await finalize_conversation_stream(session, **kwargs)
+
+    monkeypatch.setattr(
+        "app.api.v1.conversations.finalize_conversation_stream",
+        capture_metrics,
+    )
+
+    class FailingBeforeTokenService(ControlledRagService):
+        async def stream_answer(self, *args, **kwargs):
+            self.calls += 1
+            yield StreamEvent(
+                "status",
+                {"phase": "generating"},
+                persistence={"answer_request_started": True},
+            )
+            raise RuntimeError("provider secret")
+
+    service = FailingBeforeTokenService([])
+    app = create_app()
+    app.dependency_overrides[get_conversation_rag_service] = lambda: service
+    settings = Settings(_env_file=None)
+    app.dependency_overrides[get_settings] = lambda: settings
+    token = create_access_token(user_id=user.id, role=user.role, settings=settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as client:
+        created = await client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base.id}/conversations",
+            json={"title": "生成前失败"},
+        )
+        conversation_id = UUID(created.json()["id"])
+        response = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages/stream",
+            json={"question": "问题"},
+        )
+
+    assert response.status_code == 200
+    assert "provider secret" not in response.text
+    async with session_factory() as session:
+        assistant = await session.scalar(
+            select(ConversationMessage).where(
+                ConversationMessage.conversation_id == conversation_id,
+                ConversationMessage.role == "assistant",
+            )
+        )
+        observation = await session.scalar(
+            select(AnswerObservation).where(AnswerObservation.conversation_id == conversation_id)
+        )
+
+    assert assistant is not None and assistant.status == "failed"
+    assert assistant.content == ""
+    assert observation is not None and observation.error_code == "CHAT_PROVIDER_ERROR"
+    assert observation.accepted_count == 0
+    assert observation.citation_count == 0
+    assert captured_metrics[-1].direct_answer_without_citation is False
+    assert captured_metrics[-1].generated_with_empty_retrieval is False
+    assert "content" not in captured_metrics[-1].__dataclass_fields__
 
 
 @pytest.mark.asyncio
@@ -501,8 +591,21 @@ async def test_rewrite_callback_failures_never_leave_reserved_usage(
 @pytest.mark.asyncio
 async def test_real_database_disconnect_marks_interrupted_and_keeps_partial_body(
     stream_resources: tuple[User, KnowledgeBase],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user, knowledge_base = stream_resources
+    captured_metrics = []
+
+    async def capture_metrics(session, **kwargs):
+        captured_metrics.append(
+            kwargs["state"].observation_metrics(error_code=kwargs["error_code"])
+        )
+        return await finalize_conversation_stream(session, **kwargs)
+
+    monkeypatch.setattr(
+        "app.api.v1.conversations.finalize_conversation_stream",
+        capture_metrics,
+    )
     async with session_factory.begin() as session:
         conversation = Conversation(
             user_id=user.id,
@@ -567,6 +670,9 @@ async def test_real_database_disconnect_marks_interrupted_and_keeps_partial_body
     assert usage is not None and usage.status == "usage_unknown"
     assert usage.settled_cost == usage.reserved_cost
     assert observation is not None and observation.error_code == "CLIENT_DISCONNECTED"
+    assert captured_metrics[-1].direct_answer_without_citation is True
+    assert captured_metrics[-1].generated_with_empty_retrieval is True
+    assert "服务端已收到的部分" not in repr(captured_metrics[-1])
 
 
 @pytest.mark.asyncio

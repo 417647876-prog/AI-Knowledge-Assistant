@@ -400,6 +400,7 @@ class StreamPersistenceState:
             candidate_count=self.candidate_count,
             accepted_scores=self.accepted_scores,
             refused=self.refused,
+            generated_output=bool(self.content),
             citation_ids=citation_ids,
             rewrite_ms=self.rewrite_ms,
             retrieval_ms=self.retrieval_ms,

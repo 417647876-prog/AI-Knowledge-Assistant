@@ -4,8 +4,10 @@ import argparse
 import asyncio
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +44,35 @@ SAFE_ENVIRONMENT_KEYS = frozenset(
     }
 )
 
+_ENVIRONMENT_ENUMS = {
+    "app_env": frozenset({"development", "test", "production"}),
+    "embedding_provider": frozenset({"fake", "local", "openai"}),
+    "embedding_device": frozenset({"auto", "cuda", "cpu"}),
+    "chat_provider": frozenset({"fake", "deepseek"}),
+    "rag_retrieval_mode": frozenset({"vector", "hybrid"}),
+    "rag_reranker_provider": frozenset({"disabled", "fake", "local"}),
+    "rag_reranker_device": frozenset({"auto", "cuda", "cpu"}),
+}
+_ENVIRONMENT_INTEGER_RANGES = {
+    "embedding_batch_size": (1, 2048),
+    "embedding_dimensions": (512, 512),
+    "rag_rrf_rank_constant": (1, 1000),
+    "rag_reranker_batch_size": (1, 256),
+    "rag_candidate_k": (1, 100),
+}
+_ENVIRONMENT_DECIMAL_RANGES = {
+    "rag_score_threshold": (Decimal("-1"), Decimal("1")),
+    "rag_reranker_min_score": (Decimal("-1"), Decimal("1")),
+}
+_ENVIRONMENT_IDENTIFIERS = frozenset({"embedding_model", "chat_model", "rag_reranker_model"})
+_INTEGER_PATTERN = re.compile(r"(?:0|[1-9][0-9]*)\Z", re.ASCII)
+_DECIMAL_PATTERN = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\Z", re.ASCII)
+_IDENTIFIER_PATTERN = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+    r"(?:/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)*\Z",
+    re.ASCII,
+)
+
 
 @dataclass(frozen=True)
 class QualityEvaluationSummary:
@@ -54,6 +85,62 @@ class QualityEvaluationSummary:
     started_at: datetime
     completed_at: datetime
     duration_ms: int
+
+
+def _canonical_decimal(value: Decimal) -> str:
+    if value == 0:
+        return "0"
+    return format(value.normalize(), "f")
+
+
+def _sanitize_environment(environment: dict[str, str]) -> dict[str, str]:
+    sanitized: dict[str, str] = {}
+    for key in SAFE_ENVIRONMENT_KEYS:
+        if key not in environment:
+            continue
+        value = environment[key]
+        if key in _ENVIRONMENT_ENUMS:
+            if value not in _ENVIRONMENT_ENUMS[key]:
+                raise ValueError(f"环境摘要字段 {key} 不是允许的枚举值")
+            sanitized[key] = value
+        elif key in _ENVIRONMENT_INTEGER_RANGES:
+            if not _INTEGER_PATTERN.fullmatch(value):
+                raise ValueError(f"环境摘要字段 {key} 必须是规范整数")
+            number = int(value)
+            lower, upper = _ENVIRONMENT_INTEGER_RANGES[key]
+            if not lower <= number <= upper:
+                raise ValueError(f"环境摘要字段 {key} 超出允许范围")
+            sanitized[key] = str(number)
+        elif key in _ENVIRONMENT_DECIMAL_RANGES:
+            if key == "rag_reranker_min_score" and value == "disabled":
+                sanitized[key] = value
+                continue
+            if not _DECIMAL_PATTERN.fullmatch(value):
+                raise ValueError(f"环境摘要字段 {key} 必须是规范十进制数")
+            try:
+                number = Decimal(value)
+            except InvalidOperation as error:
+                raise ValueError(f"环境摘要字段 {key} 必须是规范十进制数") from error
+            lower, upper = _ENVIRONMENT_DECIMAL_RANGES[key]
+            if not number.is_finite() or not lower <= number <= upper:
+                raise ValueError(f"环境摘要字段 {key} 超出允许范围")
+            sanitized[key] = _canonical_decimal(number)
+        elif key == "rag_reranker_allow_fallback":
+            normalized = value.casefold()
+            if normalized not in {"true", "false"}:
+                raise ValueError(f"环境摘要字段 {key} 必须是布尔值")
+            sanitized[key] = normalized
+        elif key in _ENVIRONMENT_IDENTIFIERS:
+            if (
+                not 1 <= len(value) <= 128
+                or ".." in value
+                or _IDENTIFIER_PATTERN.fullmatch(value) is None
+            ):
+                raise ValueError(f"环境摘要字段 {key} 不是安全标识符")
+            sanitized[key] = value
+        else:  # pragma: no cover - allowlist 与分类表必须同步
+            raise RuntimeError(f"环境摘要字段 {key} 缺少验证规则")
+    return sanitized
 
 
 def _reject_unknown_report_fields(raw: object) -> None:
@@ -87,8 +174,8 @@ def parse_quality_evaluation(
     report = EvaluationReport.model_validate(raw)
     if report.schema_version != "1.1":
         raise ValueError("离线评测报告必须使用 schema 1.1")
-    if report.mode != policy.final_mode:
-        raise ValueError("离线评测报告模式与质量策略 final_mode 不一致")
+    if report.mode != "rewrite" or policy.final_mode != "rewrite":
+        raise ValueError("离线评测报告和质量策略 final_mode 必须均为 rewrite")
     if report.case_count < policy.minimum_case_count:
         raise ValueError("离线评测报告案例数低于质量策略要求")
     categories = {case.category for case in report.cases if case.category is not None}
@@ -115,9 +202,7 @@ def parse_quality_evaluation(
     return QualityEvaluationSummary(
         dataset_hash=report.dataset_sha256,
         mode=report.mode,
-        model_config_summary={
-            key: value for key, value in report.environment.items() if key in SAFE_ENVIRONMENT_KEYS
-        },
+        model_config_summary=_sanitize_environment(report.environment),
         metrics=metrics,
         report_hash=hashlib.sha256(report_bytes).hexdigest(),
         gate_passed=gate_passed,
