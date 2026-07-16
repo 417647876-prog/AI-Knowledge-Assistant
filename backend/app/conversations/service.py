@@ -313,7 +313,9 @@ class StreamPersistenceState:
         if event.event == "token":
             delta = event.data.get("delta")
             if isinstance(delta, str):
-                if len(delta) > 8000 - len(self.content):
+                remaining = 8000 - len(self.content)
+                if len(delta) > remaining:
+                    self.content += delta[:remaining]
                     raise AppError(
                         code="ANSWER_TOO_LONG",
                         message="助手回答超过长度限制。",
@@ -363,11 +365,16 @@ async def finalize_conversation_stream(
     pricing: ModelPricing,
     error_code: str | None,
 ) -> None:
-    assistant = await session.scalar(
-        select(ConversationMessage)
-        .where(ConversationMessage.id == prepared.assistant_message_id)
-        .with_for_update()
+    conversation = await session.scalar(
+        select(Conversation).where(Conversation.id == prepared.conversation_id).with_for_update()
     )
+    assistant = None
+    if conversation is not None:
+        assistant = await session.scalar(
+            select(ConversationMessage)
+            .where(ConversationMessage.id == prepared.assistant_message_id)
+            .with_for_update()
+        )
     usage_event = await session.scalar(
         select(LlmUsageEvent).where(LlmUsageEvent.id == prepared.answer_usage_id).with_for_update()
     )

@@ -1,11 +1,15 @@
 import asyncio
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
-from fastapi.responses import StreamingResponse
 from starlette.requests import ClientDisconnect
 
 from app.api import sse as sse_module
 from app.api.sse import iter_sse
+from app.api.v1 import questions as questions_module
+from app.api.v1.questions import StreamQuestionRequest
+from app.core.config import Settings
 from app.core.exceptions import AppError
 from app.rag.streaming import StreamEvent
 
@@ -194,8 +198,7 @@ async def test_streaming_response_waits_for_close_when_asgi_send_raises_oserror(
         finally:
             source_closed.set()
 
-    response_type = getattr(sse_module, "DisconnectAwareStreamingResponse", StreamingResponse)
-    response = response_type(
+    response = sse_module.DisconnectAwareStreamingResponse(
         iter_sse(
             ConnectedRequest(),
             source(),
@@ -221,6 +224,73 @@ async def test_streaming_response_waits_for_close_when_asgi_send_raises_oserror(
 
     assert source_closed.is_set()
     assert finalized == [("client_disconnected", "CLIENT_DISCONNECTED")]
+    assert not [
+        task
+        for task in asyncio.all_tasks()
+        if not task.done() and "iter_sse.<locals>.produce" in repr(task.get_coro())
+    ]
+
+
+@pytest.mark.asyncio
+async def test_legacy_questions_stream_waits_for_close_on_asgi_send_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_closed = asyncio.Event()
+
+    async def allow_knowledge_base(*args, **kwargs):
+        return object()
+
+    monkeypatch.setattr(questions_module, "get_owned_knowledge_base", allow_knowledge_base)
+
+    class LegacyService:
+        async def stream_answer(self, *args, **kwargs):
+            try:
+                yield StreamEvent("token", {"delta": "旧接口部分正文"})
+                await asyncio.Event().wait()
+            finally:
+                source_closed.set()
+
+    class LegacyRequest:
+        state = SimpleNamespace(request_id="legacy-send-failed")
+
+        async def is_disconnected(self) -> bool:
+            return False
+
+    route = next(
+        route
+        for route in questions_module.router.routes
+        if route.path == "/api/v1/knowledge-bases/{knowledge_base_id}/questions/stream"
+    )
+    assert route.deprecated is True
+
+    response = await questions_module.stream_question(
+        knowledge_base_id=uuid4(),
+        payload=StreamQuestionRequest(question="旧接口问题"),
+        request=LegacyRequest(),  # type: ignore[arg-type]
+        session=object(),  # type: ignore[arg-type]
+        current_user=object(),  # type: ignore[arg-type]
+        service=LegacyService(),  # type: ignore[arg-type]
+        settings=Settings(_env_file=None),
+    )
+    assert response.media_type == "text/event-stream; charset=utf-8"
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+
+    async def receive():
+        await asyncio.Event().wait()
+
+    async def send(message) -> None:
+        if message["type"] == "http.response.body":
+            raise OSError("ASGI 2.4 client disconnected")
+
+    with pytest.raises(ClientDisconnect):
+        await response(
+            {"type": "http", "asgi": {"spec_version": "2.4"}},
+            receive,
+            send,
+        )
+
+    assert source_closed.is_set()
     assert not [
         task
         for task in asyncio.all_tasks()

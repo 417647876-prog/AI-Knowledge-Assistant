@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from starlette.requests import ClientDisconnect
 
 from app.ai.contracts import ChatCompletion, ChatUsage
@@ -17,7 +17,12 @@ from app.api.v1.conversations import (
     stream_conversation_message,
 )
 from app.conversations.schemas import StreamConversationMessageRequest
-from app.conversations.service import delete_conversation_body, finalize_conversation_stream
+from app.conversations.service import (
+    StreamPersistenceState,
+    delete_conversation_body,
+    finalize_conversation_stream,
+    prepare_conversation_stream,
+)
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError
 from app.core.security import create_access_token, hash_password
@@ -1139,3 +1144,111 @@ async def test_answer_too_long_persists_only_first_8000_characters_and_fails(
     assert assistant is not None and assistant.status == "failed"
     assert assistant.error_code == "ANSWER_TOO_LONG"
     assert len(assistant.content) == 8000
+
+
+@pytest.mark.asyncio
+async def test_delete_and_completed_finalization_use_one_lock_order_without_deadlock(
+    stream_resources: tuple[User, KnowledgeBase],
+) -> None:
+    user, knowledge_base = stream_resources
+    pricing = ModelPricing(Decimal("0.25"), Decimal("1"), Decimal("2"))
+    async with session_factory.begin() as session:
+        conversation = Conversation(
+            user_id=user.id,
+            knowledge_base_id=knowledge_base.id,
+            title="删除与完成并发",
+        )
+        session.add(conversation)
+        await session.flush()
+        prepared = await prepare_conversation_stream(
+            session,
+            user_id=user.id,
+            conversation_id=conversation.id,
+            question="并发问题",
+            retry_of_message_id=None,
+            model="fake",
+            pricing=pricing,
+            answer_input_tokens=100,
+            answer_max_output_tokens=20,
+            answer_top_k=1,
+            chunk_size=100,
+        )
+
+    state = StreamPersistenceState()
+    for event in normal_events():
+        state.observe(event)
+
+    delete_ready = asyncio.Event()
+    begin_delete = asyncio.Event()
+    finalizer_first_lock = asyncio.Event()
+    continue_finalizer = asyncio.Event()
+    delete_pid: list[int] = []
+
+    class FirstScalarGate:
+        def __init__(self, session) -> None:
+            self._session = session
+            self._paused = False
+
+        def __getattr__(self, name):
+            return getattr(self._session, name)
+
+        async def scalar(self, statement, *args, **kwargs):
+            result = await self._session.scalar(statement, *args, **kwargs)
+            if not self._paused:
+                self._paused = True
+                finalizer_first_lock.set()
+                await continue_finalizer.wait()
+            return result
+
+    async def run_delete() -> None:
+        async with session_factory.begin() as session:
+            await session.execute(text("SET LOCAL lock_timeout = '2s'"))
+            delete_pid.append(int(await session.scalar(text("SELECT pg_backend_pid()"))))
+            delete_ready.set()
+            await begin_delete.wait()
+            await delete_conversation_body(
+                session,
+                user_id=user.id,
+                conversation_id=conversation.id,
+            )
+
+    async def run_finalizer() -> None:
+        async with session_factory.begin() as session:
+            await session.execute(text("SET LOCAL lock_timeout = '2s'"))
+            await finalize_conversation_stream(
+                FirstScalarGate(session),  # type: ignore[arg-type]
+                prepared=prepared,
+                state=state,
+                outcome="completed",
+                pricing=pricing,
+                error_code=None,
+            )
+
+    delete_task = asyncio.create_task(run_delete())
+    await asyncio.wait_for(delete_ready.wait(), timeout=2)
+    finalizer_task = asyncio.create_task(run_finalizer())
+    await asyncio.wait_for(finalizer_first_lock.wait(), timeout=2)
+    begin_delete.set()
+
+    for _ in range(100):
+        async with session_factory() as observer:
+            wait_event_type = await observer.scalar(
+                text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :pid"),
+                {"pid": delete_pid[0]},
+            )
+        if wait_event_type == "Lock":
+            break
+        await asyncio.sleep(0.01)
+    else:
+        pytest.fail("DELETE 未按事件栅栏进入数据库锁等待")
+
+    continue_finalizer.set()
+    results = await asyncio.wait_for(
+        asyncio.gather(finalizer_task, delete_task, return_exceptions=True),
+        timeout=5,
+    )
+    assert results == [None, None]
+
+    async with session_factory() as session:
+        usage = await session.get(LlmUsageEvent, prepared.answer_usage_id)
+    assert usage is not None and usage.status != "reserved"

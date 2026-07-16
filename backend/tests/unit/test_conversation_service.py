@@ -140,3 +140,14 @@ def test_stream_state_rejects_over_limit_token_before_mutating_partial_content()
 
     assert getattr(captured.value, "code", None) == "ANSWER_TOO_LONG"
     assert state.content == "答" * 8000
+
+
+def test_stream_state_keeps_exact_remaining_capacity_before_answer_too_long() -> None:
+    state = StreamPersistenceState(content="答" * 7900)
+
+    with pytest.raises(Exception) as captured:
+        state.observe(StreamEvent("token", {"delta": "新" * 200}))
+
+    assert getattr(captured.value, "code", None) == "ANSWER_TOO_LONG"
+    assert state.content == "答" * 7900 + "新" * 100
+    assert len(state.content) == 8000

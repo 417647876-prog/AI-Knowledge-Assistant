@@ -4,7 +4,6 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +23,7 @@ from app.ai.embeddings import (
 from app.ai.rerankers import FakeRerankerProvider, get_local_reranker_provider
 from app.ai.rewrite import ChatQuestionRewriter, FakeQuestionRewriter
 from app.api.auth_dependencies import get_current_user
-from app.api.sse import iter_sse
+from app.api.sse import DisconnectAwareStreamingResponse, iter_sse
 from app.authorization.service import get_owned_knowledge_base
 from app.core.config import Settings, get_settings
 from app.db.models import User
@@ -237,14 +236,14 @@ async def stream_question(
     current_user: Annotated[User, Depends(get_current_user)],
     service: Annotated[RagService, Depends(get_rag_service)],
     settings: Annotated[Settings, Depends(get_settings)],
-) -> StreamingResponse:
+) -> DisconnectAwareStreamingResponse:
     await get_owned_knowledge_base(session, current_user, knowledge_base_id)
     top_k = payload.top_k or settings.rag_top_k_default
     history = [
         ConversationMessage(role=item.role, content=item.content) for item in payload.history
     ]
     source = service.stream_answer(knowledge_base_id, payload.question, top_k, history)
-    return StreamingResponse(
+    return DisconnectAwareStreamingResponse(
         iter_sse(request, source, request.state.request_id),
         media_type="text/event-stream; charset=utf-8",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
