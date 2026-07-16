@@ -47,6 +47,28 @@ async def test_openai_compatible_chat_provider_calls_chat_completions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_provider_sends_the_reserved_maximum_output_token_limit() -> None:
+    captured: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "回答"}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleChatProvider(
+            client=client,
+            base_url="https://chat.example/v1",
+            api_key="private-key",
+            model="chat-model",
+        )
+        await provider.generate("system", "user", max_output_tokens=321)
+        _ = [item async for item in provider.stream("system", "user", max_output_tokens=654)]
+
+    assert captured[0]["max_tokens"] == 321
+    assert captured[1]["max_tokens"] == 654
+
+
+@pytest.mark.asyncio
 async def test_chat_provider_wraps_invalid_response_without_leaking_secret() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"unexpected": "private-key"})

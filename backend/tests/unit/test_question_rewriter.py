@@ -44,6 +44,24 @@ class CompletionChatProvider:
         return self.completion
 
 
+class TrackedCompletionProvider(CompletionChatProvider):
+    def __init__(self, completion: ChatCompletion, order: list[str]) -> None:
+        super().__init__(completion)
+        self.order = order
+        self.max_output_tokens = None
+
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> ChatCompletion:
+        self.order.append("provider")
+        self.max_output_tokens = max_output_tokens
+        return self.completion
+
+
 @pytest.mark.parametrize(
     ("question", "has_history", "expected"),
     [
@@ -113,6 +131,48 @@ async def test_rewriter_reports_full_completion_to_usage_callback() -> None:
 
     assert await rewriter.rewrite([], "追问") == "独立问题"
     assert recorded == [completion]
+
+
+@pytest.mark.asyncio
+async def test_tracked_rewrite_reserves_immediately_before_provider_and_settles_completion() -> (
+    None
+):
+    completion = ChatCompletion(
+        "独立问题",
+        ChatUsage(1, 2, 3, 0, 6, True),
+        "stop",
+        "rewrite-tracked",
+    )
+    order: list[str] = []
+    provider = TrackedCompletionProvider(completion, order)
+
+    async def before_request() -> None:
+        order.append("reserved")
+
+    async def completed(result: ChatCompletion) -> None:
+        assert result is completion
+        order.append("settled")
+
+    async def failed(
+        request_started: bool,
+        error_code: str,
+        result: ChatCompletion | None,
+    ) -> None:
+        pytest.fail(f"不应失败: {request_started=} {error_code=}")
+
+    rewriter = ChatQuestionRewriter(provider)
+    result = await rewriter.rewrite_tracked(
+        [],
+        "追问",
+        max_output_tokens=321,
+        before_request=before_request,
+        on_completion=completed,
+        on_failure=failed,
+    )
+
+    assert result == "独立问题"
+    assert order == ["reserved", "provider", "settled"]
+    assert provider.max_output_tokens == 321
 
 
 @pytest.mark.asyncio

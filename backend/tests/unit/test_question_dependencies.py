@@ -75,6 +75,9 @@ async def test_rag_service_factory_wraps_real_chat_provider_for_question_rewriti
             embedding_provider="fake",
             chat_provider="deepseek",
             chat_api_key="test-key",
+            chat_cache_hit_input_price_per_million="0.25",
+            chat_cache_miss_input_price_per_million="1",
+            chat_output_price_per_million="2",
         )
         question_rewriter = await get_question_rewriter(
             settings=settings,

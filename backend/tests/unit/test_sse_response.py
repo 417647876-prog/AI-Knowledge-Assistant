@@ -89,3 +89,91 @@ async def test_sse_closes_source_when_client_disconnects() -> None:
 
     assert parts == []
     assert source.closed
+
+
+@pytest.mark.asyncio
+async def test_sse_reports_disconnect_and_preserves_observed_partial_token() -> None:
+    class DisconnectAfterFirstPoll:
+        def __init__(self) -> None:
+            self.polls = 0
+
+        async def is_disconnected(self) -> bool:
+            self.polls += 1
+            return self.polls > 1
+
+    observed: list[str] = []
+    finalized: list[tuple[str, str | None]] = []
+
+    async def source():
+        yield StreamEvent("token", {"delta": "部分正文"})
+        await asyncio.Event().wait()
+
+    def on_event(event: StreamEvent) -> None:
+        if event.event == "token":
+            observed.append(str(event.data["delta"]))
+
+    async def on_finalize(outcome: str, error_code: str | None) -> None:
+        finalized.append((outcome, error_code))
+
+    parts = [
+        part
+        async for part in iter_sse(
+            DisconnectAfterFirstPoll(),
+            source(),
+            "req-disconnect",
+            1,
+            on_event=on_event,
+            on_finalize=on_finalize,
+        )
+    ]
+
+    assert "部分正文".encode() in b"".join(parts)
+    assert observed == ["部分正文"]
+    assert finalized == [("client_disconnected", "CLIENT_DISCONNECTED")]
+
+
+@pytest.mark.asyncio
+async def test_sse_distinguishes_cancellation_from_generator_close() -> None:
+    async def idle_source():
+        await asyncio.Event().wait()
+        yield StreamEvent("done", {})
+
+    canceled: list[tuple[str, str | None]] = []
+    canceled_stream = iter_sse(
+        ConnectedRequest(),
+        idle_source(),
+        "req-cancel",
+        10,
+        on_finalize=lambda outcome, code: _record(canceled, outcome, code),
+    )
+    pending = asyncio.create_task(anext(canceled_stream))
+    await asyncio.sleep(0)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert canceled == [("canceled", "STREAM_CANCELED")]
+
+    closed: list[tuple[str, str | None]] = []
+
+    async def one_token_then_idle():
+        yield StreamEvent("token", {"delta": "一"})
+        await asyncio.Event().wait()
+
+    closed_stream = iter_sse(
+        ConnectedRequest(),
+        one_token_then_idle(),
+        "req-close",
+        10,
+        on_finalize=lambda outcome, code: _record(closed, outcome, code),
+    )
+    assert b"event: token" in await anext(closed_stream)
+    await closed_stream.aclose()
+    assert closed == [("client_disconnected", "CLIENT_DISCONNECTED")]
+
+
+async def _record(
+    target: list[tuple[str, str | None]],
+    outcome: str,
+    error_code: str | None,
+) -> None:
+    target.append((outcome, error_code))

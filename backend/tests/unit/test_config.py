@@ -1,4 +1,5 @@
 import socket
+from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
@@ -93,6 +94,32 @@ def test_settings_reject_invalid_rrf_rank_constant(rank_constant: int) -> None:
 def test_settings_require_key_for_deepseek() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, chat_provider="deepseek", chat_api_key=None)
+
+
+def test_chat_pricing_and_reservation_budgets_are_decimal_configuration() -> None:
+    settings = Settings(
+        _env_file=None,
+        chat_cache_hit_input_price_per_million="0.125",
+        chat_cache_miss_input_price_per_million="1.25",
+        chat_output_price_per_million="2.50",
+        chat_rewrite_input_token_reserve=2048,
+        chat_rewrite_max_output_tokens=256,
+        chat_answer_input_token_reserve=32768,
+        chat_answer_max_output_tokens=4096,
+    )
+
+    assert settings.chat_cache_hit_input_price_per_million == Decimal("0.125")
+    assert settings.chat_cache_miss_input_price_per_million == Decimal("1.25")
+    assert settings.chat_output_price_per_million == Decimal("2.50")
+    assert settings.chat_rewrite_input_token_reserve == 2048
+    assert settings.chat_rewrite_max_output_tokens == 256
+    assert settings.chat_answer_input_token_reserve == 32768
+    assert settings.chat_answer_max_output_tokens == 4096
+
+
+def test_deepseek_requires_explicit_positive_pricing() -> None:
+    with pytest.raises(ValidationError, match="价格"):
+        Settings(_env_file=None, chat_provider="deepseek", chat_api_key="secret")
 
 
 def test_settings_reject_default_top_k_above_maximum() -> None:

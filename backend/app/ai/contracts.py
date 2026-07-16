@@ -104,11 +104,23 @@ class RerankerProvider(Protocol):
 
 
 class ChatProvider(Protocol):
-    async def generate(self, system_prompt: str, user_prompt: str) -> ChatCompletion: ...
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> ChatCompletion: ...
 
 
 class StreamingChatProvider(ChatProvider, Protocol):
-    def stream(self, system_prompt: str, user_prompt: str) -> AsyncIterator[ChatStreamChunk]: ...
+    def stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> AsyncIterator[ChatStreamChunk]: ...
 
 
 class QuestionRewriter(Protocol):

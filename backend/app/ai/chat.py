@@ -124,7 +124,13 @@ class FakeChatProvider:
         self._finish_reason = finish_reason
         self._provider_request_id = provider_request_id
 
-    async def generate(self, system_prompt: str, user_prompt: str) -> ChatCompletion:
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> ChatCompletion:
         return ChatCompletion(
             content=self._answer,
             usage=self._usage,
@@ -132,7 +138,13 @@ class FakeChatProvider:
             provider_request_id=self._provider_request_id,
         )
 
-    async def stream(self, system_prompt: str, user_prompt: str) -> AsyncIterator[ChatStreamChunk]:
+    async def stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> AsyncIterator[ChatStreamChunk]:
         for token in self._tokens:
             if token:
                 yield ChatStreamChunk(kind="token", delta=token)
@@ -159,7 +171,14 @@ class OpenAICompatibleChatProvider:
         self._api_key = api_key
         self._model = model
 
-    def _payload(self, system_prompt: str, user_prompt: str, *, stream: bool) -> dict[str, object]:
+    def _payload(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        stream: bool,
+        max_output_tokens: int | None,
+    ) -> dict[str, object]:
         payload: dict[str, object] = {
             "model": self._model,
             "messages": [
@@ -171,14 +190,33 @@ class OpenAICompatibleChatProvider:
         }
         if stream:
             payload["stream_options"] = {"include_usage": True}
+        if max_output_tokens is not None:
+            if (
+                isinstance(max_output_tokens, bool)
+                or not isinstance(max_output_tokens, int)
+                or max_output_tokens <= 0
+            ):
+                raise ValueError("max_output_tokens 必须是正整数")
+            payload["max_tokens"] = max_output_tokens
         return payload
 
-    async def generate(self, system_prompt: str, user_prompt: str) -> ChatCompletion:
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> ChatCompletion:
         try:
             response = await self._client.post(
                 self._url,
                 headers={"Authorization": f"Bearer {self._api_key}"},
-                json=self._payload(system_prompt, user_prompt, stream=False),
+                json=self._payload(
+                    system_prompt,
+                    user_prompt,
+                    stream=False,
+                    max_output_tokens=max_output_tokens,
+                ),
             )
             response.raise_for_status()
             payload = response.json()
@@ -205,7 +243,13 @@ class OpenAICompatibleChatProvider:
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
             raise _chat_provider_error() from error
 
-    async def stream(self, system_prompt: str, user_prompt: str) -> AsyncIterator[ChatStreamChunk]:
+    async def stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> AsyncIterator[ChatStreamChunk]:
         finish_reason: str | None = None
         provider_request_id: str | None = None
         final_usage: ChatUsage | None = None
@@ -214,7 +258,12 @@ class OpenAICompatibleChatProvider:
                 "POST",
                 self._url,
                 headers={"Authorization": f"Bearer {self._api_key}"},
-                json=self._payload(system_prompt, user_prompt, stream=True),
+                json=self._payload(
+                    system_prompt,
+                    user_prompt,
+                    stream=True,
+                    max_output_tokens=max_output_tokens,
+                ),
             ) as response:
                 response.raise_for_status()
                 async for data in _iter_sse_data(response.aiter_lines()):

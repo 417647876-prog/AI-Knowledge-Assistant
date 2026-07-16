@@ -147,7 +147,10 @@ async def get_question_rewriter(
 ) -> QuestionRewriter:
     if settings.chat_provider == "fake":
         return FakeQuestionRewriter()
-    return ChatQuestionRewriter(chat_provider)
+    return ChatQuestionRewriter(
+        chat_provider,
+        max_output_tokens=settings.chat_rewrite_max_output_tokens,
+    )
 
 
 def get_question_reranker(
@@ -196,10 +199,15 @@ async def get_rag_service(
         candidate_k=settings.rag_candidate_k,
         reranker_allow_fallback=settings.rag_reranker_allow_fallback,
         reranker_min_score=settings.rag_reranker_min_score,
+        answer_max_output_tokens=settings.chat_answer_max_output_tokens,
     )
 
 
-@router.post("/{knowledge_base_id}/questions", response_model=QuestionResponse)
+@router.post(
+    "/{knowledge_base_id}/questions",
+    response_model=QuestionResponse,
+    deprecated=True,
+)
 async def ask_question(
     knowledge_base_id: UUID,
     payload: QuestionRequest,
@@ -220,7 +228,7 @@ async def ask_question(
     )
 
 
-@router.post("/{knowledge_base_id}/questions/stream")
+@router.post("/{knowledge_base_id}/questions/stream", deprecated=True)
 async def stream_question(
     knowledge_base_id: UUID,
     payload: StreamQuestionRequest,

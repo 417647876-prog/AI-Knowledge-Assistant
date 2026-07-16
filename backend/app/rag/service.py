@@ -1,19 +1,21 @@
 import logging
 from collections.abc import AsyncIterator
 from time import perf_counter
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.contracts import (
+    ChatCompletion,
     ConversationMessage,
     EmbeddingProvider,
     QuestionRewriter,
     RerankerProvider,
     StreamingChatProvider,
 )
-from app.ai.rewrite import should_rewrite
+from app.ai.rewrite import ChatQuestionRewriter, should_rewrite
 from app.core.exceptions import AppError
 from app.core.request_context import get_request_id
 from app.db.models.knowledge_base import KnowledgeBase
@@ -26,6 +28,16 @@ from app.rag.streaming import CitationTracker, StreamEvent, citation_payload
 
 NO_EVIDENCE_ANSWER = "未找到足够依据，无法根据当前知识库回答该问题。"
 logger = logging.getLogger(__name__)
+
+
+class StreamUsageRecorder(Protocol):
+    rewrite_max_output_tokens: int
+
+    async def before_rewrite_request(self) -> None: ...
+
+    async def rewrite_completed(self, completion: ChatCompletion) -> None: ...
+
+    async def rewrite_failed(self, request_started: bool, error_code: str) -> None: ...
 
 
 def _elapsed_ms(started: float) -> int:
@@ -47,6 +59,7 @@ class RagService:
         candidate_k: int = 20,
         reranker_allow_fallback: bool = True,
         reranker_min_score: float | None = None,
+        answer_max_output_tokens: int | None = None,
     ) -> None:
         self._session = session
         self._owner_user_id = owner_user_id
@@ -59,6 +72,7 @@ class RagService:
         self._candidate_k = candidate_k
         self._reranker_allow_fallback = reranker_allow_fallback
         self._reranker_min_score = reranker_min_score
+        self._answer_max_output_tokens = answer_max_output_tokens
 
     async def _ensure_knowledge_base(self, knowledge_base_id: UUID) -> None:
         if self._owner_user_id is None:
@@ -195,6 +209,8 @@ class RagService:
         question: str,
         top_k: int,
         history: list[ConversationMessage],
+        *,
+        usage_recorder: StreamUsageRecorder | None = None,
     ) -> AsyncIterator[StreamEvent]:
         total_started = perf_counter()
         await self._ensure_knowledge_base(knowledge_base_id)
@@ -203,15 +219,29 @@ class RagService:
         standalone_question = original_question
         used_fallback = False
         rewrite_ms = 0
+        rewrite_attempted = False
 
         if should_rewrite(original_question, history):
+            rewrite_attempted = True
             yield StreamEvent("status", {"phase": "rewriting"})
             rewrite_started = perf_counter()
             try:
-                standalone_question = await self._question_rewriter.rewrite(
-                    history,
-                    original_question,
-                )
+                if usage_recorder is not None and isinstance(
+                    self._question_rewriter, ChatQuestionRewriter
+                ):
+                    standalone_question = await self._question_rewriter.rewrite_tracked(
+                        history,
+                        original_question,
+                        max_output_tokens=usage_recorder.rewrite_max_output_tokens,
+                        before_request=usage_recorder.before_rewrite_request,
+                        on_completion=usage_recorder.rewrite_completed,
+                        on_failure=usage_recorder.rewrite_failed,
+                    )
+                else:
+                    standalone_question = await self._question_rewriter.rewrite(
+                        history,
+                        original_question,
+                    )
             except AppError as error:
                 if error.code != "QUESTION_REWRITE_ERROR":
                     raise
@@ -223,6 +253,10 @@ class RagService:
                 "standalone_question": standalone_question,
                 "elapsed_ms": rewrite_ms,
                 "used_fallback": used_fallback,
+            },
+            persistence={
+                "was_rewritten": rewrite_attempted and not used_fallback,
+                "rewrite_fallback": used_fallback,
             },
         )
 
@@ -249,16 +283,43 @@ class RagService:
                         "total_ms": _elapsed_ms(total_started),
                     },
                 },
+                persistence={"refused": True},
             )
             return
 
-        yield StreamEvent("status", {"phase": "generating"})
         system_prompt, user_prompt = build_rag_prompt(original_question, chunks)
         tracker = CitationTracker(chunks)
         generation_started = perf_counter()
-        chat_stream = self._chat_provider.stream(system_prompt, user_prompt)
+        yield StreamEvent(
+            "status",
+            {"phase": "generating"},
+            persistence={"answer_request_started": True},
+        )
+        chat_stream = self._chat_provider.stream(
+            system_prompt,
+            user_prompt,
+            max_output_tokens=self._answer_max_output_tokens,
+        )
+        final_usage = None
+        finish_reason = None
+        provider_request_id = None
+        saw_provider_done = False
         try:
             async for chunk in chat_stream:
+                if chunk.kind == "usage":
+                    final_usage = chunk.usage
+                    yield StreamEvent(
+                        "usage",
+                        {},
+                        persistence={"usage": final_usage},
+                        emit=False,
+                    )
+                    continue
+                if chunk.kind == "done":
+                    finish_reason = chunk.finish_reason
+                    provider_request_id = chunk.provider_request_id
+                    saw_provider_done = True
+                    break
                 if chunk.kind != "token":
                     continue
                 delta = chunk.delta
@@ -271,6 +332,8 @@ class RagService:
             close = getattr(chat_stream, "aclose", None)
             if close is not None:
                 await close()
+        if not saw_provider_done:
+            return
         generation_ms = _elapsed_ms(generation_started)
         yield StreamEvent(
             "done",
@@ -283,5 +346,11 @@ class RagService:
                     "generation_ms": generation_ms,
                     "total_ms": _elapsed_ms(total_started),
                 },
+            },
+            persistence={
+                "usage": final_usage,
+                "finish_reason": finish_reason,
+                "provider_request_id": provider_request_id,
+                "refused": False,
             },
         )

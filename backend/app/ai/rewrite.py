@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 
@@ -50,9 +51,20 @@ class ChatQuestionRewriter:
         chat_provider: ChatProvider,
         *,
         on_completion: Callable[[ChatCompletion], Awaitable[None]] | None = None,
+        max_output_tokens: int | None = None,
     ) -> None:
         self._chat_provider = chat_provider
         self._on_completion = on_completion
+        self._max_output_tokens = max_output_tokens
+
+    async def _generate(self, system_prompt: str, user_prompt: str, max_output_tokens: int | None):
+        if max_output_tokens is None:
+            return await self._chat_provider.generate(system_prompt, user_prompt)
+        return await self._chat_provider.generate(
+            system_prompt,
+            user_prompt,
+            max_output_tokens=max_output_tokens,
+        )
 
     async def rewrite(self, history: list[ConversationMessage], question: str) -> str:
         payload = {
@@ -60,14 +72,51 @@ class ChatQuestionRewriter:
             "question": question,
         }
         try:
-            completion = await self._chat_provider.generate(
+            completion = await self._generate(
                 REWRITE_SYSTEM_PROMPT,
                 json.dumps(payload, ensure_ascii=False, indent=2),
+                self._max_output_tokens,
             )
             if self._on_completion is not None:
                 await self._on_completion(completion)
         except Exception as error:
             raise _rewrite_error() from error
+        return _validate_result(completion.content)
+
+    async def rewrite_tracked(
+        self,
+        history: list[ConversationMessage],
+        question: str,
+        *,
+        max_output_tokens: int,
+        before_request: Callable[[], Awaitable[None]],
+        on_completion: Callable[[ChatCompletion], Awaitable[None]],
+        on_failure: Callable[[bool, str, ChatCompletion | None], Awaitable[None]],
+    ) -> str:
+        payload = {
+            "history": [{"role": item.role, "content": item.content} for item in history],
+            "question": question,
+        }
+        request_started = False
+        completion: ChatCompletion | None = None
+        try:
+            await before_request()
+            request_started = True
+            completion = await self._generate(
+                REWRITE_SYSTEM_PROMPT,
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                max_output_tokens,
+            )
+            if self._on_completion is not None:
+                await self._on_completion(completion)
+            await on_completion(completion)
+        except asyncio.CancelledError:
+            await on_failure(request_started, "STREAM_CANCELED", completion)
+            raise
+        except Exception as error:
+            await on_failure(request_started, "QUESTION_REWRITE_ERROR", completion)
+            raise _rewrite_error() from error
+        assert completion is not None
         return _validate_result(completion.content)
 
 

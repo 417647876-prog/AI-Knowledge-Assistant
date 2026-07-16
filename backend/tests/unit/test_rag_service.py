@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.ai.contracts import ChatCompletion, ChatStreamChunk, ConversationMessage
+from app.ai.contracts import ChatCompletion, ChatStreamChunk, ChatUsage, ConversationMessage
 from app.ai.embeddings import FakeEmbeddingProvider
 from app.core.exceptions import AppError
 from app.core.request_context import reset_request_id, set_request_id
@@ -93,20 +93,40 @@ class FailingRewriter:
 
 
 class StreamingCountingChatProvider(CountingChatProvider):
-    def __init__(self, answer: str, tokens: list[str]) -> None:
+    def __init__(
+        self,
+        answer: str,
+        tokens: list[str],
+        usage: ChatUsage | None = None,
+        *,
+        emit_done: bool = True,
+    ) -> None:
         super().__init__(answer)
         self.tokens = tokens
+        self.usage = usage
+        self.emit_done = emit_done
         self.stream_closed = False
+        self.max_output_tokens: int | None = None
 
-    async def stream(self, system_prompt: str, user_prompt: str):
+    async def stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+    ):
+        self.max_output_tokens = max_output_tokens
         try:
             for token in self.tokens:
                 yield ChatStreamChunk(kind="token", delta=token)
-            yield ChatStreamChunk(
-                kind="done",
-                finish_reason="stop",
-                provider_request_id="test-request",
-            )
+            if self.usage is not None:
+                yield ChatStreamChunk(kind="usage", usage=self.usage)
+            if self.emit_done:
+                yield ChatStreamChunk(
+                    kind="done",
+                    finish_reason="stop",
+                    provider_request_id="test-request",
+                )
         finally:
             self.stream_closed = True
 
@@ -284,6 +304,59 @@ async def test_stream_rewrites_retrieves_generates_citations_and_timings(
     assert rewriter.calls == [(history, "它的缺点？")]
     assert retriever.calls[0]["query"] == "向量检索有什么缺点？"
     assert prompt_questions == ["它的缺点？"]
+
+
+@pytest.mark.asyncio
+async def test_stream_carries_usage_and_provider_done_as_private_persistence_metadata() -> None:
+    usage = ChatUsage(10, 20, 30, 5, 60, True)
+    chat = StreamingCountingChatProvider("unused", ["回答"], usage)
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever([_chunk()]),
+        chat_provider=chat,
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        answer_max_output_tokens=777,
+    )
+
+    events = [item async for item in service.stream_answer(uuid4(), "完整问题是什么？", 5, [])]
+
+    generating = next(item for item in events if item.data.get("phase") == "generating")
+    assert generating.persistence == {"answer_request_started": True}
+    assert events[-1].event == "done"
+    assert events[-1].persistence == {
+        "usage": usage,
+        "finish_reason": "stop",
+        "provider_request_id": "test-request",
+        "refused": False,
+    }
+    assert "usage" not in events[-1].data
+    assert chat.max_output_tokens == 777
+
+
+@pytest.mark.asyncio
+async def test_stream_eof_without_provider_done_never_emits_application_done() -> None:
+    usage = ChatUsage(1, 2, 3, 0, 6, True)
+    chat = StreamingCountingChatProvider("unused", ["部分"], usage, emit_done=False)
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever([_chunk()]),
+        chat_provider=chat,
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+    )
+
+    events = [item async for item in service.stream_answer(uuid4(), "完整问题是什么？", 5, [])]
+
+    assert [item.event for item in events if item.event == "done"] == []
+    assert [item.data.get("delta") for item in events if item.event == "token"] == ["部分"]
+    hidden_usage = [item for item in events if item.event == "usage"]
+    assert len(hidden_usage) == 1
+    assert hidden_usage[0].data == {}
+    assert hidden_usage[0].persistence == {"usage": usage}
+    assert hidden_usage[0].emit is False
 
 
 @pytest.mark.asyncio

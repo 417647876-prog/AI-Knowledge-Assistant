@@ -1,4 +1,5 @@
 import socket
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -34,6 +35,13 @@ class Settings(BaseSettings):
     chat_api_key: str | None = None
     chat_model: str = "deepseek-v4-flash"
     chat_timeout_seconds: float = Field(default=30.0, gt=0)
+    chat_cache_hit_input_price_per_million: Decimal = Field(default=Decimal("0"), ge=0)
+    chat_cache_miss_input_price_per_million: Decimal = Field(default=Decimal("0"), ge=0)
+    chat_output_price_per_million: Decimal = Field(default=Decimal("0"), ge=0)
+    chat_rewrite_input_token_reserve: int = Field(default=4096, gt=0)
+    chat_rewrite_max_output_tokens: int = Field(default=512, gt=0)
+    chat_answer_input_token_reserve: int = Field(default=32768, gt=0)
+    chat_answer_max_output_tokens: int = Field(default=4096, gt=0)
     rag_top_k_default: int = Field(default=5, ge=1, le=20)
     rag_top_k_max: int = Field(default=20, ge=1, le=100)
     rag_score_threshold: float = Field(default=0.55, ge=-1.0, le=1.0)
@@ -76,6 +84,15 @@ class Settings(BaseSettings):
             raise ValueError("使用 OpenAI Embedding 时必须配置 API Key")
         if self.chat_provider == "deepseek" and not self.chat_api_key:
             raise ValueError("使用 DeepSeek Chat 时必须配置 API Key")
+        if self.chat_provider == "deepseek" and any(
+            price <= 0
+            for price in (
+                self.chat_cache_hit_input_price_per_million,
+                self.chat_cache_miss_input_price_per_million,
+                self.chat_output_price_per_million,
+            )
+        ):
+            raise ValueError("使用 DeepSeek Chat 时必须显式配置正数 Token 价格")
         if self.rag_top_k_default > self.rag_top_k_max:
             raise ValueError("rag_top_k_default 不能大于 rag_top_k_max")
         if self.rag_candidate_k < self.rag_top_k_default:

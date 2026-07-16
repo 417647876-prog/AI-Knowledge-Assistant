@@ -4,6 +4,7 @@ from app.api.error_handlers import app_error_handler
 from app.api.middleware import RequestIdMiddleware, UploadGuardMiddleware
 from app.api.v1.admin_users import router as admin_users_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.conversations import router as conversation_router
 from app.api.v1.documents import router as document_router
 from app.api.v1.health import router as health_router
 from app.api.v1.knowledge_bases import router as knowledge_base_router
@@ -27,6 +28,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_base_router)
     app.include_router(document_router)
     app.include_router(question_router)
+    app.include_router(conversation_router)
     app.include_router(support_grants_router)
     app.include_router(support_content_router)
     app.include_router(trash_router)
