@@ -191,6 +191,7 @@ async def stream_conversation_message(
                     outcome=recovery_outcome,
                     pricing=pricing,
                     error_code="PERSISTENCE_ERROR",
+                    record_observation=False,
                 )
             raise
 

@@ -6,8 +6,10 @@ from app.api.v1.admin_users import router as admin_users_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.conversations import router as conversation_router
 from app.api.v1.documents import router as document_router
+from app.api.v1.feedback import router as feedback_router
 from app.api.v1.health import router as health_router
 from app.api.v1.knowledge_bases import router as knowledge_base_router
+from app.api.v1.me import router as me_router
 from app.api.v1.questions import router as question_router
 from app.api.v1.support_content import router as support_content_router
 from app.api.v1.support_grants import router as support_grants_router
@@ -26,7 +28,9 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(admin_users_router)
     app.include_router(knowledge_base_router)
+    app.include_router(me_router)
     app.include_router(document_router)
+    app.include_router(feedback_router)
     app.include_router(question_router)
     app.include_router(conversation_router)
     app.include_router(support_grants_router)

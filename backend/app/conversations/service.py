@@ -18,6 +18,10 @@ from app.db.models import (
     KnowledgeBase,
     LlmUsageEvent,
 )
+from app.observations.service import (
+    ObservationMetrics,
+    build_answer_observation,
+)
 from app.rag.prompt import estimate_rag_input_token_upper_bound
 from app.usage.pricing import ModelPricing, calculate_reservation
 from app.usage.service import (
@@ -308,6 +312,12 @@ class StreamPersistenceState:
     was_rewritten: bool = False
     rewrite_fallback: bool = False
     refused: bool = False
+    candidate_count: int = 0
+    accepted_scores: tuple[float | None, ...] = ()
+    rewrite_ms: int = 0
+    retrieval_ms: int = 0
+    generation_ms: int = 0
+    total_ms: int = 0
 
     def observe(self, event) -> None:
         if event.event == "token":
@@ -332,6 +342,20 @@ class StreamPersistenceState:
         refused = persistence.get("refused")
         if isinstance(refused, bool):
             self.refused = refused
+        if event.event == "rewrite":
+            self.rewrite_ms = _non_negative_int(event.data.get("elapsed_ms"))
+        if event.event == "retrieval":
+            self.retrieval_ms = _non_negative_int(event.data.get("elapsed_ms"))
+            candidate_count = persistence.get("candidate_count")
+            if isinstance(candidate_count, int) and candidate_count >= 0:
+                self.candidate_count = candidate_count
+            accepted_scores = persistence.get("accepted_scores")
+            if isinstance(accepted_scores, (list, tuple)) and all(
+                score is None or isinstance(score, (int, float)) for score in accepted_scores
+            ):
+                self.accepted_scores = tuple(
+                    None if score is None else float(score) for score in accepted_scores
+                )
         self.answer_request_started = self.answer_request_started or bool(
             persistence.get("answer_request_started", False)
         )
@@ -352,8 +376,42 @@ class StreamPersistenceState:
             self.retrieval_stats = {
                 "retrieved_chunk_count": retrieved if isinstance(retrieved, int) else 0
             }
+            retrieved_count = self.retrieval_stats["retrieved_chunk_count"]
+            if not self.accepted_scores and retrieved_count > 0:
+                self.accepted_scores = (None,) * retrieved_count
+            if self.candidate_count == 0:
+                self.candidate_count = retrieved_count
             raw_timings = event.data.get("timings", {})
             self.timings = dict(raw_timings) if isinstance(raw_timings, dict) else {}
+            self.rewrite_ms = _non_negative_int(self.timings.get("rewrite_ms"))
+            self.retrieval_ms = _non_negative_int(self.timings.get("retrieval_ms"))
+            self.generation_ms = _non_negative_int(self.timings.get("generation_ms"))
+            self.total_ms = _non_negative_int(self.timings.get("total_ms"))
+
+    def observation_metrics(self, *, error_code: str | None) -> ObservationMetrics:
+        citation_ids = tuple(
+            citation_id
+            for item in self.citations or []
+            if isinstance(item, dict) and isinstance((citation_id := item.get("citation_id")), int)
+        )
+        return ObservationMetrics(
+            was_rewritten=self.was_rewritten,
+            rewrite_fallback=self.rewrite_fallback,
+            candidate_count=self.candidate_count,
+            accepted_scores=self.accepted_scores,
+            refused=self.refused,
+            citation_ids=citation_ids,
+            rewrite_ms=self.rewrite_ms,
+            retrieval_ms=self.retrieval_ms,
+            generation_ms=self.generation_ms,
+            total_ms=self.total_ms,
+            finish_reason=self.finish_reason,
+            error_code=error_code,
+        )
+
+
+def _non_negative_int(value: object) -> int:
+    return value if isinstance(value, int) and value >= 0 else 0
 
 
 async def finalize_conversation_stream(
@@ -364,6 +422,7 @@ async def finalize_conversation_stream(
     outcome: Literal["completed", "client_disconnected", "canceled", "provider_failed"],
     pricing: ModelPricing,
     error_code: str | None,
+    record_observation: bool = True,
 ) -> None:
     conversation = await session.scalar(
         select(Conversation).where(Conversation.id == prepared.conversation_id).with_for_update()
@@ -428,31 +487,19 @@ async def finalize_conversation_stream(
             assistant.retrieval_stats = state.retrieval_stats or {}
             assistant.timings = state.timings or {}
             assistant.finish_reason = state.finish_reason
-            retrieved_count = int((state.retrieval_stats or {}).get("retrieved_chunk_count", 0))
-            timings = state.timings or {}
+        else:
+            assistant.status = "failed" if outcome == "provider_failed" else "interrupted"
+            assistant.error_code = error_code
+        if record_observation:
             session.add(
-                AnswerObservation(
+                build_answer_observation(
                     user_id=usage_event.user_id,
                     knowledge_base_id=usage_event.knowledge_base_id,
                     conversation_id=prepared.conversation_id,
                     message_id=assistant.id,
-                    was_rewritten=state.was_rewritten,
-                    rewrite_fallback=state.rewrite_fallback,
-                    candidate_count=retrieved_count,
-                    accepted_count=retrieved_count,
-                    refused=state.refused,
-                    citation_count=len(state.citations or []),
-                    citations_valid=True,
-                    rewrite_ms=int(timings.get("rewrite_ms", 0)),
-                    retrieval_ms=int(timings.get("retrieval_ms", 0)),
-                    generation_ms=int(timings.get("generation_ms", 0)),
-                    total_ms=int(timings.get("total_ms", 0)),
-                    finish_reason=state.finish_reason,
+                    metrics=state.observation_metrics(error_code=None if completed else error_code),
                 )
             )
-        else:
-            assistant.status = "failed" if outcome == "provider_failed" else "interrupted"
-            assistant.error_code = error_code
 
     apply_settlement(
         usage_event,

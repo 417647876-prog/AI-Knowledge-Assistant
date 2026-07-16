@@ -296,10 +296,16 @@ async def test_provider_failure_marks_failed_without_automatic_retry(
         usage = await session.scalar(
             select(LlmUsageEvent).where(LlmUsageEvent.conversation_id == UUID(conversation_id))
         )
+        observation = await session.scalar(
+            select(AnswerObservation).where(
+                AnswerObservation.conversation_id == UUID(conversation_id)
+            )
+        )
     assert assistant is not None and assistant.status == "failed"
     assert assistant.content == "部分"
     assert assistant.error_code == "CHAT_PROVIDER_ERROR"
     assert usage is not None and usage.status == "failed_after_request"
+    assert observation is not None and observation.error_code == "CHAT_PROVIDER_ERROR"
     assert service.calls == 1
 
 
@@ -552,11 +558,15 @@ async def test_real_database_disconnect_marks_interrupted_and_keeps_partial_body
                 LlmUsageEvent.purpose == "answer",
             )
         )
+        observation = await session.scalar(
+            select(AnswerObservation).where(AnswerObservation.conversation_id == conversation.id)
+        )
     assert assistant is not None and assistant.status == "interrupted"
     assert assistant.content == "服务端已收到的部分"
     assert assistant.error_code == "CLIENT_DISCONNECTED"
     assert usage is not None and usage.status == "usage_unknown"
     assert usage.settled_cost == usage.reserved_cost
+    assert observation is not None and observation.error_code == "CLIENT_DISCONNECTED"
 
 
 @pytest.mark.asyncio
@@ -941,6 +951,9 @@ async def test_first_finalization_transaction_failure_recovers_every_outcome(
                 LlmUsageEvent.purpose == "answer",
             )
         )
+        observation = await session.scalar(
+            select(AnswerObservation).where(AnswerObservation.conversation_id == conversation.id)
+        )
     recovery_outcome = "provider_failed" if outcome == "provider_failed" else outcome
     assert (recovery_outcome, "PERSISTENCE_ERROR") in calls
     expected_message_status = "failed" if outcome == "provider_failed" else "interrupted"
@@ -950,6 +963,7 @@ async def test_first_finalization_transaction_failure_recovers_every_outcome(
         "failed_after_request" if outcome == "provider_failed" else "usage_unknown"
     )
     assert usage is not None and usage.status == expected_usage_status
+    assert observation is None
 
 
 @pytest.mark.asyncio

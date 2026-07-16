@@ -1,5 +1,6 @@
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from time import perf_counter
 from typing import Protocol
 from uuid import UUID
@@ -28,6 +29,16 @@ from app.rag.streaming import CitationTracker, StreamEvent, citation_payload
 
 NO_EVIDENCE_ANSWER = "未找到足够依据，无法根据当前知识库回答该问题。"
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RetrievalMetrics:
+    chunks: list[RetrievedChunk]
+    candidate_count: int
+
+    @property
+    def accepted_scores(self) -> tuple[float, ...]:
+        return tuple(chunk.relevance_score for chunk in self.chunks)
 
 
 class StreamUsageRecorder(Protocol):
@@ -98,7 +109,9 @@ class RagService:
                 status_code=404,
             )
 
-    async def _retrieve(self, knowledge_base_id: UUID, question: str, top_k: int):
+    async def _retrieve_with_metrics(
+        self, knowledge_base_id: UUID, question: str, top_k: int
+    ) -> RetrievalMetrics:
         query_embedding = await self._embedding_provider.embed_query(question)
         retrieval_top_k = max(top_k, self._candidate_k) if self._reranker is not None else top_k
         chunks = await self._retriever.search(
@@ -108,8 +121,9 @@ class RagService:
             top_k=retrieval_top_k,
             score_threshold=self._score_threshold,
         )
+        candidate_count = len(chunks)
         if self._reranker is None or not chunks:
-            return chunks
+            return RetrievalMetrics(chunks=chunks, candidate_count=candidate_count)
 
         try:
             reranked_chunks = await rerank_chunks(
@@ -129,7 +143,10 @@ class RagService:
                     "request_id": get_request_id(),
                 },
             )
-            return chunks[:top_k]
+            return RetrievalMetrics(
+                chunks=chunks[:top_k],
+                candidate_count=candidate_count,
+            )
 
         accepted_chunks = accept_reranked_chunks(
             reranked_chunks,
@@ -147,7 +164,16 @@ class RagService:
                     "request_id": get_request_id(),
                 },
             )
-        return accepted_chunks
+        return RetrievalMetrics(
+            chunks=accepted_chunks,
+            candidate_count=candidate_count,
+        )
+
+    async def _retrieve(
+        self, knowledge_base_id: UUID, question: str, top_k: int
+    ) -> list[RetrievedChunk]:
+        result = await self._retrieve_with_metrics(knowledge_base_id, question, top_k)
+        return result.chunks
 
     async def _answer_from_chunks(
         self, question: str, chunks: list[RetrievedChunk]
@@ -264,11 +290,16 @@ class RagService:
 
         yield StreamEvent("status", {"phase": "retrieving"})
         retrieval_started = perf_counter()
-        chunks = await self._retrieve(knowledge_base_id, standalone_question, top_k)
+        retrieval = await self._retrieve_with_metrics(knowledge_base_id, standalone_question, top_k)
+        chunks = retrieval.chunks
         retrieval_ms = _elapsed_ms(retrieval_started)
         yield StreamEvent(
             "retrieval",
             {"retrieved_chunk_count": len(chunks), "elapsed_ms": retrieval_ms},
+            persistence={
+                "candidate_count": retrieval.candidate_count,
+                "accepted_scores": retrieval.accepted_scores,
+            },
         )
 
         if not chunks:

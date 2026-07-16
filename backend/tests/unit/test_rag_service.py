@@ -796,6 +796,33 @@ async def test_stream_uses_enabled_reranker_order_and_top_k() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_exposes_sanitized_candidate_and_relevance_metrics_for_persistence() -> None:
+    chunks = [_chunk(), _chunk(), _chunk()]
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever(chunks),
+        chat_provider=StreamingCountingChatProvider("unused", ["回答 [1]"]),
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=StubReranker(scores=[0.1, 0.9, 0.3]),
+        candidate_k=3,
+        reranker_allow_fallback=False,
+    )
+
+    events = [item async for item in service.stream_answer(uuid4(), "年假有几天？", 2, [])]
+    retrieval = next(item for item in events if item.event == "retrieval")
+
+    assert retrieval.persistence == {
+        "candidate_count": 3,
+        "accepted_scores": (0.9, 0.3),
+    }
+    serialized = repr(retrieval.persistence)
+    assert all(chunk.content not in serialized for chunk in chunks)
+    assert all(chunk.file_name not in serialized for chunk in chunks)
+
+
+@pytest.mark.asyncio
 async def test_stream_successful_low_score_rerank_refuses_without_chat() -> None:
     chunks = [_chunk(), _chunk()]
     chat = StreamingCountingChatProvider("不应该被调用", ["不应该生成"])
