@@ -146,7 +146,8 @@ async def test_tracked_rewrite_reserves_immediately_before_provider_and_settles_
     order: list[str] = []
     provider = TrackedCompletionProvider(completion, order)
 
-    async def before_request() -> None:
+    async def before_request(input_token_upper_bound: int) -> None:
+        assert input_token_upper_bound > 0
         order.append("reserved")
 
     async def completed(result: ChatCompletion) -> None:
@@ -173,6 +174,45 @@ async def test_tracked_rewrite_reserves_immediately_before_provider_and_settles_
     assert result == "独立问题"
     assert order == ["reserved", "provider", "settled"]
     assert provider.max_output_tokens == 321
+
+
+@pytest.mark.asyncio
+async def test_tracked_rewrite_reserves_full_serialized_prompt_upper_bound() -> None:
+    completion = ChatCompletion("独立问题", ChatUsage(1, 2, 3, 0, 6, True), "stop", "rewrite")
+    bounds: list[int] = []
+
+    async def before_request(input_token_upper_bound: int) -> None:
+        bounds.append(input_token_upper_bound)
+
+    async def completed(result: ChatCompletion) -> None:
+        assert result is completion
+
+    async def failed(
+        request_started: bool,
+        error_code: str,
+        result: ChatCompletion | None,
+    ) -> None:
+        pytest.fail(f"不应失败: {request_started=} {error_code=}")
+
+    history = [
+        ConversationMessage(role="user", content="问" * 2000),
+        ConversationMessage(role="assistant", content="答" * 8000),
+    ] * 6
+    rewriter = ChatQuestionRewriter(TrackedCompletionProvider(completion, []))
+
+    await rewriter.rewrite_tracked(
+        history,
+        "追" * 2000,
+        max_output_tokens=512,
+        before_request=before_request,
+        on_completion=completed,
+        on_failure=failed,
+    )
+
+    content_bytes = sum(len(item.content.encode("utf-8")) for item in history) + len(
+        ("追" * 2000).encode("utf-8")
+    )
+    assert bounds and bounds[0] >= content_bytes
 
 
 @pytest.mark.asyncio

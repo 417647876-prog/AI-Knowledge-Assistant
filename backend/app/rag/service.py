@@ -21,7 +21,7 @@ from app.core.request_context import get_request_id
 from app.db.models.knowledge_base import KnowledgeBase
 from app.rag.citations import map_citations
 from app.rag.contracts import Retriever
-from app.rag.prompt import build_rag_prompt
+from app.rag.prompt import build_rag_prompt, serialized_chat_input_token_upper_bound
 from app.rag.reranking import accept_reranked_chunks, rerank_chunks
 from app.rag.schemas import QuestionAnswer, RetrievedChunk
 from app.rag.streaming import CitationTracker, StreamEvent, citation_payload
@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 class StreamUsageRecorder(Protocol):
     rewrite_max_output_tokens: int
 
-    async def before_rewrite_request(self) -> None: ...
+    async def before_rewrite_request(self, input_token_upper_bound: int) -> None: ...
+
+    async def before_answer_request(self, input_token_upper_bound: int) -> None: ...
 
     async def rewrite_completed(self, completion: ChatCompletion) -> None: ...
 
@@ -290,6 +292,10 @@ class RagService:
         system_prompt, user_prompt = build_rag_prompt(original_question, chunks)
         tracker = CitationTracker(chunks)
         generation_started = perf_counter()
+        if usage_recorder is not None:
+            await usage_recorder.before_answer_request(
+                serialized_chat_input_token_upper_bound(system_prompt, user_prompt)
+            )
         yield StreamEvent(
             "status",
             {"phase": "generating"},

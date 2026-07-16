@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from sqlalchemy import delete, select
+from starlette.requests import ClientDisconnect
 
 from app.ai.contracts import ChatCompletion, ChatUsage
 from app.ai.rewrite import ChatQuestionRewriter
@@ -16,7 +17,7 @@ from app.api.v1.conversations import (
     stream_conversation_message,
 )
 from app.conversations.schemas import StreamConversationMessageRequest
-from app.conversations.service import finalize_conversation_stream
+from app.conversations.service import delete_conversation_body, finalize_conversation_stream
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError
 from app.core.security import create_access_token, hash_password
@@ -395,8 +396,8 @@ async def test_rewrite_callback_failures_never_leave_reserved_usage(
     pricing = ModelPricing(Decimal("0.25"), Decimal("1"), Decimal("2"))
 
     class FailsAfterCommittedReservation(ConversationUsageRecorder):
-        async def before_rewrite_request(self) -> None:
-            await super().before_rewrite_request()
+        async def before_rewrite_request(self, input_token_upper_bound: int) -> None:
+            await super().before_rewrite_request(input_token_upper_bound)
             raise RuntimeError("reserve observer failed")
 
     class FailsInsideSettlementTransaction(ConversationUsageRecorder):
@@ -756,3 +757,385 @@ async def test_real_database_cancellation_marks_interrupted_and_closes_source(
     assert assistant.content == "取消前部分"
     assert assistant.error_code == "STREAM_CANCELED"
     assert usage is not None and usage.status == "usage_unknown"
+
+
+@pytest.mark.asyncio
+async def test_asgi_send_oserror_waits_for_interrupted_persistence_and_source_close(
+    stream_resources: tuple[User, KnowledgeBase],
+) -> None:
+    user, knowledge_base = stream_resources
+    async with session_factory.begin() as session:
+        conversation = Conversation(
+            user_id=user.id,
+            knowledge_base_id=knowledge_base.id,
+            title="ASGI 断线",
+        )
+        session.add(conversation)
+        await session.flush()
+
+    class ConnectedRequest:
+        state = SimpleNamespace(request_id="asgi-send-oserror")
+
+        async def is_disconnected(self) -> bool:
+            return False
+
+    class SendFailureService:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def stream_answer(self, *args, **kwargs):
+            try:
+                yield StreamEvent(
+                    "status",
+                    {"phase": "generating"},
+                    persistence={"answer_request_started": True},
+                )
+                yield StreamEvent("token", {"delta": "断线前部分"})
+                await asyncio.Event().wait()
+            finally:
+                self.closed = True
+
+    service = SendFailureService()
+    settings = Settings(_env_file=None)
+    async with session_factory() as endpoint_session:
+        response = await stream_conversation_message(
+            conversation_id=conversation.id,
+            payload=StreamConversationMessageRequest(question="问题"),
+            request=ConnectedRequest(),  # type: ignore[arg-type]
+            session=endpoint_session,
+            current_user=user,
+            service=service,  # type: ignore[arg-type]
+            settings=settings,
+        )
+
+    async def receive():
+        await asyncio.Event().wait()
+
+    async def send(message) -> None:
+        if message["type"] == "http.response.body" and "断线前部分".encode() in message["body"]:
+            raise OSError("ASGI 2.4 disconnected")
+
+    with pytest.raises(ClientDisconnect):
+        await response(
+            {"type": "http", "asgi": {"spec_version": "2.4"}},
+            receive,
+            send,
+        )
+
+    async with session_factory() as session:
+        assistant = await session.scalar(
+            select(ConversationMessage).where(
+                ConversationMessage.conversation_id == conversation.id,
+                ConversationMessage.role == "assistant",
+            )
+        )
+        usage = await session.scalar(
+            select(LlmUsageEvent).where(
+                LlmUsageEvent.conversation_id == conversation.id,
+                LlmUsageEvent.purpose == "answer",
+            )
+        )
+    assert assistant is not None and assistant.status == "interrupted"
+    assert assistant.content == "断线前部分"
+    assert usage is not None and usage.status != "reserved"
+    assert service.closed is True
+    assert not [
+        task
+        for task in asyncio.all_tasks()
+        if not task.done() and "iter_sse.<locals>.produce" in repr(task.get_coro())
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["provider_failed", "client_disconnected", "canceled"])
+async def test_first_finalization_transaction_failure_recovers_every_outcome(
+    stream_resources: tuple[User, KnowledgeBase],
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    user, knowledge_base = stream_resources
+    async with session_factory.begin() as session:
+        conversation = Conversation(
+            user_id=user.id,
+            knowledge_base_id=knowledge_base.id,
+            title=f"恢复-{outcome}",
+        )
+        session.add(conversation)
+        await session.flush()
+
+    original_finalize = finalize_conversation_stream
+    calls: list[tuple[str, str | None]] = []
+
+    async def fail_original_outcome(session, **kwargs):
+        calls.append((kwargs["outcome"], kwargs["error_code"]))
+        if kwargs["error_code"] != "PERSISTENCE_ERROR":
+            raise RuntimeError("first finalization transaction failed")
+        return await original_finalize(session, **kwargs)
+
+    monkeypatch.setattr(
+        "app.api.v1.conversations.finalize_conversation_stream",
+        fail_original_outcome,
+    )
+
+    class ConnectedRequest:
+        state = SimpleNamespace(request_id=f"recover-{outcome}")
+
+        async def is_disconnected(self) -> bool:
+            return False
+
+    class OutcomeService:
+        async def stream_answer(self, *args, **kwargs):
+            yield StreamEvent(
+                "status",
+                {"phase": "generating"},
+                persistence={"answer_request_started": True},
+            )
+            yield StreamEvent("token", {"delta": "部分"})
+            if outcome == "provider_failed":
+                raise AppError(code="CHAT_PROVIDER_ERROR", message="失败", status_code=502)
+            await asyncio.Event().wait()
+
+    settings = Settings(_env_file=None)
+    async with session_factory() as endpoint_session:
+        response = await stream_conversation_message(
+            conversation_id=conversation.id,
+            payload=StreamConversationMessageRequest(question="问题"),
+            request=ConnectedRequest(),  # type: ignore[arg-type]
+            session=endpoint_session,
+            current_user=user,
+            service=OutcomeService(),  # type: ignore[arg-type]
+            settings=settings,
+        )
+        iterator = response.body_iterator
+        if outcome == "provider_failed":
+            with pytest.raises(RuntimeError):
+                _ = [part async for part in iterator]
+        else:
+            assert b"event: status" in await anext(iterator)
+            assert "部分".encode() in await anext(iterator)
+            if outcome == "client_disconnected":
+                with pytest.raises(RuntimeError):
+                    await iterator.aclose()
+            else:
+                pending = asyncio.create_task(anext(iterator))
+                await asyncio.sleep(0)
+                pending.cancel()
+                with pytest.raises((asyncio.CancelledError, RuntimeError)):
+                    await pending
+
+    async with session_factory() as session:
+        assistant = await session.scalar(
+            select(ConversationMessage).where(
+                ConversationMessage.conversation_id == conversation.id,
+                ConversationMessage.role == "assistant",
+            )
+        )
+        usage = await session.scalar(
+            select(LlmUsageEvent).where(
+                LlmUsageEvent.conversation_id == conversation.id,
+                LlmUsageEvent.purpose == "answer",
+            )
+        )
+    recovery_outcome = "provider_failed" if outcome == "provider_failed" else outcome
+    assert (recovery_outcome, "PERSISTENCE_ERROR") in calls
+    expected_message_status = "failed" if outcome == "provider_failed" else "interrupted"
+    assert assistant is not None and assistant.status == expected_message_status
+    assert assistant.error_code == "PERSISTENCE_ERROR"
+    expected_usage_status = (
+        "failed_after_request" if outcome == "provider_failed" else "usage_unknown"
+    )
+    assert usage is not None and usage.status == expected_usage_status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_fails", [False, True], ids=["completed", "failed"])
+async def test_stream_finalization_settles_usage_after_conversation_is_deleted(
+    stream_resources: tuple[User, KnowledgeBase],
+    provider_fails: bool,
+) -> None:
+    user, knowledge_base = stream_resources
+    async with session_factory.begin() as session:
+        conversation = Conversation(
+            user_id=user.id,
+            knowledge_base_id=knowledge_base.id,
+            title="流中删除",
+        )
+        session.add(conversation)
+        await session.flush()
+
+    class ConnectedRequest:
+        state = SimpleNamespace(request_id="delete-during-stream")
+
+        async def is_disconnected(self) -> bool:
+            return False
+
+    class DeleteRaceService:
+        async def stream_answer(self, *args, **kwargs):
+            yield StreamEvent(
+                "status",
+                {"phase": "generating"},
+                persistence={"answer_request_started": True},
+            )
+            yield StreamEvent("token", {"delta": "将被删除"})
+            if provider_fails:
+                raise AppError(code="CHAT_PROVIDER_ERROR", message="失败", status_code=502)
+            for event in normal_events()[2:]:
+                yield event
+
+    settings = Settings(_env_file=None)
+    async with session_factory() as endpoint_session:
+        response = await stream_conversation_message(
+            conversation_id=conversation.id,
+            payload=StreamConversationMessageRequest(question="问题"),
+            request=ConnectedRequest(),  # type: ignore[arg-type]
+            session=endpoint_session,
+            current_user=user,
+            service=DeleteRaceService(),  # type: ignore[arg-type]
+            settings=settings,
+        )
+
+    async with session_factory.begin() as delete_session:
+        await delete_conversation_body(
+            delete_session,
+            user_id=user.id,
+            conversation_id=conversation.id,
+        )
+
+    _ = [part async for part in response.body_iterator]
+
+    async with session_factory() as session:
+        conversation_row = await session.get(Conversation, conversation.id)
+        message_row = await session.scalar(
+            select(ConversationMessage).where(
+                ConversationMessage.conversation_id == conversation.id
+            )
+        )
+        usage = await session.scalar(
+            select(LlmUsageEvent).where(
+                LlmUsageEvent.conversation_id == conversation.id,
+                LlmUsageEvent.purpose == "answer",
+            )
+        )
+    assert conversation_row is None
+    assert message_row is None
+    assert usage is not None and usage.status != "reserved"
+
+
+@pytest.mark.asyncio
+async def test_answer_usage_above_old_fixed_input_is_covered_by_reservation(
+    stream_resources: tuple[User, KnowledgeBase],
+) -> None:
+    user, knowledge_base = stream_resources
+    usage = ChatUsage(0, 40_000, 0, 0, 40_000, True)
+    events = normal_events()
+    events[-1] = StreamEvent(
+        "done",
+        events[-1].data,
+        persistence={"usage": usage, "finish_reason": "stop", "provider_request_id": str(uuid4())},
+    )
+
+    class HighUsageService(ControlledRagService):
+        async def stream_answer(self, *args, usage_recorder, **kwargs):
+            await usage_recorder.before_answer_request(40_000)
+            async for event in super().stream_answer(
+                *args,
+                usage_recorder=usage_recorder,
+                **kwargs,
+            ):
+                yield event
+
+    service = HighUsageService(events)
+    settings = Settings(
+        _env_file=None,
+        chat_cache_hit_input_price_per_million=Decimal("1"),
+        chat_cache_miss_input_price_per_million=Decimal("1"),
+        chat_output_price_per_million=Decimal("1"),
+        chat_answer_input_token_reserve=1,
+        chunk_size=1,
+        chunk_overlap=0,
+    )
+    app = create_app()
+    app.dependency_overrides[get_conversation_rag_service] = lambda: service
+    app.dependency_overrides[get_settings] = lambda: settings
+    token = create_access_token(user_id=user.id, role=user.role, settings=settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as client:
+        created = await client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base.id}/conversations",
+            json={"title": "严格预留"},
+        )
+        conversation_id = UUID(created.json()["id"])
+        response = await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages/stream",
+            json={"question": "问题", "top_k": 1},
+        )
+
+    assert response.status_code == 200
+    async with session_factory() as session:
+        answer_usage = await session.scalar(
+            select(LlmUsageEvent).where(
+                LlmUsageEvent.conversation_id == conversation_id,
+                LlmUsageEvent.purpose == "answer",
+            )
+        )
+    assert answer_usage is not None
+    assert answer_usage.settled_cost is not None
+    assert answer_usage.settled_cost <= answer_usage.reserved_cost
+
+
+@pytest.mark.asyncio
+async def test_answer_too_long_persists_only_first_8000_characters_and_fails(
+    stream_resources: tuple[User, KnowledgeBase],
+) -> None:
+    user, knowledge_base = stream_resources
+    async with session_factory.begin() as session:
+        conversation = Conversation(
+            user_id=user.id,
+            knowledge_base_id=knowledge_base.id,
+            title="回答超长",
+        )
+        session.add(conversation)
+        await session.flush()
+
+    class ConnectedRequest:
+        state = SimpleNamespace(request_id="answer-too-long")
+
+        async def is_disconnected(self) -> bool:
+            return False
+
+    events = [
+        StreamEvent(
+            "status",
+            {"phase": "generating"},
+            persistence={"answer_request_started": True},
+        ),
+        StreamEvent("token", {"delta": "答" * 8000}),
+        StreamEvent("token", {"delta": "超"}),
+    ]
+    async with session_factory() as endpoint_session:
+        response = await stream_conversation_message(
+            conversation_id=conversation.id,
+            payload=StreamConversationMessageRequest(question="问题"),
+            request=ConnectedRequest(),  # type: ignore[arg-type]
+            session=endpoint_session,
+            current_user=user,
+            service=ControlledRagService(events),  # type: ignore[arg-type]
+            settings=Settings(_env_file=None),
+        )
+        body = b"".join([part async for part in response.body_iterator])
+
+    assert b'"code":"ANSWER_TOO_LONG"' in body
+    async with session_factory() as session:
+        assistant = await session.scalar(
+            select(ConversationMessage).where(
+                ConversationMessage.conversation_id == conversation.id,
+                ConversationMessage.role == "assistant",
+            )
+        )
+    assert assistant is not None and assistant.status == "failed"
+    assert assistant.error_code == "ANSWER_TOO_LONG"
+    assert len(assistant.content) == 8000

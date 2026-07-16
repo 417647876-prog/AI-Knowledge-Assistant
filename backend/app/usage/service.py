@@ -153,6 +153,8 @@ class ConversationUsageRecorder:
         pricing: ModelPricing,
         rewrite_input_tokens: int,
         rewrite_max_output_tokens: int,
+        answer_usage_id: UUID | None = None,
+        answer_max_output_tokens: int = 0,
     ) -> None:
         self._session_factory = session_factory
         self._user_id = user_id
@@ -163,14 +165,32 @@ class ConversationUsageRecorder:
         self._pricing = pricing
         self._rewrite_input_tokens = rewrite_input_tokens
         self.rewrite_max_output_tokens = rewrite_max_output_tokens
+        self._answer_usage_id = answer_usage_id
+        self._answer_max_output_tokens = answer_max_output_tokens
         self._rewrite_usage_id: UUID | None = None
 
-    async def before_rewrite_request(self) -> None:
+    async def before_answer_request(self, input_token_upper_bound: int) -> None:
+        usage_id = self._answer_usage_id
+        if usage_id is None:
+            return
+        required_cost = calculate_reservation(
+            self._pricing,
+            input_tokens=input_token_upper_bound,
+            max_output_tokens=self._answer_max_output_tokens,
+        )
+        async with self._session_factory.begin() as session:
+            event = await session.get(LlmUsageEvent, usage_id, with_for_update=True)
+            if event is None or event.status != "reserved":
+                return
+            if required_cost > event.reserved_cost:
+                event.reserved_cost = required_cost
+
+    async def before_rewrite_request(self, input_token_upper_bound: int | None = None) -> None:
         if self._rewrite_usage_id is not None:
             raise RuntimeError("同一回答不能重复预留改写调用")
         reserved_cost = calculate_reservation(
             self._pricing,
-            input_tokens=self._rewrite_input_tokens,
+            input_tokens=max(self._rewrite_input_tokens, input_token_upper_bound or 0),
             max_output_tokens=self.rewrite_max_output_tokens,
         )
         async with self._session_factory.begin() as session:

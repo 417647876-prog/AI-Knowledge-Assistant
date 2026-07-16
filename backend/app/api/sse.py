@@ -5,11 +5,41 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Literal
 
 from fastapi import Request
+from starlette.responses import StreamingResponse
+from starlette.types import Send
 
 from app.core.exceptions import AppError
 from app.rag.streaming import StreamEvent, encode_sse
 
 _END = object()
+
+
+async def _close_streaming_body(body_iterator) -> None:
+    close = getattr(body_iterator, "aclose", None)
+    if close is None:
+        return
+    close_task = asyncio.create_task(close())
+    canceled = False
+    while not close_task.done():
+        try:
+            await asyncio.shield(close_task)
+        except asyncio.CancelledError:
+            canceled = True
+    await close_task
+    if canceled:
+        raise asyncio.CancelledError
+
+
+class DisconnectAwareStreamingResponse(StreamingResponse):
+    """等待 SSE 迭代器完成清理后再传播发送失败或取消。"""
+
+    async def stream_response(self, send: Send) -> None:
+        try:
+            await super().stream_response(send)
+        finally:
+            await _close_streaming_body(self.body_iterator)
+
+
 logger = logging.getLogger(__name__)
 
 

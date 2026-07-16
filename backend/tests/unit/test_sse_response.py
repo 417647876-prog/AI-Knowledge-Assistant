@@ -1,7 +1,10 @@
 import asyncio
 
 import pytest
+from fastapi.responses import StreamingResponse
+from starlette.requests import ClientDisconnect
 
+from app.api import sse as sse_module
 from app.api.sse import iter_sse
 from app.core.exceptions import AppError
 from app.rag.streaming import StreamEvent
@@ -177,3 +180,49 @@ async def _record(
     error_code: str | None,
 ) -> None:
     target.append((outcome, error_code))
+
+
+@pytest.mark.asyncio
+async def test_streaming_response_waits_for_close_when_asgi_send_raises_oserror() -> None:
+    source_closed = asyncio.Event()
+    finalized: list[tuple[str, str | None]] = []
+
+    async def source():
+        try:
+            yield StreamEvent("token", {"delta": "部分正文"})
+            await asyncio.Event().wait()
+        finally:
+            source_closed.set()
+
+    response_type = getattr(sse_module, "DisconnectAwareStreamingResponse", StreamingResponse)
+    response = response_type(
+        iter_sse(
+            ConnectedRequest(),
+            source(),
+            "req-send-failed",
+            10,
+            on_finalize=lambda outcome, code: _record(finalized, outcome, code),
+        )
+    )
+
+    async def receive():
+        await asyncio.Event().wait()
+
+    async def send(message) -> None:
+        if message["type"] == "http.response.body":
+            raise OSError("client disconnected")
+
+    with pytest.raises(ClientDisconnect):
+        await response(
+            {"type": "http", "asgi": {"spec_version": "2.4"}},
+            receive,
+            send,
+        )
+
+    assert source_closed.is_set()
+    assert finalized == [("client_disconnected", "CLIENT_DISCONNECTED")]
+    assert not [
+        task
+        for task in asyncio.all_tasks()
+        if not task.done() and "iter_sse.<locals>.produce" in repr(task.get_coro())
+    ]

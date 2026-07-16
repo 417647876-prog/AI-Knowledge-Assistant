@@ -320,7 +320,27 @@ async def test_stream_carries_usage_and_provider_done_as_private_persistence_met
         answer_max_output_tokens=777,
     )
 
-    events = [item async for item in service.stream_answer(uuid4(), "完整问题是什么？", 5, [])]
+    class UsageRecorder:
+        rewrite_max_output_tokens = 100
+
+        def __init__(self) -> None:
+            self.answer_bounds: list[int] = []
+
+        async def before_answer_request(self, input_token_upper_bound: int) -> None:
+            self.answer_bounds.append(input_token_upper_bound)
+
+    recorder = UsageRecorder()
+
+    events = [
+        item
+        async for item in service.stream_answer(
+            uuid4(),
+            "完整问题是什么？",
+            5,
+            [],
+            usage_recorder=recorder,  # type: ignore[arg-type]
+        )
+    ]
 
     generating = next(item for item in events if item.data.get("phase") == "generating")
     assert generating.persistence == {"answer_request_started": True}
@@ -333,6 +353,8 @@ async def test_stream_carries_usage_and_provider_done_as_private_persistence_met
     }
     assert "usage" not in events[-1].data
     assert chat.max_output_tokens == 777
+    assert recorder.answer_bounds
+    assert recorder.answer_bounds[0] >= len("完整问题是什么？".encode())
 
 
 @pytest.mark.asyncio

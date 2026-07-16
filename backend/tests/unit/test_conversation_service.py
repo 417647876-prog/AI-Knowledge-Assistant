@@ -76,6 +76,24 @@ def test_history_uses_latest_completed_retry_for_each_user_question() -> None:
     ]
 
 
+def test_history_assigns_retry_chain_to_original_question_without_stealing_later_answer() -> None:
+    user_1 = message(1, "user", "问题1", "completed")
+    answer_1 = message(2, "assistant", "回答1", "completed")
+    user_2 = message(3, "user", "问题2", "completed")
+    answer_2 = message(4, "assistant", "回答2", "completed")
+    retry_1 = message(5, "assistant", "问题1重试1", "completed")
+    retry_1.retry_of_message_id = answer_1.id
+    retry_2 = message(6, "assistant", "问题1重试2", "completed")
+    retry_2.retry_of_message_id = retry_1.id
+
+    assert build_completed_history([user_1, answer_1, user_2, answer_2, retry_1, retry_2]) == [
+        PromptMessage(role="user", content="问题1"),
+        PromptMessage(role="assistant", content="问题1重试2"),
+        PromptMessage(role="user", content="问题2"),
+        PromptMessage(role="assistant", content="回答2"),
+    ]
+
+
 @pytest.mark.parametrize(
     ("role", "content"),
     [("user", "问" * 2001), ("assistant", "答" * 8001)],
@@ -112,3 +130,13 @@ def test_stream_state_uses_explicit_rewrite_and_refusal_metadata() -> None:
     assert state.was_rewritten is False
     assert state.rewrite_fallback is False
     assert state.refused is True
+
+
+def test_stream_state_rejects_over_limit_token_before_mutating_partial_content() -> None:
+    state = StreamPersistenceState(content="答" * 8000)
+
+    with pytest.raises(Exception) as captured:
+        state.observe(StreamEvent("token", {"delta": "超"}))
+
+    assert getattr(captured.value, "code", None) == "ANSWER_TOO_LONG"
+    assert state.content == "答" * 8000

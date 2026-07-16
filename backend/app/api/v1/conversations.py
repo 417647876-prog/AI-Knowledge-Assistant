@@ -2,11 +2,10 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
-from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
-from app.api.sse import iter_sse
+from app.api.sse import DisconnectAwareStreamingResponse, iter_sse
 from app.api.v1.questions import get_rag_service
 from app.conversations.schemas import (
     ConversationDetail,
@@ -135,12 +134,13 @@ async def stream_conversation_message(
     current_user: Annotated[User, Depends(get_current_user)],
     service: Annotated[RagService, Depends(get_conversation_rag_service)],
     settings: Annotated[Settings, Depends(get_settings)],
-) -> StreamingResponse:
+) -> DisconnectAwareStreamingResponse:
     pricing = ModelPricing(
         cache_hit_input_per_million=settings.chat_cache_hit_input_price_per_million,
         cache_miss_input_per_million=settings.chat_cache_miss_input_price_per_million,
         output_per_million=settings.chat_output_price_per_million,
     )
+    top_k = payload.top_k or settings.rag_top_k_default
     prepared = await prepare_conversation_stream(
         session,
         user_id=current_user.id,
@@ -151,6 +151,8 @@ async def stream_conversation_message(
         pricing=pricing,
         answer_input_tokens=settings.chat_answer_input_token_reserve,
         answer_max_output_tokens=settings.chat_answer_max_output_tokens,
+        answer_top_k=top_k,
+        chunk_size=settings.chunk_size,
     )
     await session.commit()
     state = StreamPersistenceState()
@@ -164,6 +166,8 @@ async def stream_conversation_message(
         pricing=pricing,
         rewrite_input_tokens=settings.chat_rewrite_input_token_reserve,
         rewrite_max_output_tokens=settings.chat_rewrite_max_output_tokens,
+        answer_usage_id=prepared.answer_usage_id,
+        answer_max_output_tokens=settings.chat_answer_max_output_tokens,
     )
 
     async def finalize(outcome, error_code: str | None) -> None:
@@ -178,19 +182,18 @@ async def stream_conversation_message(
                     error_code=error_code,
                 )
         except Exception:
-            if outcome == "completed":
-                async with session_factory.begin() as failure_session:
-                    await finalize_conversation_stream(
-                        failure_session,
-                        prepared=prepared,
-                        state=state,
-                        outcome="provider_failed",
-                        pricing=pricing,
-                        error_code="PERSISTENCE_ERROR",
-                    )
+            recovery_outcome = "provider_failed" if outcome == "completed" else outcome
+            async with session_factory.begin() as failure_session:
+                await finalize_conversation_stream(
+                    failure_session,
+                    prepared=prepared,
+                    state=state,
+                    outcome=recovery_outcome,
+                    pricing=pricing,
+                    error_code="PERSISTENCE_ERROR",
+                )
             raise
 
-    top_k = payload.top_k or settings.rag_top_k_default
     source = service.stream_answer(
         prepared.knowledge_base_id,
         prepared.question,
@@ -198,7 +201,7 @@ async def stream_conversation_message(
         prepared.history,
         usage_recorder=usage_recorder,
     )
-    return StreamingResponse(
+    return DisconnectAwareStreamingResponse(
         iter_sse(
             request,
             source,

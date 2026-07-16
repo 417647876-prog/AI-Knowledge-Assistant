@@ -18,6 +18,7 @@ from app.db.models import (
     KnowledgeBase,
     LlmUsageEvent,
 )
+from app.rag.prompt import estimate_rag_input_token_upper_bound
 from app.usage.pricing import ModelPricing, calculate_reservation
 from app.usage.service import (
     apply_settlement,
@@ -204,6 +205,8 @@ async def prepare_conversation_stream(
     pricing: ModelPricing,
     answer_input_tokens: int,
     answer_max_output_tokens: int,
+    answer_top_k: int,
+    chunk_size: int,
 ) -> PreparedConversationStream:
     conversation = await get_owned_conversation(
         session,
@@ -238,14 +241,7 @@ async def prepare_conversation_stream(
         )
         if retry_target is None:
             raise _not_found()
-        source_user = next(
-            (
-                item
-                for item in reversed(messages)
-                if item.role == "user" and item.sequence_number < retry_target.sequence_number
-            ),
-            None,
-        )
+        source_user = _assistant_source_user(retry_target, messages)
         if source_user is None:
             raise _not_found()
         question = _validated_content(source_user)
@@ -265,9 +261,15 @@ async def prepare_conversation_stream(
     )
     session.add(assistant)
     await session.flush()
+    strict_input_upper_bound = estimate_rag_input_token_upper_bound(
+        question=question,
+        history=history,
+        top_k=answer_top_k,
+        chunk_size=chunk_size,
+    )
     reserved_cost = calculate_reservation(
         pricing,
-        input_tokens=answer_input_tokens,
+        input_tokens=max(answer_input_tokens, strict_input_upper_bound),
         max_output_tokens=answer_max_output_tokens,
     )
     usage = create_usage_reservation(
@@ -311,9 +313,13 @@ class StreamPersistenceState:
         if event.event == "token":
             delta = event.data.get("delta")
             if isinstance(delta, str):
+                if len(delta) > 8000 - len(self.content):
+                    raise AppError(
+                        code="ANSWER_TOO_LONG",
+                        message="助手回答超过长度限制。",
+                        status_code=502,
+                    )
                 self.content += delta
-                if len(self.content) > 8000:
-                    raise ValueError("助手回答超过 8000 字限制")
         persistence = event.persistence
         was_rewritten = persistence.get("was_rewritten")
         if isinstance(was_rewritten, bool):
@@ -357,26 +363,26 @@ async def finalize_conversation_stream(
     pricing: ModelPricing,
     error_code: str | None,
 ) -> None:
-    assistant = await session.get(ConversationMessage, prepared.assistant_message_id)
-    usage_event = await session.get(LlmUsageEvent, prepared.answer_usage_id)
-    if assistant is None or usage_event is None or assistant.status != "streaming":
+    assistant = await session.scalar(
+        select(ConversationMessage)
+        .where(ConversationMessage.id == prepared.assistant_message_id)
+        .with_for_update()
+    )
+    usage_event = await session.scalar(
+        select(LlmUsageEvent).where(LlmUsageEvent.id == prepared.answer_usage_id).with_for_update()
+    )
+    if usage_event is None or usage_event.status != "reserved":
         return
 
     completed_at = datetime.now(UTC)
-    assistant.content = state.content
-    assistant.completed_at = completed_at
     total_ms = None
     if state.timings is not None:
         raw_total = state.timings.get("total_ms")
         if isinstance(raw_total, int) and raw_total >= 0:
             total_ms = raw_total
 
-    if outcome == "completed" and state.saw_done:
-        assistant.status = "completed"
-        assistant.citations_snapshot = state.citations or []
-        assistant.retrieval_stats = state.retrieval_stats or {}
-        assistant.timings = state.timings or {}
-        assistant.finish_reason = state.finish_reason
+    completed = outcome == "completed" and state.saw_done
+    if completed:
         settlement = (
             settle_after_response(
                 pricing=pricing,
@@ -391,31 +397,7 @@ async def finalize_conversation_stream(
                 usage=None,
             )
         )
-        retrieved_count = int((state.retrieval_stats or {}).get("retrieved_chunk_count", 0))
-        timings = state.timings or {}
-        session.add(
-            AnswerObservation(
-                user_id=usage_event.user_id,
-                knowledge_base_id=usage_event.knowledge_base_id,
-                conversation_id=prepared.conversation_id,
-                message_id=assistant.id,
-                was_rewritten=state.was_rewritten,
-                rewrite_fallback=state.rewrite_fallback,
-                candidate_count=retrieved_count,
-                accepted_count=retrieved_count,
-                refused=state.refused,
-                citation_count=len(state.citations or []),
-                citations_valid=True,
-                rewrite_ms=int(timings.get("rewrite_ms", 0)),
-                retrieval_ms=int(timings.get("retrieval_ms", 0)),
-                generation_ms=int(timings.get("generation_ms", 0)),
-                total_ms=int(timings.get("total_ms", 0)),
-                finish_reason=state.finish_reason,
-            )
-        )
     else:
-        assistant.status = "failed" if outcome == "provider_failed" else "interrupted"
-        assistant.error_code = error_code
         if outcome in {"client_disconnected", "canceled"} and state.answer_request_started:
             settlement = settle_after_response(
                 pricing=pricing,
@@ -429,6 +411,41 @@ async def finalize_conversation_stream(
                 request_started=state.answer_request_started,
                 usage=state.usage,
             )
+
+    if assistant is not None and assistant.status == "streaming":
+        assistant.content = state.content
+        assistant.completed_at = completed_at
+        if completed:
+            assistant.status = "completed"
+            assistant.citations_snapshot = state.citations or []
+            assistant.retrieval_stats = state.retrieval_stats or {}
+            assistant.timings = state.timings or {}
+            assistant.finish_reason = state.finish_reason
+            retrieved_count = int((state.retrieval_stats or {}).get("retrieved_chunk_count", 0))
+            timings = state.timings or {}
+            session.add(
+                AnswerObservation(
+                    user_id=usage_event.user_id,
+                    knowledge_base_id=usage_event.knowledge_base_id,
+                    conversation_id=prepared.conversation_id,
+                    message_id=assistant.id,
+                    was_rewritten=state.was_rewritten,
+                    rewrite_fallback=state.rewrite_fallback,
+                    candidate_count=retrieved_count,
+                    accepted_count=retrieved_count,
+                    refused=state.refused,
+                    citation_count=len(state.citations or []),
+                    citations_valid=True,
+                    rewrite_ms=int(timings.get("rewrite_ms", 0)),
+                    retrieval_ms=int(timings.get("retrieval_ms", 0)),
+                    generation_ms=int(timings.get("generation_ms", 0)),
+                    total_ms=int(timings.get("total_ms", 0)),
+                    finish_reason=state.finish_reason,
+                )
+            )
+        else:
+            assistant.status = "failed" if outcome == "provider_failed" else "interrupted"
+            assistant.error_code = error_code
 
     apply_settlement(
         usage_event,
@@ -449,28 +466,51 @@ def _validated_content(message: ConversationMessage) -> str:
     return content
 
 
+def _assistant_source_user(
+    assistant: ConversationMessage,
+    messages: Iterable[ConversationMessage],
+) -> ConversationMessage | None:
+    ordered = sorted(messages, key=lambda item: item.sequence_number)
+    by_id = {item.id: item for item in ordered}
+    root = assistant
+    visited: set[UUID] = set()
+    while root.retry_of_message_id is not None:
+        if root.id in visited:
+            return None
+        visited.add(root.id)
+        target = by_id.get(root.retry_of_message_id)
+        if target is None or target.role != "assistant":
+            return None
+        root = target
+    return next(
+        (
+            item
+            for item in reversed(ordered)
+            if item.role == "user" and item.sequence_number < root.sequence_number
+        ),
+        None,
+    )
+
+
 def build_completed_history(
     messages: Iterable[ConversationMessage],
 ) -> list[PromptMessage]:
-    """只返回最后六组顺序相邻、均已完成的问答。"""
+    """返回最后六组已完成的逻辑问答，并用最新完成重试替代原回答。"""
     ordered = sorted(messages, key=lambda item: item.sequence_number)
-    pairs: list[tuple[ConversationMessage, ConversationMessage]] = []
-    index = 0
-    while index < len(ordered):
-        user_message = ordered[index]
-        if user_message.role != "user" or user_message.status != "completed":
-            index += 1
+    completed_by_user: dict[UUID, ConversationMessage] = {}
+    for assistant in ordered:
+        if assistant.role != "assistant" or assistant.status != "completed":
             continue
-        next_user = index + 1
-        completed_assistants: list[ConversationMessage] = []
-        while next_user < len(ordered) and ordered[next_user].role != "user":
-            candidate = ordered[next_user]
-            if candidate.role == "assistant" and candidate.status == "completed":
-                completed_assistants.append(candidate)
-            next_user += 1
-        if completed_assistants:
-            pairs.append((user_message, completed_assistants[-1]))
-        index = next_user
+        source_user = _assistant_source_user(assistant, ordered)
+        if source_user is not None and source_user.status == "completed":
+            completed_by_user[source_user.id] = assistant
+    pairs = [
+        (user_message, completed_by_user[user_message.id])
+        for user_message in ordered
+        if user_message.role == "user"
+        and user_message.status == "completed"
+        and user_message.id in completed_by_user
+    ]
 
     result: list[PromptMessage] = []
     for user_message, assistant_message in pairs[-6:]:

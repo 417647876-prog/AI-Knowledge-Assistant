@@ -9,8 +9,9 @@ import httpx
 import pytest
 from sqlalchemy import delete, func, select, text
 
+from app.ai.contracts import ConversationMessage as PromptMessage
 from app.api.v1.conversations import get_conversation_rag_service
-from app.conversations.service import prepare_conversation_stream
+from app.conversations.service import build_completed_history, prepare_conversation_stream
 from app.core.config import get_settings
 from app.core.security import create_access_token, hash_password
 from app.db.models import (
@@ -379,6 +380,103 @@ async def test_explicit_retry_creates_only_new_assistant_linked_to_old_message(
 
 
 @pytest.mark.asyncio
+async def test_retry_of_retry_keeps_original_question_and_later_pair_history(
+    conversation_context: ConversationContext,
+) -> None:
+    class RetryChainRagService:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def stream_answer(self, knowledge_base_id, question, top_k, history, **kwargs):
+            self.calls.append((question, history))
+            yield StreamEvent("token", {"delta": f"重试回答{len(self.calls)}"})
+            yield StreamEvent("done", {"citations": [], "retrieved_chunk_count": 0, "timings": {}})
+
+    service = RetryChainRagService()
+    conversation_context.app.dependency_overrides[get_conversation_rag_service] = lambda: service
+    async with session_factory.begin() as session:
+        conversation = Conversation(
+            user_id=conversation_context.user_id,
+            knowledge_base_id=conversation_context.knowledge_base_id,
+            title="重试链",
+        )
+        session.add(conversation)
+        await session.flush()
+        user_1 = ConversationMessage(
+            conversation_id=conversation.id,
+            sequence_number=1,
+            role="user",
+            content="问题1",
+            status="completed",
+            completed_at=func.now(),
+        )
+        answer_1 = ConversationMessage(
+            conversation_id=conversation.id,
+            sequence_number=2,
+            role="assistant",
+            content="回答1",
+            status="completed",
+            completed_at=func.now(),
+        )
+        user_2 = ConversationMessage(
+            conversation_id=conversation.id,
+            sequence_number=3,
+            role="user",
+            content="问题2",
+            status="completed",
+            completed_at=func.now(),
+        )
+        answer_2 = ConversationMessage(
+            conversation_id=conversation.id,
+            sequence_number=4,
+            role="assistant",
+            content="回答2",
+            status="completed",
+            completed_at=func.now(),
+        )
+        session.add_all((user_1, answer_1, user_2, answer_2))
+        await session.flush()
+
+    first = await conversation_context.client.post(
+        f"/api/v1/conversations/{conversation.id}/messages/stream",
+        json={"retry_of_message_id": str(answer_1.id)},
+    )
+    assert first.status_code == 200
+    async with session_factory() as session:
+        retry_1 = await session.scalar(
+            select(ConversationMessage).where(
+                ConversationMessage.conversation_id == conversation.id,
+                ConversationMessage.retry_of_message_id == answer_1.id,
+            )
+        )
+    assert retry_1 is not None
+
+    second = await conversation_context.client.post(
+        f"/api/v1/conversations/{conversation.id}/messages/stream",
+        json={"retry_of_message_id": str(retry_1.id)},
+    )
+    assert second.status_code == 200
+
+    async with session_factory() as session:
+        messages = list(
+            (
+                await session.scalars(
+                    select(ConversationMessage)
+                    .where(ConversationMessage.conversation_id == conversation.id)
+                    .order_by(ConversationMessage.sequence_number)
+                )
+            ).all()
+        )
+    assert service.calls == [("问题1", []), ("问题1", [])]
+    assert build_completed_history(messages) == [
+        PromptMessage(role="user", content="问题1"),
+        PromptMessage(role="assistant", content="重试回答2"),
+        PromptMessage(role="user", content="问题2"),
+        PromptMessage(role="assistant", content="回答2"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_concurrent_stream_preparation_serializes_message_sequences(
     conversation_context: ConversationContext,
 ) -> None:
@@ -409,6 +507,8 @@ async def test_concurrent_stream_preparation_serializes_message_sequences(
                 pricing=pricing,
                 answer_input_tokens=100,
                 answer_max_output_tokens=20,
+                answer_top_k=5,
+                chunk_size=800,
             )
             if hold_lock:
                 first_locked.set()
