@@ -60,13 +60,14 @@ _ENVIRONMENT_INTEGER_RANGES = {
     "rag_reranker_batch_size": (1, 256),
     "rag_candidate_k": (1, 100),
 }
-_ENVIRONMENT_DECIMAL_RANGES = {
-    "rag_score_threshold": (Decimal("-1"), Decimal("1")),
-    "rag_reranker_min_score": (Decimal("-1"), Decimal("1")),
-}
+_ENVIRONMENT_DECIMAL_RANGES = {"rag_score_threshold": (Decimal("-1"), Decimal("1"))}
 _ENVIRONMENT_IDENTIFIERS = frozenset({"embedding_model", "chat_model", "rag_reranker_model"})
 _INTEGER_PATTERN = re.compile(r"(?:0|[1-9][0-9]*)\Z", re.ASCII)
-_DECIMAL_PATTERN = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\Z", re.ASCII)
+_DECIMAL_PATTERN = re.compile(
+    r"[+-]?(?:(?:0|[1-9][0-9]*)(?:\.[0-9]*)?|\.[0-9]+)"
+    r"(?:[eE][+-]?[0-9]+)?\Z",
+    re.ASCII,
+)
 _IDENTIFIER_PATTERN = re.compile(
     r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
     r"(?:/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)*\Z",
@@ -90,7 +91,43 @@ class QualityEvaluationSummary:
 def _canonical_decimal(value: Decimal) -> str:
     if value == 0:
         return "0"
-    return format(value.normalize(), "f")
+    parts = value.as_tuple()
+    digits = list(parts.digits)
+    exponent = parts.exponent
+    if not isinstance(exponent, int):  # pragma: no cover - 非有限值已在调用方拒绝
+        raise ValueError("环境摘要包含非有限十进制数")
+    while len(digits) > 1 and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    coefficient = "".join(str(digit) for digit in digits)
+    adjusted_exponent = len(coefficient) + exponent - 1
+    sign = "-" if parts.sign else ""
+    if -6 <= adjusted_exponent <= 20:
+        point = len(coefficient) + exponent
+        if point <= 0:
+            body = "0." + ("0" * -point) + coefficient
+        elif point >= len(coefficient):
+            body = coefficient + ("0" * (point - len(coefficient)))
+        else:
+            body = coefficient[:point] + "." + coefficient[point:]
+    else:
+        mantissa = coefficient[0]
+        if len(coefficient) > 1:
+            mantissa += "." + coefficient[1:]
+        body = f"{mantissa}e{adjusted_exponent}"
+    return sign + body
+
+
+def _parse_environment_decimal(key: str, value: str) -> Decimal:
+    if not 1 <= len(value) <= 64 or not _DECIMAL_PATTERN.fullmatch(value):
+        raise ValueError(f"环境摘要字段 {key} 必须是有限十进制数")
+    try:
+        number = Decimal(value)
+    except InvalidOperation as error:
+        raise ValueError(f"环境摘要字段 {key} 必须是有限十进制数") from error
+    if not number.is_finite():
+        raise ValueError(f"环境摘要字段 {key} 必须是有限十进制数")
+    return number
 
 
 def _sanitize_environment(environment: dict[str, str]) -> dict[str, str]:
@@ -111,19 +148,15 @@ def _sanitize_environment(environment: dict[str, str]) -> dict[str, str]:
             if not lower <= number <= upper:
                 raise ValueError(f"环境摘要字段 {key} 超出允许范围")
             sanitized[key] = str(number)
-        elif key in _ENVIRONMENT_DECIMAL_RANGES:
+        elif key in {"rag_score_threshold", "rag_reranker_min_score"}:
             if key == "rag_reranker_min_score" and value == "disabled":
                 sanitized[key] = value
                 continue
-            if not _DECIMAL_PATTERN.fullmatch(value):
-                raise ValueError(f"环境摘要字段 {key} 必须是规范十进制数")
-            try:
-                number = Decimal(value)
-            except InvalidOperation as error:
-                raise ValueError(f"环境摘要字段 {key} 必须是规范十进制数") from error
-            lower, upper = _ENVIRONMENT_DECIMAL_RANGES[key]
-            if not number.is_finite() or not lower <= number <= upper:
-                raise ValueError(f"环境摘要字段 {key} 超出允许范围")
+            number = _parse_environment_decimal(key, value)
+            if key in _ENVIRONMENT_DECIMAL_RANGES:
+                lower, upper = _ENVIRONMENT_DECIMAL_RANGES[key]
+                if not lower <= number <= upper:
+                    raise ValueError(f"环境摘要字段 {key} 超出允许范围")
             sanitized[key] = _canonical_decimal(number)
         elif key == "rag_reranker_allow_fallback":
             normalized = value.casefold()

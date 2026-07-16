@@ -8,8 +8,10 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.config import Settings
 from app.db.models import QualityEvaluationRun
 from app.evaluation.policy import Stage3QualityPolicy
+from scripts.evaluate_rag import build_safe_environment
 from scripts.record_quality_evaluation import (
     import_quality_evaluation,
     main,
@@ -213,6 +215,48 @@ def test_parse_quality_evaluation_validates_and_canonicalizes_safe_environment()
 
 
 @pytest.mark.parametrize(
+    "min_score",
+    [2.0, 1e-07, -0.25, 0.0, 1.7976931348623157e308, 5e-324, None],
+    ids=[
+        "above-one",
+        "scientific",
+        "negative",
+        "zero",
+        "max-float",
+        "min-subnormal-float",
+        "disabled",
+    ],
+)
+def test_real_settings_environment_roundtrips_through_quality_import(
+    min_score: float | None,
+) -> None:
+    report = deepcopy(_report_data())
+    report["environment"] = build_safe_environment(
+        Settings(_env_file=None, rag_reranker_min_score=min_score)
+    )
+
+    summary = parse_quality_evaluation(json.dumps(report).encode(), _policy())
+
+    imported = summary.model_config_summary["rag_reranker_min_score"]
+    if min_score is None:
+        assert imported == "disabled"
+    else:
+        assert float(imported) == min_score
+        assert len(imported) <= 64
+
+
+def test_real_settings_scientific_score_threshold_keeps_its_declared_boundary() -> None:
+    report = deepcopy(_report_data())
+    report["environment"] = build_safe_environment(
+        Settings(_env_file=None, rag_score_threshold=1e-07)
+    )
+
+    summary = parse_quality_evaluation(json.dumps(report).encode(), _policy())
+
+    assert summary.model_config_summary["rag_score_threshold"] == "1e-7"
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("app_env", "staging"),
@@ -223,7 +267,13 @@ def test_parse_quality_evaluation_validates_and_canonicalizes_safe_environment()
         ("rag_rrf_rank_constant", "0"),
         ("rag_candidate_k", "101"),
         ("rag_reranker_allow_fallback", "yes"),
-        ("rag_reranker_min_score", "1e-1"),
+        ("rag_reranker_min_score", "NaN"),
+        ("rag_reranker_min_score", "Inf"),
+        ("rag_reranker_min_score", "-Infinity"),
+        ("rag_reranker_min_score", " 1.0"),
+        ("rag_reranker_min_score", "not-a-number"),
+        ("rag_reranker_min_score", "1e"),
+        ("rag_reranker_min_score", "1" * 65),
     ],
 )
 def test_parse_quality_evaluation_rejects_invalid_typed_environment_values(
