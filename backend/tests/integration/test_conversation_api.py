@@ -24,6 +24,7 @@ from app.db.models import (
     LlmUsageEvent,
     RefreshSession,
     User,
+    UserQuota,
 )
 from app.db.session import session_factory
 from app.main import create_app
@@ -148,6 +149,9 @@ async def conversation_context() -> AsyncIterator[ConversationContext]:
                         RefreshSession.user_id.in_((user.id, other_user.id))
                     )
                 )
+                await session.execute(
+                    delete(UserQuota).where(UserQuota.user_id.in_((user.id, other_user.id)))
+                )
                 await session.execute(delete(User).where(User.id.in_((user.id, other_user.id))))
 
 
@@ -192,6 +196,66 @@ async def test_create_requires_current_users_active_knowledge_base(
             json={"title": "不应创建"},
         )
         assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_question_rate_limit_rejects_before_model_and_recovers_after_window(
+    conversation_context: ConversationContext,
+) -> None:
+    class CountingRagService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def stream_answer(self, knowledge_base_id, question, top_k, history, **kwargs):
+            self.calls += 1
+            yield StreamEvent("token", {"delta": "回答"})
+            yield StreamEvent(
+                "done",
+                {"citations": [], "retrieved_chunk_count": 0, "timings": {}},
+            )
+
+    settings = get_settings()
+    previous_window = settings.question_rate_limit_window_seconds
+    previous_limit = settings.question_rate_limit_max_requests
+    service = CountingRagService()
+    conversation_context.app.dependency_overrides[get_conversation_rag_service] = lambda: service
+    try:
+        settings.question_rate_limit_window_seconds = 1
+        settings.question_rate_limit_max_requests = 10
+        created = await conversation_context.client.post(
+            f"/api/v1/knowledge-bases/{conversation_context.knowledge_base_id}/conversations",
+            json={"title": "限速验收"},
+        )
+        assert created.status_code == 201
+        conversation_id = created.json()["id"]
+
+        for index in range(10):
+            allowed = await conversation_context.client.post(
+                f"/api/v1/conversations/{conversation_id}/messages/stream",
+                json={"question": f"第 {index + 1} 次问答"},
+            )
+            assert allowed.status_code == 200
+        assert service.calls == 10
+
+        rejected = await conversation_context.client.post(
+            f"/api/v1/conversations/{conversation_id}/messages/stream",
+            json={"question": "第 11 次问答"},
+        )
+        assert rejected.status_code == 429
+        assert rejected.json()["error"]["code"] == "QUESTION_RATE_LIMITED"
+        assert service.calls == 10
+
+        await asyncio.sleep(1.1)
+        recovered = await conversation_context.client.post(
+            f"/api/v1/conversations/{conversation_id}/messages/stream",
+            json={"question": "窗口恢复后的问答"},
+        )
+        assert recovered.status_code == 200
+        assert service.calls == 11
+    finally:
+        settings.question_rate_limit_window_seconds = previous_window
+        settings.question_rate_limit_max_requests = previous_limit
+        conversation_context.app.dependency_overrides.pop(get_conversation_rag_service, None)
 
 
 @pytest.mark.asyncio
