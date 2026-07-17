@@ -72,7 +72,14 @@ async def _create_usage_scope(*, role: str = USER_ROLE) -> UsageScope:
         status="streaming",
     )
     async with session_factory.begin() as session:
-        session.add_all((user, knowledge_base, conversation, message))
+        session.add(user)
+        await session.flush()
+        session.add(knowledge_base)
+        await session.flush()
+        session.add(conversation)
+        await session.flush()
+        session.add(message)
+        await session.flush()
     return UsageScope(user, knowledge_base, conversation, message)
 
 
