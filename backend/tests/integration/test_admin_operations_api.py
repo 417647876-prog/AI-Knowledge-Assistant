@@ -145,6 +145,18 @@ async def test_operations_empty_scope_returns_zero_aggregates_and_rejects_invali
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["start_at", "end_at"])
+async def test_operations_reject_numeric_unix_timestamps(
+    operations_api: OperationsApiContext, field: str
+) -> None:
+    response = await operations_api.admin_client.get(
+        "/api/v1/admin/operations/overview", params={field: "0"}
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_jobs_are_page_bounded_and_use_created_at_plus_uuid_cursor(
     operations_api: OperationsApiContext,
 ) -> None:
