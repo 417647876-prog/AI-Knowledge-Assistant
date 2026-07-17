@@ -68,7 +68,7 @@ async def _heartbeat_summary(session: AsyncSession) -> dict[str, Any]:
     latest_seen = await session.scalar(select(func.max(WorkerHeartbeat.last_seen_at)))
     return {
         "status_counts": status_counts,
-        "latest_seen_at": latest_seen.isoformat() if latest_seen else None,
+        "latest_seen_epoch_ms": int(latest_seen.timestamp() * 1000) if latest_seen else None,
     }
 
 

@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,6 +21,7 @@ _STANDARD_FIELDS = (
     "duration_ms",
     "error_code",
 )
+_EVENT_CODE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
 
 
 class StructuredFormatter(logging.Formatter):
@@ -35,7 +37,7 @@ class StructuredFormatter(logging.Formatter):
             "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "service": record.name,
-            "message": "exception" if record.exc_info else record.getMessage(),
+            "message": _safe_message(record),
             "request_id": context.request_id or None,
             "user_id": context.user_id or None,
             "knowledge_base_id": context.knowledge_base_id or None,
@@ -66,6 +68,15 @@ def _safe_value(record: logging.LogRecord, field: str) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value) if field in {"route", "error_code"} else None
+
+
+def _safe_message(record: logging.LogRecord) -> str:
+    if record.exc_info:
+        return "EXCEPTION"
+    event_code = getattr(record, "event_code", "")
+    if isinstance(event_code, str) and _EVENT_CODE.fullmatch(event_code):
+        return event_code
+    return "LOG_EVENT"
 
 
 def _render_text(value: Any) -> str:

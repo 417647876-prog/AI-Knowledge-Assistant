@@ -21,7 +21,13 @@ _UPLOAD_PATH = re.compile(r"^/api/v1/knowledge-bases/[^/]+/documents$")
 def is_trusted_gateway_request(
     *, client_host: str | None, gateway_secret: str | None, settings: Settings
 ) -> bool:
-    if gateway_secret != settings.gateway_shared_secret or not settings.trusted_gateway_networks:
+    if gateway_secret != settings.gateway_shared_secret:
+        return False
+    return is_gateway_peer(client_host=client_host, settings=settings)
+
+
+def is_gateway_peer(*, client_host: str | None, settings: Settings) -> bool:
+    if not settings.trusted_gateway_networks:
         return False
     try:
         direct_address = ip_address(client_host or "")
@@ -69,9 +75,8 @@ class RequestSourceMiddleware(BaseHTTPMiddleware):
             gateway_secret=request.headers.get("X-Gateway-Secret"),
             settings=self.settings,
         )
-        request.state.via_gateway = is_trusted_gateway_request(
+        request.state.via_gateway = is_gateway_peer(
             client_host=request.client.host if request.client is not None else None,
-            gateway_secret=request.headers.get("X-Gateway-Secret"),
             settings=self.settings,
         )
         return await call_next(request)

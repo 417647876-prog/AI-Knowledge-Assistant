@@ -79,4 +79,57 @@ async def test_internal_metrics_endpoint_returns_numeric_and_database_summaries(
         "sse_request_count",
         "latency_buckets",
     }
-    assert set(body["workers"]) == {"status_counts", "latest_seen_at"}
+    assert set(body["workers"]) == {"status_counts", "latest_seen_epoch_ms"}
+    assert body["workers"]["latest_seen_epoch_ms"] is None or isinstance(
+        body["workers"]["latest_seen_epoch_ms"], int
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gateway_secret", [None, "wrong-secret"])
+async def test_gateway_peer_cannot_bypass_internal_metrics_with_public_path(
+    monkeypatch: pytest.MonkeyPatch, gateway_secret: str | None
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        internal_metrics_key="metrics-secret",
+        trusted_gateway_networks=("10.0.0.0/8",),
+        gateway_shared_secret="gateway-secret",
+    )
+    monkeypatch.setattr("app.main.get_settings", lambda: settings)
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+    headers = {"X-Internal-Metrics-Key": "metrics-secret"}
+    if gateway_secret is not None:
+        headers["X-Gateway-Secret"] = gateway_secret
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=("10.1.2.3", 12345)),
+        base_url="http://gateway-public-path",
+        headers=headers,
+    ) as client:
+        response = await client.get("/internal/metrics")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_direct_internal_peer_with_metrics_key_remains_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        internal_metrics_key="metrics-secret",
+        trusted_gateway_networks=("10.0.0.0/8",),
+        gateway_shared_secret="gateway-secret",
+    )
+    monkeypatch.setattr("app.main.get_settings", lambda: settings)
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=("172.20.0.2", 12345)),
+        base_url="http://backend-internal",
+        headers={"X-Internal-Metrics-Key": "metrics-secret"},
+    ) as client:
+        response = await client.get("/internal/metrics")
+
+    assert response.status_code == 200

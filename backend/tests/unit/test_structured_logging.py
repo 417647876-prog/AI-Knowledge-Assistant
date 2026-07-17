@@ -73,7 +73,7 @@ def test_production_log_has_standard_context_and_redacts_sensitive_values() -> N
         "timestamp": None,
         "level": "INFO",
         "service": "api",
-        "message": "operation complete",
+        "message": "LOG_EVENT",
         "request_id": "req-123",
         "user_id": "user-456",
         "knowledge_base_id": "kb-789",
@@ -156,3 +156,30 @@ def test_audit_summary_rejects_client_text_even_when_uppercase() -> None:
     )
 
     assert captured[0].security_summary == {"size_bytes": 3}
+
+
+def test_non_exception_message_and_args_never_emit_sensitive_values() -> None:
+    formatter = StructuredFormatter(production=True)
+    password = "correct horse battery staple"
+    token = "access-token-secret"
+
+    message_record = _record({})
+    message_record.msg = f"database password={password} token={token}"
+    args_record = _record({})
+    args_record.msg = "upstream response: %s"
+    args_record.args = (password,)
+
+    for record in (message_record, args_record):
+        rendered = formatter.format(record)
+        assert json.loads(rendered)["message"] == "LOG_EVENT"
+        assert password not in rendered
+        assert token not in rendered
+        assert password not in StructuredFormatter(production=False).format(record)
+
+
+def test_server_event_code_keeps_fixed_log_event_usable() -> None:
+    record = _record({"event_code": "DOCUMENT_UPLOAD_CLEANUP_FAILED"})
+    record.msg = "untrusted text must not become a log message"
+
+    payload = json.loads(StructuredFormatter(production=True).format(record))
+    assert payload["message"] == "DOCUMENT_UPLOAD_CLEANUP_FAILED"
