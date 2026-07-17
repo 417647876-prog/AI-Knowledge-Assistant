@@ -183,3 +183,33 @@ def test_server_event_code_keeps_fixed_log_event_usable() -> None:
 
     payload = json.loads(StructuredFormatter(production=True).format(record))
     assert payload["message"] == "DOCUMENT_UPLOAD_CLEANUP_FAILED"
+
+
+def test_standard_route_and_error_code_fields_cannot_carry_sensitive_values() -> None:
+    upload_path = "D:/uploads/private/customer-contract.pdf"
+    token = "access-token-secret"
+    record = _record({"route": upload_path, "error_code": token})
+
+    production = StructuredFormatter(production=True).format(record)
+    development = StructuredFormatter(production=False).format(record)
+
+    payload = json.loads(production)
+    assert payload["route"] is None
+    assert payload["error_code"] is None
+    assert upload_path not in production
+    assert token not in production
+    assert upload_path not in development
+    assert token not in development
+
+
+def test_route_template_and_service_error_code_remain_available() -> None:
+    record = _record(
+        {
+            "route": "/api/v1/knowledge-bases/{knowledge_base_id}/documents",
+            "error_code": "UPLOAD_QUOTA_EXCEEDED",
+        }
+    )
+
+    payload = json.loads(StructuredFormatter(production=True).format(record))
+    assert payload["route"] == "/api/v1/knowledge-bases/{knowledge_base_id}/documents"
+    assert payload["error_code"] == "UPLOAD_QUOTA_EXCEEDED"

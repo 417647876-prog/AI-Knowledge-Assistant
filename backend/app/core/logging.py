@@ -22,6 +22,11 @@ _STANDARD_FIELDS = (
     "error_code",
 )
 _EVENT_CODE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
+_ROUTE_TEMPLATE = re.compile(
+    r"^/(?:[a-z][a-z0-9-]{0,63}|\{[a-z][a-z0-9_]{0,63}\})"
+    r"(?:/(?:[a-z][a-z0-9-]{0,63}|\{[a-z][a-z0-9_]{0,63}\}))*$"
+)
+_ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
 
 
 class StructuredFormatter(logging.Formatter):
@@ -65,9 +70,19 @@ def configure_logging(*, production: bool) -> None:
 
 def _safe_value(record: logging.LogRecord, field: str) -> Any:
     value = getattr(record, field, None)
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value) if field in {"route", "error_code"} else None
+    if field == "route":
+        return value if isinstance(value, str) and _ROUTE_TEMPLATE.fullmatch(value) else None
+    if field == "error_code":
+        return value if isinstance(value, str) and _ERROR_CODE.fullmatch(value) else None
+    if field == "status_code":
+        is_status_code = (
+            isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599
+        )
+        return value if is_status_code else None
+    if field == "duration_ms":
+        is_duration = isinstance(value, int | float) and not isinstance(value, bool) and value >= 0
+        return value if is_duration else None
+    return None
 
 
 def _safe_message(record: logging.LogRecord) -> str:
