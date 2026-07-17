@@ -26,6 +26,7 @@ from app.lifecycle.service import (
     restore_document,
     soft_delete_document,
 )
+from app.quotas.service import QuotaDefaults, consume_upload
 
 router = APIRouter(tags=["documents"])
 logger = logging.getLogger(__name__)
@@ -165,12 +166,23 @@ async def upload_document(
             security_summary={"reason": error.code},
         )
         raise error
+    await consume_upload(
+        session,
+        user_id=current_user.id,
+        content_bytes=len(content),
+        defaults=QuotaDefaults(
+            daily_questions=settings.default_daily_question_limit,
+            daily_uploads=settings.default_daily_upload_limit,
+            storage_bytes=settings.default_storage_bytes_limit,
+        ),
+    )
     stored_file_name = f"{uuid4()}{extension}"
     settings.upload_directory.mkdir(parents=True, exist_ok=True)
     stored_file = settings.upload_directory / stored_file_name
     try:
         stored_file.write_bytes(content)
     except OSError as error:
+        await session.rollback()
         try:
             stored_file.unlink(missing_ok=True)
         except OSError:

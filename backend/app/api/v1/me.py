@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
 from app.api.v1.feedback import FeedbackReason
+from app.core.config import Settings, get_settings
 from app.db.models import (
     AnswerFeedback,
     Conversation,
@@ -17,8 +18,10 @@ from app.db.models import (
     KnowledgeBase,
     LlmUsageEvent,
     User,
+    UserQuota,
 )
 from app.db.session import get_session
+from app.quotas.service import QuotaDefaults, quota_snapshot
 
 router = APIRouter(prefix="/api/v1/me", tags=["me"])
 
@@ -65,6 +68,37 @@ class FeedbackPage(BaseModel):
     total: int
 
 
+class QuotaValues(BaseModel):
+    daily_question_limit: int
+    daily_upload_limit: int
+    storage_bytes_limit: int
+
+
+class QuotaOverrides(BaseModel):
+    daily_question_limit: int | None
+    daily_upload_limit: int | None
+    storage_bytes_limit: int | None
+
+
+class QuotaUsage(BaseModel):
+    question_count: int
+    upload_count: int
+    storage_bytes_used: int
+
+
+class QuotaRemaining(BaseModel):
+    question_count: int
+    upload_count: int
+    storage_bytes: int
+
+
+class QuotaResponse(BaseModel):
+    defaults: QuotaValues
+    overrides: QuotaOverrides
+    used: QuotaUsage
+    remaining: QuotaRemaining
+
+
 def _empty_purpose() -> dict[str, int | Decimal]:
     return {
         "event_count": 0,
@@ -72,6 +106,43 @@ def _empty_purpose() -> dict[str, int | Decimal]:
         "estimated_cost": Decimal("0.000000"),
         "usage_unknown_count": 0,
     }
+
+
+@router.get("/quota", response_model=QuotaResponse)
+async def get_quota(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> QuotaResponse:
+    defaults = QuotaDefaults(
+        daily_questions=settings.default_daily_question_limit,
+        daily_uploads=settings.default_daily_upload_limit,
+        storage_bytes=settings.default_storage_bytes_limit,
+    )
+    snapshot = await quota_snapshot(session, user_id=current_user.id, defaults=defaults)
+    quota = await session.get(UserQuota, current_user.id)
+    return QuotaResponse(
+        defaults=QuotaValues(
+            daily_question_limit=defaults.daily_questions,
+            daily_upload_limit=defaults.daily_uploads,
+            storage_bytes_limit=defaults.storage_bytes,
+        ),
+        overrides=QuotaOverrides(
+            daily_question_limit=quota.daily_question_limit if quota else None,
+            daily_upload_limit=quota.daily_upload_limit if quota else None,
+            storage_bytes_limit=quota.storage_bytes_limit if quota else None,
+        ),
+        used=QuotaUsage(
+            question_count=snapshot.question_count,
+            upload_count=snapshot.upload_count,
+            storage_bytes_used=snapshot.storage_bytes_used,
+        ),
+        remaining=QuotaRemaining(
+            question_count=snapshot.question_remaining,
+            upload_count=snapshot.upload_remaining,
+            storage_bytes=snapshot.storage_bytes_remaining,
+        ),
+    )
 
 
 @router.get("/usage", response_model=UsageSummaryResponse)

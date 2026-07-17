@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Annotated
 from uuid import UUID
 
@@ -26,13 +27,32 @@ from app.conversations.service import (
     prepare_conversation_stream,
 )
 from app.core.config import Settings, get_settings
+from app.core.exceptions import AppError
+from app.core.rate_limit import SlidingWindowRateLimiter
 from app.db.models import User
 from app.db.session import get_session, session_factory
+from app.quotas.service import QuotaDefaults, consume_question
 from app.rag.service import RagService
 from app.usage.pricing import ModelPricing
 from app.usage.service import ConversationUsageRecorder
 
 router = APIRouter(prefix="/api/v1", tags=["conversations"])
+_question_limiter: SlidingWindowRateLimiter | None = None
+_question_limiter_config: tuple[int, int] | None = None
+
+
+def _get_question_limiter(settings: Settings) -> SlidingWindowRateLimiter:
+    global _question_limiter, _question_limiter_config
+    config = (
+        settings.question_rate_limit_window_seconds,
+        settings.question_rate_limit_max_requests,
+    )
+    if _question_limiter is None or _question_limiter_config != config:
+        _question_limiter = SlidingWindowRateLimiter(
+            window=timedelta(seconds=config[0]), limit=config[1]
+        )
+        _question_limiter_config = config
+    return _question_limiter
 
 
 async def get_conversation_rag_service(
@@ -135,6 +155,14 @@ async def stream_conversation_message(
     service: Annotated[RagService, Depends(get_conversation_rag_service)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> DisconnectAwareStreamingResponse:
+    if not _get_question_limiter(settings).allow(str(current_user.id)):
+        raise AppError(code="QUESTION_RATE_LIMITED", message="问答请求过于频繁。", status_code=429)
+    defaults = QuotaDefaults(
+        daily_questions=settings.default_daily_question_limit,
+        daily_uploads=settings.default_daily_upload_limit,
+        storage_bytes=settings.default_storage_bytes_limit,
+    )
+    await consume_question(session, user_id=current_user.id, defaults=defaults)
     pricing = ModelPricing(
         cache_hit_input_per_million=settings.chat_cache_hit_input_price_per_million,
         cache_miss_input_per_million=settings.chat_cache_miss_input_price_per_million,
@@ -153,6 +181,7 @@ async def stream_conversation_message(
         answer_max_output_tokens=settings.chat_answer_max_output_tokens,
         answer_top_k=top_k,
         chunk_size=settings.chunk_size,
+        global_cost_limit=settings.global_cost_limit,
     )
     await session.commit()
     state = StreamPersistenceState()
@@ -168,6 +197,7 @@ async def stream_conversation_message(
         rewrite_max_output_tokens=settings.chat_rewrite_max_output_tokens,
         answer_usage_id=prepared.answer_usage_id,
         answer_max_output_tokens=settings.chat_answer_max_output_tokens,
+        global_cost_limit=settings.global_cost_limit,
     )
 
     async def finalize(outcome, error_code: str | None) -> None:

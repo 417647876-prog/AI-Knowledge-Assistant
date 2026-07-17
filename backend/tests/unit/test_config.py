@@ -140,6 +140,27 @@ def test_settings_use_authentication_defaults() -> None:
     assert settings.refresh_cookie_secure is False
 
 
+def test_settings_use_strict_stage_4_quota_and_rate_limit_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.login_rate_limit_window_seconds == 60
+    assert settings.login_rate_limit_max_failures == 5
+    assert settings.question_rate_limit_window_seconds == 60
+    assert settings.question_rate_limit_max_requests == 10
+    assert settings.default_daily_question_limit == 50
+    assert settings.default_daily_upload_limit == 20
+    assert settings.default_storage_bytes_limit == 500 * 1024**2
+    assert settings.quota_timezone == "Asia/Shanghai"
+    assert settings.global_cost_limit == Decimal("20.00")
+
+
+def test_settings_reject_float_global_cost_and_gateway_without_secret() -> None:
+    with pytest.raises(ValidationError, match="float"):
+        Settings(_env_file=None, global_cost_limit=20.0)
+    with pytest.raises(ValidationError, match="共享密钥"):
+        Settings(_env_file=None, trusted_gateway_networks=("10.0.0.0/8",))
+
+
 def test_settings_use_worker_runtime_defaults() -> None:
     settings = Settings(_env_file=None)
 

@@ -1,5 +1,6 @@
 import re
 from collections.abc import Awaitable, Callable
+from ipaddress import ip_address, ip_network
 from uuid import uuid4
 
 from fastapi import Request, Response
@@ -13,6 +14,52 @@ from app.core.request_context import reset_request_id, set_request_id
 from app.core.security import TokenValidationError, decode_access_token
 
 _UPLOAD_PATH = re.compile(r"^/api/v1/knowledge-bases/[^/]+/documents$")
+
+
+def resolve_request_source(
+    *,
+    client_host: str | None,
+    forwarded_for: str | None,
+    gateway_secret: str | None,
+    settings: Settings,
+) -> str:
+    """仅受信 gateway 且密钥匹配时采纳最左侧 X-Forwarded-For。"""
+    direct_source = client_host or "unknown"
+    if not forwarded_for or gateway_secret != settings.gateway_shared_secret:
+        return direct_source
+    try:
+        direct_address = ip_address(direct_source)
+    except ValueError:
+        return direct_source
+    if not any(
+        direct_address in ip_network(network, strict=False)
+        for network in settings.trusted_gateway_networks
+    ):
+        return direct_source
+    candidate = forwarded_for.split(",", 1)[0].strip()
+    try:
+        return str(ip_address(candidate))
+    except ValueError:
+        return direct_source
+
+
+class RequestSourceMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app: ASGIApp, *, settings: Settings) -> None:
+        super().__init__(app)
+        self.settings = settings
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        request.state.request_source = resolve_request_source(
+            client_host=request.client.host if request.client is not None else None,
+            forwarded_for=request.headers.get("X-Forwarded-For"),
+            gateway_secret=request.headers.get("X-Gateway-Secret"),
+            settings=self.settings,
+        )
+        return await call_next(request)
 
 
 class _RequestBodyTooLarge(Exception):

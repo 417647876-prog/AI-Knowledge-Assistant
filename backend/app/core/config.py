@@ -1,10 +1,11 @@
 import socket
 from decimal import Decimal
 from functools import lru_cache
+from ipaddress import ip_network
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -75,6 +76,31 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
         "http://localhost:5173",
     ]
+    login_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
+    login_rate_limit_max_failures: int = Field(default=5, ge=1, le=100)
+    question_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
+    question_rate_limit_max_requests: int = Field(default=10, ge=1, le=1000)
+    default_daily_question_limit: int = Field(default=50, ge=0, le=1_000_000)
+    default_daily_upload_limit: int = Field(default=20, ge=0, le=1_000_000)
+    default_storage_bytes_limit: int = Field(default=500 * 1024**2, ge=0)
+    quota_timezone: str = "Asia/Shanghai"
+    trusted_gateway_networks: tuple[str, ...] = ()
+    gateway_shared_secret: str = ""
+    global_cost_limit: Decimal = Field(default=Decimal("20.00"), ge=0)
+
+    @field_validator("global_cost_limit", mode="before")
+    @classmethod
+    def reject_float_cost(cls, value: object) -> object:
+        if isinstance(value, float):
+            raise ValueError("金额不得使用 float")
+        return value
+
+    @field_validator("trusted_gateway_networks")
+    @classmethod
+    def validate_gateway_networks(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        for value in values:
+            ip_network(value, strict=False)
+        return values
 
     @model_validator(mode="after")
     def validate_chunk_settings(self) -> "Settings":
@@ -101,6 +127,10 @@ class Settings(BaseSettings):
             raise ValueError("worker_heartbeat_seconds 必须小于 job_lease_seconds")
         if any(delay <= 0 for delay in self.job_retry_backoff_seconds):
             raise ValueError("job_retry_backoff_seconds 必须全部大于 0")
+        if self.quota_timezone != "Asia/Shanghai":
+            raise ValueError("quota_timezone 必须为 Asia/Shanghai")
+        if self.trusted_gateway_networks and not self.gateway_shared_secret:
+            raise ValueError("配置 gateway 网络时必须配置共享密钥")
         if self.app_env == "production":
             if self.jwt_secret_key == "development-only-change-me-please-32-chars":
                 raise ValueError("生产环境必须配置 JWT_SECRET_KEY")

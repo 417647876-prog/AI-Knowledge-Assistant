@@ -1,6 +1,7 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
@@ -23,6 +24,7 @@ from app.observations.service import (
     build_answer_observation,
 )
 from app.rag.prompt import estimate_rag_input_token_upper_bound
+from app.quotas.service import reserve_global_cost
 from app.usage.pricing import ModelPricing, calculate_reservation
 from app.usage.service import (
     apply_settlement,
@@ -211,6 +213,7 @@ async def prepare_conversation_stream(
     answer_max_output_tokens: int,
     answer_top_k: int,
     chunk_size: int,
+    global_cost_limit: Decimal | None = None,
 ) -> PreparedConversationStream:
     conversation = await get_owned_conversation(
         session,
@@ -276,6 +279,12 @@ async def prepare_conversation_stream(
         input_tokens=max(answer_input_tokens, strict_input_upper_bound),
         max_output_tokens=answer_max_output_tokens,
     )
+    if global_cost_limit is not None:
+        await reserve_global_cost(
+            session,
+            new_cost=reserved_cost,
+            limit=global_cost_limit,
+        )
     usage = create_usage_reservation(
         user_id=user_id,
         knowledge_base_id=conversation.knowledge_base_id,

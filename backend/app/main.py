@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from app.api.error_handlers import app_error_handler
-from app.api.middleware import RequestIdMiddleware, UploadGuardMiddleware
+from app.api.middleware import RequestIdMiddleware, RequestSourceMiddleware, UploadGuardMiddleware
 from app.api.v1.admin_users import router as admin_users_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.conversations import router as conversation_router
@@ -22,6 +22,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, version="0.1.0")
     app.add_middleware(UploadGuardMiddleware, settings=settings)
+    app.add_middleware(RequestSourceMiddleware, settings=settings)
     app.add_middleware(RequestIdMiddleware)
     app.add_exception_handler(AppError, app_error_handler)  # type: ignore[arg-type]
     app.include_router(health_router)

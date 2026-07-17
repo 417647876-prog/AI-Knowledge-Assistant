@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.contracts import ChatCompletion, ChatUsage
 from app.db.models import LlmUsageEvent
+from app.quotas.service import reserve_global_cost
 from app.usage.pricing import ModelPricing, calculate_cost, calculate_reservation
 
 
@@ -155,6 +156,7 @@ class ConversationUsageRecorder:
         rewrite_max_output_tokens: int,
         answer_usage_id: UUID | None = None,
         answer_max_output_tokens: int = 0,
+        global_cost_limit: Decimal | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._user_id = user_id
@@ -167,6 +169,7 @@ class ConversationUsageRecorder:
         self.rewrite_max_output_tokens = rewrite_max_output_tokens
         self._answer_usage_id = answer_usage_id
         self._answer_max_output_tokens = answer_max_output_tokens
+        self._global_cost_limit = global_cost_limit
         self._rewrite_usage_id: UUID | None = None
 
     async def before_answer_request(self, input_token_upper_bound: int) -> None:
@@ -183,6 +186,14 @@ class ConversationUsageRecorder:
             if event is None or event.status != "reserved":
                 return
             if required_cost > event.reserved_cost:
+                if self._global_cost_limit is not None:
+                    await reserve_global_cost(
+                        session,
+                        new_cost=required_cost,
+                        limit=self._global_cost_limit,
+                        replacing_event_id=event.id,
+                        replacing_cost=event.reserved_cost,
+                    )
                 event.reserved_cost = required_cost
 
     async def before_rewrite_request(self, input_token_upper_bound: int | None = None) -> None:
@@ -194,6 +205,12 @@ class ConversationUsageRecorder:
             max_output_tokens=self.rewrite_max_output_tokens,
         )
         async with self._session_factory.begin() as session:
+            if self._global_cost_limit is not None:
+                await reserve_global_cost(
+                    session,
+                    new_cost=reserved_cost,
+                    limit=self._global_cost_limit,
+                )
             event = create_usage_reservation(
                 user_id=self._user_id,
                 knowledge_base_id=self._knowledge_base_id,
