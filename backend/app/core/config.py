@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     quota_timezone: str = "Asia/Shanghai"
     trusted_gateway_networks: tuple[str, ...] = ()
     gateway_shared_secret: str = ""
+    internal_metrics_key: str = ""
     global_cost_limit: Decimal = Field(default=Decimal("20.00"), ge=0)
 
     @field_validator("global_cost_limit", mode="before")

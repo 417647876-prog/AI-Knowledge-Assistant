@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
-from app.audit.service import record_denied_audit_event
+from app.audit.service import add_audit_event, record_denied_audit_event
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.db.models import KnowledgeBase, User
@@ -51,6 +51,15 @@ async def create_knowledge_base(
         owner_id=current_user.id,
     )
     session.add(knowledge_base)
+    await session.flush()
+    add_audit_event(
+        session,
+        actor_user_id=current_user.id,
+        action="knowledge_base.create",
+        resource_type="knowledge_base",
+        resource_id=knowledge_base.id,
+        result="success",
+    )
     await session.commit()
     return KnowledgeBaseResponse(
         id=str(knowledge_base.id),

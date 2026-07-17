@@ -21,6 +21,7 @@ from app.db.models import (
     DocumentJob,
     KnowledgeBase,
     User,
+    UserQuota,
 )
 from app.db.session import session_factory
 from app.jobs.repository import LeaseLostError, complete_job, fail_job
@@ -65,6 +66,7 @@ async def trash_context() -> AsyncIterator[TrashContext]:
             async with session_factory.begin() as session:
                 await delete_owned_knowledge_bases(session, [user.id])
                 await session.execute(delete(AuditEvent).where(AuditEvent.actor_user_id == user.id))
+                await session.execute(delete(UserQuota).where(UserQuota.user_id == user.id))
                 await session.execute(delete(User).where(User.id == user.id))
 
 

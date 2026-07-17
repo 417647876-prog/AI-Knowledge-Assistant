@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
-from app.audit.service import record_denied_audit_event
+from app.audit.service import add_audit_event, record_denied_audit_event
 from app.authorization.service import (
     get_owned_document,
     get_owned_knowledge_base,
@@ -214,6 +214,15 @@ async def upload_document(
             knowledge_base_id=knowledge_base.id,
             max_attempts=settings.job_max_attempts,
         )
+        add_audit_event(
+            session,
+            actor_user_id=current_user.id,
+            action="document.upload",
+            resource_type="document",
+            resource_id=document.id,
+            result="success",
+            security_summary={"size_bytes": len(content)},
+        )
         await session.commit()
     except Exception:
         await session.rollback()
@@ -305,6 +314,14 @@ async def reprocess_document(
         owner_user_id=knowledge_base.owner_id,
         knowledge_base_id=knowledge_base.id,
         max_attempts=get_settings().job_max_attempts,
+    )
+    add_audit_event(
+        session,
+        actor_user_id=current_user.id,
+        action="document.retry",
+        resource_type="document",
+        resource_id=document.id,
+        result="success",
     )
     await session.commit()
     return _document_response(document, job)

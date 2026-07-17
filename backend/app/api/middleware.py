@@ -1,6 +1,7 @@
 import re
 from collections.abc import Awaitable, Callable
 from ipaddress import ip_address, ip_network
+from time import perf_counter
 from uuid import uuid4
 
 from fastapi import Request, Response
@@ -10,10 +11,26 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import Settings
+from app.core.metrics import metrics_registry
 from app.core.request_context import reset_request_id, set_request_id
 from app.core.security import TokenValidationError, decode_access_token
 
 _UPLOAD_PATH = re.compile(r"^/api/v1/knowledge-bases/[^/]+/documents$")
+
+
+def is_trusted_gateway_request(
+    *, client_host: str | None, gateway_secret: str | None, settings: Settings
+) -> bool:
+    if gateway_secret != settings.gateway_shared_secret or not settings.trusted_gateway_networks:
+        return False
+    try:
+        direct_address = ip_address(client_host or "")
+    except ValueError:
+        return False
+    return any(
+        direct_address in ip_network(network, strict=False)
+        for network in settings.trusted_gateway_networks
+    )
 
 
 def resolve_request_source(
@@ -25,15 +42,8 @@ def resolve_request_source(
 ) -> str:
     """仅受信 gateway 且密钥匹配时采纳最左侧 X-Forwarded-For。"""
     direct_source = client_host or "unknown"
-    if not forwarded_for or gateway_secret != settings.gateway_shared_secret:
-        return direct_source
-    try:
-        direct_address = ip_address(direct_source)
-    except ValueError:
-        return direct_source
-    if not any(
-        direct_address in ip_network(network, strict=False)
-        for network in settings.trusted_gateway_networks
+    if not forwarded_for or not is_trusted_gateway_request(
+        client_host=client_host, gateway_secret=gateway_secret, settings=settings
     ):
         return direct_source
     candidate = forwarded_for.split(",", 1)[0].strip()
@@ -56,6 +66,11 @@ class RequestSourceMiddleware(BaseHTTPMiddleware):
         request.state.request_source = resolve_request_source(
             client_host=request.client.host if request.client is not None else None,
             forwarded_for=request.headers.get("X-Forwarded-For"),
+            gateway_secret=request.headers.get("X-Gateway-Secret"),
+            settings=self.settings,
+        )
+        request.state.via_gateway = is_trusted_gateway_request(
+            client_host=request.client.host if request.client is not None else None,
             gateway_secret=request.headers.get("X-Gateway-Secret"),
             settings=self.settings,
         )
@@ -238,3 +253,25 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             return response
         finally:
             reset_request_id(token)
+
+
+class MetricsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        started = perf_counter()
+        status_code = 500
+        is_sse = False
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            is_sse = response.headers.get("content-type", "").startswith("text/event-stream")
+            return response
+        finally:
+            metrics_registry.record_api_request(
+                status_code=status_code,
+                duration_ms=(perf_counter() - started) * 1000,
+                is_sse=is_sse,
+            )

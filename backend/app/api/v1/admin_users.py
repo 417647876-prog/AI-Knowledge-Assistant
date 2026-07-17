@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.api.auth_dependencies import require_admin
+from app.audit.service import add_audit_event
 from app.auth.schemas import CurrentUserResponse
 from app.auth.service import AuthService
 from app.core.config import Settings, get_settings
@@ -85,7 +86,7 @@ async def list_users(
 )
 async def create_user(
     payload: AdminUserCreate,
-    _admin: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AdminUserResponse:
     normalized_username = payload.username.strip().lower()
@@ -100,8 +101,17 @@ async def create_user(
         role=payload.role,
         is_active=True,
     )
-    session.add(user)
     try:
+        session.add(user)
+        await session.flush()
+        add_audit_event(
+            session,
+            actor_user_id=admin.id,
+            action="user.create",
+            resource_type="user",
+            resource_id=user.id,
+            result="success",
+        )
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
@@ -135,7 +145,7 @@ async def get_user_quota(
 async def update_user_quota(
     user_id: UUID,
     payload: AdminQuotaUpdate,
-    _admin: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AdminQuotaResponse:
     await _get_quota_target(session, user_id)
@@ -145,6 +155,14 @@ async def update_user_quota(
         session.add(quota)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(quota, field, value)
+    add_audit_event(
+        session,
+        actor_user_id=admin.id,
+        action="quota.update",
+        resource_type="user",
+        resource_id=user_id,
+        result="success",
+    )
     await session.commit()
     await session.refresh(quota)
     return AdminQuotaResponse(
@@ -208,6 +226,14 @@ async def update_user(
             session=session,
             settings=settings,
         ).revoke_all_for_user_in_transaction(target.id)
+    add_audit_event(
+        session,
+        actor_user_id=admin.id,
+        action="user.disable" if payload.is_active is False else "user.update",
+        resource_type="user",
+        resource_id=target.id,
+        result="success",
+    )
     await session.commit()
     await session.refresh(target)
     return AdminUserResponse.model_validate(target)
