@@ -79,7 +79,11 @@ def test_production_compose_is_internal_gateway_architecture() -> None:
     gateway = services["gateway"]
     assert gateway["ports"] == ["127.0.0.1:8080:80"]
     assert gateway["read_only"] is True
-    assert _depends_on(gateway, "api", "service_started")
+    assert _depends_on(gateway, "api", "service_healthy")
+    assert gateway["healthcheck"]["test"] == [
+        "CMD-SHELL",
+        "wget -q -O /dev/null http://127.0.0.1/ && wget -q -O /dev/null http://127.0.0.1/api/ready",
+    ]
 
 
 def test_development_compose_only_starts_persistent_postgres() -> None:
@@ -120,7 +124,7 @@ def test_gateway_secret_uses_a_scoped_runtime_template_and_gateway_network() -> 
     assert gateway["networks"] == {"gateway_api": {"ipv4_address": "172.28.0.10"}}
     assert services["api"]["networks"] == ["default", "gateway_api"]
     assert services["api"]["environment"]["TRUSTED_GATEWAY_NETWORKS"] == (
-        "${TRUSTED_GATEWAY_NETWORKS:-172.28.0.10/32}"
+        '${TRUSTED_GATEWAY_NETWORKS:-["172.28.0.10/32"]}'
     )
     assert compose["networks"]["gateway_api"] == {
         "internal": True,
@@ -133,6 +137,20 @@ def test_gateway_secret_uses_a_scoped_runtime_template_and_gateway_network() -> 
         in dockerfile
     )
     assert "COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf" not in dockerfile
+
+
+def test_production_settings_load_compose_gateway_network_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("JWT_SECRET_KEY", "x" * 64)
+    monkeypatch.setenv("REFRESH_COOKIE_SECURE", "true")
+    monkeypatch.setenv("GATEWAY_SHARED_SECRET", "gateway-secret" * 4)
+    monkeypatch.setenv("TRUSTED_GATEWAY_NETWORKS", '["172.28.0.10/32"]')
+
+    settings = Settings(_env_file=None)
+
+    assert settings.trusted_gateway_networks == ("172.28.0.10/32",)
 
 
 def test_env_example_only_contains_placeholders() -> None:

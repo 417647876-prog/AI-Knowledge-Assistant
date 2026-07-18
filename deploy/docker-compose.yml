@@ -34,7 +34,7 @@ services:
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       CHAT_API_KEY: ${CHAT_API_KEY:-}
       REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-true}
-      TRUSTED_GATEWAY_NETWORKS: ${TRUSTED_GATEWAY_NETWORKS:-172.28.0.10/32}
+      TRUSTED_GATEWAY_NETWORKS: '${TRUSTED_GATEWAY_NETWORKS:-["172.28.0.10/32"]}'
     command: ["uv", "run", "alembic", "upgrade", "head"]
     depends_on:
       postgres:
@@ -98,7 +98,7 @@ services:
       dockerfile: frontend/Dockerfile
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     environment:
       GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:-}
       NGINX_ENVSUBST_FILTER: GATEWAY_SHARED_SECRET
@@ -113,7 +113,7 @@ services:
       - /var/cache/nginx
       - /var/run
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ && wget -q -O /dev/null http://127.0.0.1/api/ready"]
       interval: 10s
       timeout: 5s
       retries: 6
