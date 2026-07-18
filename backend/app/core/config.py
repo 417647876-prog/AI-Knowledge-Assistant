@@ -132,8 +132,7 @@ class Settings(BaseSettings):
         if self.quota_timezone != "Asia/Shanghai":
             raise ValueError("quota_timezone 必须为 Asia/Shanghai")
         if self.trusted_gateway_networks and (
-            not self.gateway_shared_secret
-            or self.gateway_shared_secret.startswith("REPLACE_WITH_")
+            not self.gateway_shared_secret or self.gateway_shared_secret.startswith("REPLACE_WITH_")
         ):
             raise ValueError("配置 gateway 网络时必须配置共享密钥")
         if self.app_env == "production":

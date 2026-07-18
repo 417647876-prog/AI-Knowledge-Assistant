@@ -23,8 +23,8 @@ from app.observations.service import (
     ObservationMetrics,
     build_answer_observation,
 )
-from app.rag.prompt import estimate_rag_input_token_upper_bound
 from app.quotas.service import reserve_global_cost
+from app.rag.prompt import estimate_rag_input_token_upper_bound
 from app.usage.pricing import ModelPricing, calculate_reservation
 from app.usage.service import (
     apply_settlement,

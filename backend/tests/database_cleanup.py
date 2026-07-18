@@ -10,6 +10,7 @@ from app.db.models import (
     DocumentJob,
     KnowledgeBase,
     SupportAccessGrant,
+    UserQuota,
 )
 
 
@@ -34,3 +35,4 @@ async def delete_owned_knowledge_bases(session: AsyncSession, owner_ids: Iterabl
         delete(Document).where(Document.knowledge_base_id.in_(knowledge_base_ids))
     )
     await session.execute(delete(KnowledgeBase).where(KnowledgeBase.id.in_(knowledge_base_ids)))
+    await session.execute(delete(UserQuota).where(UserQuota.user_id.in_(owner_ids)))

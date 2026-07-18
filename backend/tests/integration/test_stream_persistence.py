@@ -34,6 +34,7 @@ from app.db.models import (
     KnowledgeBase,
     LlmUsageEvent,
     User,
+    UserQuota,
 )
 from app.db.session import session_factory
 from app.main import create_app
@@ -134,6 +135,7 @@ async def stream_resources() -> AsyncIterator[tuple[User, KnowledgeBase]]:
             )
             await session.execute(delete(Conversation).where(Conversation.id.in_(conversation_ids)))
             await session.execute(delete(LlmUsageEvent).where(LlmUsageEvent.user_id == user.id))
+            await session.execute(delete(UserQuota).where(UserQuota.user_id == user.id))
             await session.execute(
                 delete(KnowledgeBase).where(KnowledgeBase.id == knowledge_base.id)
             )

@@ -18,6 +18,8 @@ _SAFE_SUMMARY_WORDS = {
     "grant_unavailable",
     "read_only",
     "INVALID_CREDENTIALS",
+    "PURGE_PATH_INVALID",
+    "PURGE_RETENTION_ACTIVE",
 }
 
 

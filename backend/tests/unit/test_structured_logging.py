@@ -158,6 +158,30 @@ def test_audit_summary_rejects_client_text_even_when_uppercase() -> None:
     assert captured[0].security_summary == {"size_bytes": 3}
 
 
+def test_audit_summary_keeps_known_purge_denial_codes() -> None:
+    captured = []
+
+    class CapturingSession:
+        def add(self, event: object) -> None:
+            captured.append(event)
+
+    for reason in ("PURGE_PATH_INVALID", "PURGE_RETENTION_ACTIVE"):
+        add_audit_event(
+            CapturingSession(),  # type: ignore[arg-type]
+            actor_user_id=None,
+            action="document.purge",
+            resource_type="document",
+            resource_id=None,
+            result="denied",
+            security_summary={"reason": reason},
+        )
+
+    assert [event.security_summary for event in captured] == [
+        {"reason": "PURGE_PATH_INVALID"},
+        {"reason": "PURGE_RETENTION_ACTIVE"},
+    ]
+
+
 def test_non_exception_message_and_args_never_emit_sensitive_values() -> None:
     formatter = StructuredFormatter(production=True)
     password = "correct horse battery staple"

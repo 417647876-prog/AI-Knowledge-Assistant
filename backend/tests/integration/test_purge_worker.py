@@ -743,6 +743,7 @@ async def test_purge_rejects_root_internal_symlink_without_touching_any_resource
             denied = await session.scalar(
                 select(AuditEvent).where(
                     AuditEvent.resource_id == resource_id,
+                    AuditEvent.action == f"{resource_type}.purge",
                     AuditEvent.result == "denied",
                 )
             )
