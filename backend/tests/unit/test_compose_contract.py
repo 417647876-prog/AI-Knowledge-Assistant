@@ -94,16 +94,45 @@ def test_development_compose_only_starts_persistent_postgres() -> None:
 
 
 def test_gateway_sse_and_spa_contract_is_explicit() -> None:
-    nginx = (PROJECT_DIRECTORY / "deploy" / "nginx.conf").read_text(encoding="utf-8")
+    nginx = (PROJECT_DIRECTORY / "deploy" / "nginx.conf.template").read_text(encoding="utf-8")
 
     assert "location /api/" in nginx
     assert "proxy_pass http://api:8000" in nginx
     assert "proxy_http_version 1.1" in nginx
     assert "proxy_buffering off" in nginx
     assert "proxy_read_timeout 3600s" in nginx
+    assert 'proxy_set_header X-Gateway-Secret "${GATEWAY_SHARED_SECRET}"' in nginx
+    assert "$host" in nginx
     assert "location /internal" not in nginx
     assert "try_files $uri $uri/ /index.html" in nginx
     assert "client_max_body_size 21m" in nginx
+
+
+def test_gateway_secret_uses_a_scoped_runtime_template_and_gateway_network() -> None:
+    compose = _load_compose("docker-compose.yml")
+    services = compose["services"]
+    gateway = services["gateway"]
+
+    assert gateway["environment"] == {
+        "GATEWAY_SHARED_SECRET": "${GATEWAY_SHARED_SECRET:-}",
+        "NGINX_ENVSUBST_FILTER": "GATEWAY_SHARED_SECRET",
+    }
+    assert gateway["networks"] == {"gateway_api": {"ipv4_address": "172.28.0.10"}}
+    assert services["api"]["networks"] == ["default", "gateway_api"]
+    assert services["api"]["environment"]["TRUSTED_GATEWAY_NETWORKS"] == (
+        "${TRUSTED_GATEWAY_NETWORKS:-172.28.0.10/32}"
+    )
+    assert compose["networks"]["gateway_api"] == {
+        "internal": True,
+        "ipam": {"config": [{"subnet": "172.28.0.0/24"}]},
+    }
+
+    dockerfile = (PROJECT_DIRECTORY / "frontend" / "Dockerfile").read_text(encoding="utf-8")
+    assert (
+        "COPY deploy/nginx.conf.template /etc/nginx/templates/default.conf.template"
+        in dockerfile
+    )
+    assert "COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf" not in dockerfile
 
 
 def test_env_example_only_contains_placeholders() -> None:
@@ -153,6 +182,19 @@ def test_production_settings_reject_blank_or_placeholder_jwt_secret(secret: str)
             app_env="production",
             jwt_secret_key=secret,
             refresh_cookie_secure=True,
+        )
+
+
+@pytest.mark.parametrize("secret", ["", "REPLACE_WITH_A_RANDOM_GATEWAY_SECRET"])
+def test_production_settings_reject_blank_or_placeholder_gateway_secret(secret: str) -> None:
+    with pytest.raises(ValidationError, match="共享密钥"):
+        Settings(
+            _env_file=None,
+            app_env="production",
+            jwt_secret_key="x" * 64,
+            refresh_cookie_secure=True,
+            trusted_gateway_networks=("172.28.0.10/32",),
+            gateway_shared_secret=secret,
         )
 
 

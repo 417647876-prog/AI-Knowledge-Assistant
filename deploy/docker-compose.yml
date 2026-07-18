@@ -34,6 +34,7 @@ services:
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       CHAT_API_KEY: ${CHAT_API_KEY:-}
       REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-true}
+      TRUSTED_GATEWAY_NETWORKS: ${TRUSTED_GATEWAY_NETWORKS:-172.28.0.10/32}
     command: ["uv", "run", "alembic", "upgrade", "head"]
     depends_on:
       postgres:
@@ -55,6 +56,9 @@ services:
     volumes:
       - knowledge_uploads:/app/uploads
       - knowledge_hf_cache:/home/app/.cache/huggingface
+    networks:
+      - default
+      - gateway_api
     read_only: true
     tmpfs:
       - /tmp
@@ -95,10 +99,17 @@ services:
     depends_on:
       api:
         condition: service_started
+    environment:
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:-}
+      NGINX_ENVSUBST_FILTER: GATEWAY_SHARED_SECRET
+    networks:
+      gateway_api:
+        ipv4_address: 172.28.0.10
     ports:
       - "127.0.0.1:8080:80"
     read_only: true
     tmpfs:
+      - /etc/nginx/conf.d
       - /var/cache/nginx
       - /var/run
     healthcheck:
@@ -111,3 +122,10 @@ volumes:
   knowledge_postgres_data:
   knowledge_uploads:
   knowledge_hf_cache:
+
+networks:
+  gateway_api:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
