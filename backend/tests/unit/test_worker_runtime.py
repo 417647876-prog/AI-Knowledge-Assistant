@@ -538,6 +538,34 @@ async def test_empty_worker_loop_waits_poll_interval_and_stops(
 
 
 @pytest.mark.asyncio
+async def test_worker_loop_retries_after_temporary_database_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = asyncio.Event()
+    iteration = AsyncMock(side_effect=[SQLAlchemyError("database unavailable"), False])
+    monkeypatch.setattr(worker_main, "run_worker_iteration", iteration)
+    waits: list[float] = []
+
+    async def stop_after_recovery(_stop: asyncio.Event, seconds: float) -> bool:
+        waits.append(seconds)
+        if len(waits) == 2:
+            stop.set()
+        return stop.is_set()
+
+    await worker_main.run_worker(
+        session_factory=_SessionFactory(),
+        settings=Settings(_env_file=None),
+        worker_id="worker-a",
+        process_job=AsyncMock(),
+        stop_event=stop,
+        wait_for_stop=stop_after_recovery,
+    )
+
+    assert iteration.await_count == 2
+    assert waits == [2, 2]
+
+
+@pytest.mark.asyncio
 async def test_health_check_uses_own_worker_heartbeat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

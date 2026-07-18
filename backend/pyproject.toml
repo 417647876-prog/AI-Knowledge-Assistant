@@ -34,6 +34,7 @@ addopts = "-ra"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
+  "docker: requires an already-running stage 4 Docker Compose and explicit opt-in",
   "integration: requires PostgreSQL + pgvector",
 ]
 

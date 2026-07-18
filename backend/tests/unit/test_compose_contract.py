@@ -149,8 +149,7 @@ def test_gateway_secret_uses_a_scoped_runtime_template_and_gateway_network() -> 
 
     dockerfile = (PROJECT_DIRECTORY / "frontend" / "Dockerfile").read_text(encoding="utf-8")
     assert (
-        "COPY deploy/nginx.conf.template /etc/nginx/templates/default.conf.template"
-        in dockerfile
+        "COPY deploy/nginx.conf.template /etc/nginx/templates/default.conf.template" in dockerfile
     )
     assert "COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf" not in dockerfile
 
@@ -200,6 +199,15 @@ def test_backend_runtime_image_exposes_virtual_environment_commands_on_path() ->
     runtime_stage = dockerfile.split("FROM python:3.12-slim AS runtime", maxsplit=1)[1]
 
     assert 'ENV PATH="/app/.venv/bin:${PATH}"' in runtime_stage
+
+
+def test_backend_runtime_image_includes_only_safe_admin_cli_script() -> None:
+    dockerfile = (BACKEND_DIRECTORY / "Dockerfile").read_text(encoding="utf-8")
+
+    assert (
+        "COPY backend/scripts/__init__.py backend/scripts/create_admin.py ./scripts/" in dockerfile
+    )
+    assert "COPY backend/scripts ./scripts" not in dockerfile
 
 
 def test_root_build_context_has_ignore_rules_for_generated_and_secret_files() -> None:

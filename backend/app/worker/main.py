@@ -245,12 +245,20 @@ async def run_worker(
     wait_for_stop: WaitForStop = _wait_for_stop,
 ) -> None:
     while not stop_event.is_set():
-        processed = await run_worker_iteration(
-            session_factory=session_factory,
-            settings=settings,
-            worker_id=worker_id,
-            process_job=process_job,
-        )
+        try:
+            processed = await run_worker_iteration(
+                session_factory=session_factory,
+                settings=settings,
+                worker_id=worker_id,
+                process_job=process_job,
+            )
+        except SQLAlchemyError as error:
+            logger.warning(
+                "Worker 数据库暂时不可用，等待后重试",
+                extra={"error_type": type(error).__name__},
+            )
+            await wait_for_stop(stop_event, settings.worker_poll_seconds)
+            continue
         if not processed:
             await wait_for_stop(stop_event, settings.worker_poll_seconds)
 

@@ -196,7 +196,7 @@ SHA-256，便于判断一组报告是否完整且同源。
 
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
-docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.dev.yml up -d
 Set-Location backend
 uv sync --dev
 $env:APP_ENV = "development"
@@ -232,7 +232,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
-docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.dev.yml up -d
 Set-Location backend
 uv run alembic upgrade head
 uv run python -m scripts.create_admin --username admin
@@ -280,6 +280,60 @@ Remove-Variable securePassword
 ```
 
 脚本先验证公开健康接口，再登录并验证 `/auth/me`，随后创建临时知识库、上传、轮询、问答，最后退出。账号密码只从当前进程环境读取；脚本不会输出密码、Access Token 或 Refresh Token。失败时返回非零退出码并显示脱敏的状态码、错误码和 request ID。
+
+## 阶段 4 完整容器演示
+
+开发模式只需要 PostgreSQL 时使用 `deploy/docker-compose.dev.yml`；它会把数据库端口暴露给本机后端。完整演示使用 `deploy/docker-compose.yml`，由 gateway 同源提供前端和 `/api`，API、Worker、PostgreSQL 与内部指标均不直接映射到宿主机。
+
+先复制本地配置并手工替换占位值，`deploy/.env` 已被 Git 忽略，禁止提交：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Copy-Item deploy/.env.example deploy/.env
+notepad deploy/.env
+docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml ps
+docker compose -f deploy/docker-compose.yml exec api python -m scripts.create_admin --username stage4-admin
+```
+
+本机 HTTP 演示仅可在回环地址使用 `APP_ENV=development`、`REFRESH_COOKIE_SECURE=false` 和精确的 `TRUSTED_ORIGINS=["http://127.0.0.1:8080"]`。`JWT_SECRET_KEY` 与 `GATEWAY_SHARED_SECRET` 必须使用互不相同的随机高强度值；模型 Key 只放在本地环境文件。正式 HTTPS 环境必须改回 `APP_ENV=production`、`REFRESH_COOKIE_SECURE=true` 和实际 HTTPS Origin。
+
+完整演示只访问以下宿主入口：
+
+- 页面与 gateway 健康检查：<http://127.0.0.1:8080/>、<http://127.0.0.1:8080/health>
+- 经过 gateway 的后端就绪检查：<http://127.0.0.1:8080/api/ready>
+
+`create_admin` 会在容器终端中安全提示输入密码。验收凭据只通过当前 PowerShell 环境传入，脚本不会输出密码、Token、API Key、文档正文、问题全文或回答全文：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Set-Location backend
+$env:STAGE4_VERIFY_USERNAME = "stage4-admin"
+$securePassword = Read-Host "阶段4测试账号密码" -AsSecureString
+$env:STAGE4_VERIFY_PASSWORD = [System.Net.NetworkCredential]::new("", $securePassword).Password
+uv run python -m scripts.verify_stage4_compose --base-url http://127.0.0.1:8080
+Remove-Item Env:STAGE4_VERIFY_PASSWORD
+Remove-Item Env:STAGE4_VERIFY_USERNAME
+Remove-Variable securePassword
+```
+
+普通测试不会启动、停止或重启容器。真实重启测试必须在完整 Compose 已健康且物理可用内存不少于 2 GiB 时，显式设置 `RUN_DOCKER_TESTS=1` 并单独串行执行；它会重启 Worker、API、PostgreSQL 和 gateway。
+
+```powershell
+$env:RUN_DOCKER_TESTS = "1"
+uv run pytest tests/docker/test_container_restart_recovery.py -q
+Remove-Item Env:RUN_DOCKER_TESTS
+```
+
+停止但保留数据卷使用：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+docker compose -f deploy/docker-compose.yml down
+docker volume ls
+```
+
+逻辑卷为 `knowledge_postgres_data`、`knowledge_uploads` 和 `knowledge_hf_cache`，Docker 实际名称会带 Compose 项目前缀。只有确认不再需要数据库、上传文件和模型缓存时才可执行 `down -v`；该命令会删除数据，不能作为普通停止命令。
 
 ## 部署与手机访问边界
 

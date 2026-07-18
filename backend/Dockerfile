@@ -17,6 +17,9 @@ COPY backend/migrations ./migrations
 COPY backend/alembic.ini ./alembic.ini
 RUN uv sync --frozen --no-dev
 
+# 镜像只携带安全创建管理员所需的 CLI，不打包重置数据或评测脚本。
+COPY backend/scripts/__init__.py backend/scripts/create_admin.py ./scripts/
+
 FROM python:3.12-slim AS runtime
 
 WORKDIR /app

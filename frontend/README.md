@@ -10,7 +10,7 @@
 
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
-docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.dev.yml up -d
 Set-Location backend
 $env:APP_ENV = "development"
 uv sync --dev
@@ -56,6 +56,10 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 生产环境应由同一个 HTTPS 域名提供前端静态文件，并把 `/api` 反向代理到内部 FastAPI。后端必须使用随机高强度 `JWT_SECRET_KEY`、`REFRESH_COOKIE_SECURE=true` 和精确的 `TRUSTED_ORIGINS`。PostgreSQL、Vite、Uvicorn 端口不能直接暴露公网。
 
 默认命令只监听 `127.0.0.1`，因此手机不能远程访问。局域网访问需要额外评估绑定地址、防火墙、HTTPS 与可信 Origin；公网部署还需要正式的反向代理、证书、密钥管理和运维加固。本阶段文档不承诺开发服务器适合公网使用。
+
+阶段 4 的完整容器演示不再单独启动 Vite：从仓库根目录执行 `docker compose -f deploy/docker-compose.yml up -d --build`，浏览器只访问 <http://127.0.0.1:8080>。gateway 健康与后端就绪入口分别是 `/health` 和 `/api/ready`，API、Worker、PostgreSQL 不对宿主机暴露端口。开发模式仍使用 `deploy/docker-compose.dev.yml` 启动 PostgreSQL，再由本机 Vite 和 Uvicorn 提供热更新。
+
+完整环境变量、安全边界、验收脚本、停止命令和数据卷说明见[阶段 4 前端与容器使用说明](前端使用说明.md)。当前阶段只完成本机回环地址容器验收，不表示阶段 5 公网访问已经完成。
 
 ## 前端验证
 
