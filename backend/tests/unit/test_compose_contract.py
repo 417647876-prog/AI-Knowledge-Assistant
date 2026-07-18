@@ -99,6 +99,9 @@ def test_development_compose_only_starts_persistent_postgres() -> None:
 
 def test_gateway_sse_and_spa_contract_is_explicit() -> None:
     nginx = (PROJECT_DIRECTORY / "deploy" / "nginx.conf.template").read_text(encoding="utf-8")
+    ready_location = nginx.split("location = /api/ready {", maxsplit=1)[1].split(
+        "\n    }\n", maxsplit=1
+    )[0]
 
     assert "location /api/" in nginx
     assert "proxy_pass http://api:8000" in nginx
@@ -106,6 +109,8 @@ def test_gateway_sse_and_spa_contract_is_explicit() -> None:
     assert "proxy_buffering off" in nginx
     assert "proxy_read_timeout 3600s" in nginx
     assert 'proxy_set_header X-Gateway-Secret "${GATEWAY_SHARED_SECRET}"' in nginx
+    assert "proxy_pass http://api:8000/ready;" in ready_location
+    assert 'proxy_set_header X-Gateway-Secret "${GATEWAY_SHARED_SECRET}";' in ready_location
     assert "$host" in nginx
     assert "location /internal" not in nginx
     assert "try_files $uri $uri/ /index.html" in nginx
@@ -125,6 +130,9 @@ def test_gateway_secret_uses_a_scoped_runtime_template_and_gateway_network() -> 
     assert services["api"]["networks"] == ["default", "gateway_api"]
     assert services["api"]["environment"]["TRUSTED_GATEWAY_NETWORKS"] == (
         '${TRUSTED_GATEWAY_NETWORKS:-["172.28.0.10/32"]}'
+    )
+    assert services["api"]["environment"]["TRUSTED_ORIGINS"] == (
+        '${TRUSTED_ORIGINS:-["https://knowledge.example.com"]}'
     )
     assert compose["networks"]["gateway_api"] == {
         "internal": True,
@@ -147,10 +155,29 @@ def test_production_settings_load_compose_gateway_network_from_environment(
     monkeypatch.setenv("REFRESH_COOKIE_SECURE", "true")
     monkeypatch.setenv("GATEWAY_SHARED_SECRET", "gateway-secret" * 4)
     monkeypatch.setenv("TRUSTED_GATEWAY_NETWORKS", '["172.28.0.10/32"]')
+    monkeypatch.setenv("TRUSTED_ORIGINS", '["https://app.example.com"]')
 
     settings = Settings(_env_file=None)
 
     assert settings.trusted_gateway_networks == ("172.28.0.10/32",)
+    assert settings.trusted_origins == ["https://app.example.com"]
+
+
+@pytest.mark.parametrize(
+    "origins",
+    [["*"], ["http://127.0.0.1:8080"], ["https://*.example.com"], ["https://app.example.com/path"]],
+)
+def test_production_settings_require_exact_https_trusted_origins(origins: list[str]) -> None:
+    with pytest.raises(ValidationError, match="TRUSTED_ORIGINS"):
+        Settings(
+            _env_file=None,
+            app_env="production",
+            jwt_secret_key="x" * 64,
+            refresh_cookie_secure=True,
+            trusted_gateway_networks=("172.28.0.10/32",),
+            gateway_shared_secret="gateway-secret" * 4,
+            trusted_origins=origins,
+        )
 
 
 def test_env_example_only_contains_placeholders() -> None:

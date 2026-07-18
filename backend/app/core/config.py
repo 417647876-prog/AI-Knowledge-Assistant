@@ -4,6 +4,7 @@ from functools import lru_cache
 from ipaddress import ip_network
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -144,7 +145,24 @@ class Settings(BaseSettings):
                 raise ValueError("生产环境必须配置 JWT_SECRET_KEY")
             if not self.refresh_cookie_secure:
                 raise ValueError("生产环境必须启用 REFRESH_COOKIE_SECURE")
+        if self.app_env == "production" and (
+            not self.trusted_origins
+            or any(not _is_exact_https_origin(origin) for origin in self.trusted_origins)
+        ):
+            raise ValueError("Production requires exact HTTPS TRUSTED_ORIGINS")
         return self
+
+
+def _is_exact_https_origin(origin: str) -> bool:
+    parsed = urlsplit(origin)
+    return (
+        parsed.scheme == "https"
+        and bool(parsed.netloc)
+        and not parsed.path
+        and not parsed.query
+        and not parsed.fragment
+        and "*" not in origin
+    )
 
 
 @lru_cache
