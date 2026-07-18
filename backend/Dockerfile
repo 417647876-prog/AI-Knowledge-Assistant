@@ -1,3 +1,5 @@
+FROM ghcr.io/astral-sh/uv:0.9.18 AS uv
+
 FROM python:3.12-slim AS builder
 
 WORKDIR /app
@@ -23,6 +25,7 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/home/app/.cache/huggingface
 
+COPY --from=uv /uv /uvx /bin/
 RUN groupadd --system app && useradd --system --gid app --create-home app
 COPY --from=builder --chown=app:app /app /app
 RUN mkdir -p /app/uploads /home/app/.cache/huggingface \

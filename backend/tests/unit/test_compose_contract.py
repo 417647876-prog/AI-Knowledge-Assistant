@@ -104,3 +104,10 @@ def test_env_example_only_contains_placeholders() -> None:
 
     assert "sk-" not in environment
     assert "REPLACE_WITH" in environment
+
+
+def test_backend_runtime_image_contains_uv_for_compose_commands() -> None:
+    dockerfile = (BACKEND_DIRECTORY / "Dockerfile").read_text(encoding="utf-8")
+    runtime_stage = dockerfile.split("FROM python:3.12-slim AS runtime", maxsplit=1)[1]
+
+    assert "COPY --from=uv /uv /uvx /bin/" in runtime_stage
