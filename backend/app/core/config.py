@@ -133,7 +133,11 @@ class Settings(BaseSettings):
         if self.trusted_gateway_networks and not self.gateway_shared_secret:
             raise ValueError("配置 gateway 网络时必须配置共享密钥")
         if self.app_env == "production":
-            if self.jwt_secret_key == "development-only-change-me-please-32-chars":
+            if (
+                not self.jwt_secret_key
+                or self.jwt_secret_key == "development-only-change-me-please-32-chars"
+                or self.jwt_secret_key.startswith("REPLACE_WITH_")
+            ):
                 raise ValueError("生产环境必须配置 JWT_SECRET_KEY")
             if not self.refresh_cookie_secure:
                 raise ValueError("生产环境必须启用 REFRESH_COOKIE_SECURE")

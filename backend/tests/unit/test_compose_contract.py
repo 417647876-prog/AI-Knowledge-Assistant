@@ -1,6 +1,13 @@
 from pathlib import Path
 
+import pytest
 import yaml
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from pydantic import ValidationError
+
+from app.api.v1.health import expected_migration_revision
+from app.core.config import Settings
 
 BACKEND_DIRECTORY = Path(__file__).resolve().parents[2]
 PROJECT_DIRECTORY = BACKEND_DIRECTORY.parent
@@ -111,3 +118,47 @@ def test_backend_runtime_image_contains_uv_for_compose_commands() -> None:
     runtime_stage = dockerfile.split("FROM python:3.12-slim AS runtime", maxsplit=1)[1]
 
     assert "COPY --from=uv /uv /uvx /bin/" in runtime_stage
+
+
+def test_root_build_context_has_ignore_rules_for_generated_and_secret_files() -> None:
+    dockerignore = (PROJECT_DIRECTORY / ".dockerignore").read_text(encoding="utf-8")
+
+    for ignored_path in ("**/node_modules", "**/dist", "**/.env", "**/.venv"):
+        assert ignored_path in dockerignore
+
+
+def test_backend_compose_injects_example_settings_with_safe_defaults() -> None:
+    compose = _load_compose("docker-compose.yml")
+
+    for name in ("migrate", "api", "worker"):
+        service = compose["services"][name]
+        assert service["env_file"] == [{"path": ".env", "required": False}]
+        environment = service["environment"]
+        assert environment["APP_ENV"] == "${APP_ENV:-production}"
+        assert environment["REFRESH_COOKIE_SECURE"] == "${REFRESH_COOKIE_SECURE:-true}"
+        for variable in (
+            "JWT_SECRET_KEY",
+            "GATEWAY_SHARED_SECRET",
+            "EMBEDDING_API_KEY",
+            "CHAT_API_KEY",
+        ):
+            assert environment[variable] == f"${{{variable}:-}}"
+
+
+@pytest.mark.parametrize("secret", ["", "REPLACE_WITH_A_RANDOM_32_CHAR_SECRET"])
+def test_production_settings_reject_blank_or_placeholder_jwt_secret(secret: str) -> None:
+    with pytest.raises(ValidationError, match="JWT_SECRET_KEY"):
+        Settings(
+            _env_file=None,
+            app_env="production",
+            jwt_secret_key=secret,
+            refresh_cookie_secure=True,
+        )
+
+
+def test_expected_migration_revision_matches_alembic_head() -> None:
+    config = Config(str(BACKEND_DIRECTORY / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIRECTORY / "migrations"))
+
+    assert config.get_main_option("path_separator") == "os"
+    assert expected_migration_revision() == ScriptDirectory.from_config(config).get_current_head()

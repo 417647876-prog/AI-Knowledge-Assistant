@@ -1,5 +1,9 @@
+from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, Literal
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -13,8 +17,6 @@ from app.db.session import get_session
 
 router = APIRouter(tags=["health"])
 
-CURRENT_MIGRATION_REVISION = "20260716_08"
-
 
 class HealthResponse(BaseModel):
     status: Literal["ok"]
@@ -25,6 +27,17 @@ class ReadyResponse(BaseModel):
     status: Literal["ready"]
 
 
+@lru_cache
+def expected_migration_revision() -> str:
+    project_directory = Path(__file__).resolve().parents[3]
+    config = Config(str(project_directory / "alembic.ini"))
+    config.set_main_option("script_location", str(project_directory / "migrations"))
+    head = ScriptDirectory.from_config(config).get_current_head()
+    if head is None:
+        raise RuntimeError("Alembic migration head is not configured")
+    return head
+
+
 async def migrations_are_current(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> bool:
@@ -33,7 +46,7 @@ async def migrations_are_current(
         result = await session.execute(text("SELECT version_num FROM alembic_version"))
     except SQLAlchemyError:
         return False
-    return result.scalar_one_or_none() == CURRENT_MIGRATION_REVISION
+    return result.scalar_one_or_none() == expected_migration_revision()
 
 
 @router.get("/health", response_model=HealthResponse)
