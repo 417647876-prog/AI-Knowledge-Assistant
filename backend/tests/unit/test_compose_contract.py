@@ -54,7 +54,7 @@ def test_production_compose_is_internal_gateway_architecture() -> None:
     ]
 
     migrate = services["migrate"]
-    assert migrate["command"] == ["uv", "run", "alembic", "upgrade", "head"]
+    assert migrate["command"] == ["alembic", "upgrade", "head"]
     assert _depends_on(migrate, "postgres", "service_healthy")
 
     for name in ("api", "worker"):
@@ -65,8 +65,6 @@ def test_production_compose_is_internal_gateway_architecture() -> None:
         assert {"/app/uploads", "/home/app/.cache/huggingface"} <= _volume_targets(service)
 
     assert services["api"]["command"] == [
-        "uv",
-        "run",
         "uvicorn",
         "app.main:app",
         "--host",
@@ -74,7 +72,7 @@ def test_production_compose_is_internal_gateway_architecture() -> None:
         "--port",
         "8000",
     ]
-    assert services["worker"]["command"] == ["uv", "run", "python", "-m", "app.worker.main"]
+    assert services["worker"]["command"] == ["python", "-m", "app.worker.main"]
 
     gateway = services["gateway"]
     assert gateway["ports"] == ["127.0.0.1:8080:80"]
@@ -82,7 +80,7 @@ def test_production_compose_is_internal_gateway_architecture() -> None:
     assert _depends_on(gateway, "api", "service_healthy")
     assert gateway["healthcheck"]["test"] == [
         "CMD-SHELL",
-        "wget -q -O /dev/null http://127.0.0.1/ && wget -q -O /dev/null http://127.0.0.1/api/ready",
+        "wget -q -O /dev/null http://127.0.0.1/health && wget -q -O /dev/null http://127.0.0.1/api/ready",
     ]
 
 
@@ -109,10 +107,16 @@ def test_gateway_sse_and_spa_contract_is_explicit() -> None:
     assert "proxy_buffering off" in nginx
     assert "proxy_read_timeout 3600s" in nginx
     assert 'proxy_set_header X-Gateway-Secret "${GATEWAY_SHARED_SECRET}"' in nginx
+    assert nginx.count("proxy_set_header X-Forwarded-For $remote_addr;") == 2
+    assert "$proxy_add_x_forwarded_for" not in nginx
     assert "proxy_pass http://api:8000/ready;" in ready_location
     assert 'proxy_set_header X-Gateway-Secret "${GATEWAY_SHARED_SECRET}";' in ready_location
     assert "$host" in nginx
     assert "location /internal" not in nginx
+    assert "location = /health" in nginx
+    assert 'return 200 \'{"status":"healthy"}\'' in nginx
+    assert "root /usr/share/nginx/html" in nginx
+    assert "index index.html" in nginx
     assert "try_files $uri $uri/ /index.html" in nginx
     assert "client_max_body_size 21m" in nginx
 
@@ -126,7 +130,10 @@ def test_gateway_secret_uses_a_scoped_runtime_template_and_gateway_network() -> 
         "GATEWAY_SHARED_SECRET": "${GATEWAY_SHARED_SECRET:-}",
         "NGINX_ENVSUBST_FILTER": "GATEWAY_SHARED_SECRET",
     }
-    assert gateway["networks"] == {"gateway_api": {"ipv4_address": "172.28.0.10"}}
+    assert gateway["networks"] == {
+        "gateway_public": None,
+        "gateway_api": {"ipv4_address": "172.28.0.10"},
+    }
     assert services["api"]["networks"] == ["default", "gateway_api"]
     assert services["api"]["environment"]["TRUSTED_GATEWAY_NETWORKS"] == (
         '${TRUSTED_GATEWAY_NETWORKS:-["172.28.0.10/32"]}'
@@ -134,6 +141,7 @@ def test_gateway_secret_uses_a_scoped_runtime_template_and_gateway_network() -> 
     assert services["api"]["environment"]["TRUSTED_ORIGINS"] == (
         '${TRUSTED_ORIGINS:-["https://knowledge.example.com"]}'
     )
+    assert compose["networks"]["gateway_public"] is None
     assert compose["networks"]["gateway_api"] == {
         "internal": True,
         "ipam": {"config": [{"subnet": "172.28.0.0/24"}]},
@@ -187,11 +195,11 @@ def test_env_example_only_contains_placeholders() -> None:
     assert "REPLACE_WITH" in environment
 
 
-def test_backend_runtime_image_contains_uv_for_compose_commands() -> None:
+def test_backend_runtime_image_exposes_virtual_environment_commands_on_path() -> None:
     dockerfile = (BACKEND_DIRECTORY / "Dockerfile").read_text(encoding="utf-8")
     runtime_stage = dockerfile.split("FROM python:3.12-slim AS runtime", maxsplit=1)[1]
 
-    assert "COPY --from=uv /uv /uvx /bin/" in runtime_stage
+    assert 'ENV PATH="/app/.venv/bin:${PATH}"' in runtime_stage
 
 
 def test_root_build_context_has_ignore_rules_for_generated_and_secret_files() -> None:

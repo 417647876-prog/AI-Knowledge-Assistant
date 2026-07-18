@@ -36,7 +36,7 @@ services:
       REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-true}
       TRUSTED_GATEWAY_NETWORKS: '${TRUSTED_GATEWAY_NETWORKS:-["172.28.0.10/32"]}'
       TRUSTED_ORIGINS: '${TRUSTED_ORIGINS:-["https://knowledge.example.com"]}'
-    command: ["uv", "run", "alembic", "upgrade", "head"]
+    command: ["alembic", "upgrade", "head"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,7 +50,7 @@ services:
       dockerfile: backend/Dockerfile
     env_file: *backend_env_file
     environment: *backend_environment
-    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -64,7 +64,7 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD", "uv", "run", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health')"]
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -76,7 +76,7 @@ services:
       dockerfile: backend/Dockerfile
     env_file: *backend_env_file
     environment: *backend_environment
-    command: ["uv", "run", "python", "-m", "app.worker.main"]
+    command: ["python", "-m", "app.worker.main"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -87,7 +87,7 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD", "uv", "run", "python", "-m", "app.worker.health", "--max-age-seconds", "60"]
+      test: ["CMD", "python", "-m", "app.worker.health", "--max-age-seconds", "60"]
       interval: 15s
       timeout: 5s
       retries: 4
@@ -104,6 +104,7 @@ services:
       GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:-}
       NGINX_ENVSUBST_FILTER: GATEWAY_SHARED_SECRET
     networks:
+      gateway_public:
       gateway_api:
         ipv4_address: 172.28.0.10
     ports:
@@ -114,7 +115,7 @@ services:
       - /var/cache/nginx
       - /var/run
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ && wget -q -O /dev/null http://127.0.0.1/api/ready"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health && wget -q -O /dev/null http://127.0.0.1/api/ready"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -125,6 +126,7 @@ volumes:
   knowledge_hf_cache:
 
 networks:
+  gateway_public:
   gateway_api:
     internal: true
     ipam:

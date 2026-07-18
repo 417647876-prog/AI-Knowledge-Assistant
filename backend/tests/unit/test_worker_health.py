@@ -11,8 +11,6 @@ def test_worker_compose_healthcheck_uses_task2_heartbeat_command() -> None:
 
     assert compose["services"]["worker"]["healthcheck"]["test"] == [
         "CMD",
-        "uv",
-        "run",
         "python",
         "-m",
         "app.worker.health",

@@ -27,7 +27,7 @@ uv run pytest tests/unit/test_compose_contract.py tests/unit/test_worker_health.
 
 ```powershell
 uv run pytest tests/unit/test_compose_contract.py tests/unit/test_worker_health.py tests/unit/test_health_api.py tests/unit/test_ready_api.py -q
-# 10 passed in 1.69s
+# 24 passed（Task 14 最终聚焦回归）
 ```
 
 质量检查通过：
@@ -37,34 +37,40 @@ uv run ruff check app/api/v1/health.py tests/unit/test_compose_contract.py tests
 git diff --check
 ```
 
-## Docker 验证
+## Docker 运行验收
 
-Docker 操作前只读检查资源：物理内存 `15.93 GiB`，D 盘可用 `13.05 GiB`，均大于 2 GiB。
+2026-07-18 最终运行门已通过。排查确认早期 BuildKit I/O 失败来自 C 盘写满和 Docker VHDX 只读挂载，而不是仓库代码。只清理未使用的 BuildKit 缓存，并在完整 SHA-256 校验后将 Docker 数据盘迁移到 G 盘；构建期间用临时 `.wslconfig` 将 WSL 内存限制为 6 GiB、交换文件放到 D 盘，物理可用内存始终高于 2 GiB 门槛。
 
-两份编排均成功解析：
+镜像顺序构建结果：
 
-```powershell
-docker compose -f deploy/docker-compose.yml config
-docker compose -f deploy/docker-compose.dev.yml config
-```
+- `deploy-api:latest`：成功，镜像大小 8.76 GB；最终续建耗时 6 分 01 秒。
+- `deploy-worker:latest`：成功，复用后端层，耗时 7.4 秒。
+- `deploy-gateway:latest`：成功；`npm ci` 审计 0 vulnerabilities，`vue-tsc` 和 Vite 生产构建成功。Vite 仍有 1,185.96 kB 单 chunk 性能警告，不影响本 Task 运行门。
 
-生产 Compose 解析结果确认：API、Worker、PostgreSQL 无宿主端口，唯一宿主端口为 gateway 的 `127.0.0.1:8080:80`；开发 Compose 仅有 PostgreSQL 的 `5432:5432`。
+真实启动暴露出并修复了三项仅静态测试无法发现的问题：
 
-镜像构建命令已按要求执行：
+1. 只读根文件系统下 `uv run` 会尝试写缓存并同步开发依赖，Compose 改为直接使用镜像 PATH 中的 `alembic`、`uvicorn` 和 `python`。
+2. Nginx 模板覆盖默认配置后缺少静态目录 `root`，补充 `/usr/share/nginx/html`、`index.html` 和显式 JSON `/health`。
+3. gateway 只连接 internal 网络时 Docker Desktop 不建立宿主端口转发，新增仅 gateway 使用的公共 bridge；gateway 与 API 仍只共同连接固定 `172.28.0.0/24` 内部网络，gateway 地址保持 `172.28.0.10`。
 
-```powershell
-docker compose -f deploy/docker-compose.yml build api worker gateway
-```
-
-构建未能开始，原因是本机 Docker Desktop Linux 引擎未运行：
+最终 `docker compose up -d` 验收证据：
 
 ```text
-open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified
+postgres.health=healthy
+api.health=healthy
+worker.health=healthy
+gateway.health=healthy
+migrate.exit=0
+GET http://127.0.0.1:8080/health -> 200 {"status":"healthy"}
+GET http://127.0.0.1:8080/api/ready -> 200 {"status":"ready"}
+container api /ready -> 200 {"status":"ready"}
+container worker health -> exit 0
 ```
 
-因此未启动任何容器、未创建本次卷，也没有可停止的本次容器。没有执行 Task 15 的重启或持久化验收。
+端口绑定检查中，PostgreSQL、migrate、API、Worker 均为 `{}`；gateway 唯一绑定为 `127.0.0.1:8080 -> 80/tcp`。验收结束后执行了不带 `-v` 的 `docker compose down`，容器和网络均已移除，`deploy_knowledge_postgres_data`、`deploy_knowledge_uploads`、`deploy_knowledge_hf_cache` 三个卷保留。
 
 ## 限制与后续
 
-- Docker Desktop 启动后，应顺序重跑上述 build，再执行 `docker compose -f deploy/docker-compose.yml up -d` 验证 gateway 暴露、容器内 `/ready` 和 Worker health，最后 `docker compose -f deploy/docker-compose.yml down`（不带 `-v`，保留卷）。
 - `CURRENT_MIGRATION_REVISION` 与当前迁移 head `20260716_08` 对齐；后续新增迁移时必须同步更新该常量及对应测试。
+- 前端单 chunk 警告留待后续性能优化，不阻塞 Task 14。
+- Task 15 负责更深的登录、上传、SSE、重启恢复和持久化验收，本报告不提前声称这些场景已通过。
