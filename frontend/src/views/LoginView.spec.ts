@@ -16,6 +16,28 @@ import type { AuthSession } from '../types/api'
 import LoginView from './LoginView.vue'
 
 describe('LoginView', () => {
+  it('为手机键盘和密码管理器提供稳定的表单语义', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const auth = useAuthStore()
+    auth.initialized = true
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/login')
+    await router.isReady()
+    const wrapper = mount(LoginView, {
+      global: { plugins: [pinia, router, ElementPlus] },
+    })
+
+    const username = wrapper.get('[data-test="login-username"]')
+    const password = wrapper.get('[data-test="login-password"]')
+    expect(username.attributes()).toMatchObject({
+      name: 'username', autocomplete: 'username', autocapitalize: 'none', inputmode: 'text',
+    })
+    expect(password.attributes()).toMatchObject({
+      name: 'password', autocomplete: 'current-password', autocapitalize: 'none', inputmode: 'text',
+    })
+  })
+
   it('提交用户名和密码后登录并进入工作台', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -38,7 +60,7 @@ describe('LoginView', () => {
     await flushPromises()
 
     expect(login).toHaveBeenCalledWith('alice', 'correct-secret')
-    expect(router.currentRoute.value.fullPath).toBe('/')
+    await vi.waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/'))
   })
 
   it('登录失败时显示后端通用错误消息并留在登录页', async () => {
@@ -99,7 +121,7 @@ describe('LoginView', () => {
     await flushPromises()
 
     expect(login).toHaveBeenCalledOnce()
-    expect(wrapper.get('button').classes()).not.toContain('is-loading')
-    expect(router.currentRoute.value.fullPath).toBe('/')
+    await vi.waitFor(() => expect(wrapper.get('button').classes()).not.toContain('is-loading'))
+    await vi.waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/'))
   })
 })

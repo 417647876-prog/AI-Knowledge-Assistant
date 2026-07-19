@@ -44,7 +44,7 @@ describe('AppHeader', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('管理员')
-    expect(router.currentRoute.value.fullPath).toBe('/admin/users')
+    await vi.waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/admin/users'))
   })
 
   it('退出后调用认证状态清理并返回登录页', async () => {
@@ -68,6 +68,6 @@ describe('AppHeader', () => {
     await flushPromises()
 
     expect(logout).toHaveBeenCalledOnce()
-    expect(router.currentRoute.value.fullPath).toBe('/login')
+    await vi.waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/login'))
   })
 })

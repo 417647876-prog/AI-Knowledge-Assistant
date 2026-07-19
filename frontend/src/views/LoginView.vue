@@ -30,17 +30,34 @@ async function submit() {
     <section class="login-card workspace-card">
       <h1>登录 AI 知识库助手</h1>
       <form @submit.prevent="submit">
-        <p v-if="loginError" data-test="login-error" class="login-error">
+        <p v-if="loginError" data-test="login-error" class="login-error" role="alert">
           {{ loginError }}
         </p>
         <el-form-item label="用户名">
-          <el-input v-model="form.username" autocomplete="username" />
+          <el-input
+            v-model="form.username"
+            data-test="login-username"
+            name="username"
+            autocomplete="username"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
+            inputmode="text"
+            enterkeyhint="next"
+          />
         </el-form-item>
         <el-form-item label="密码">
           <el-input
             v-model="form.password"
+            data-test="login-password"
+            name="password"
             type="password"
             autocomplete="current-password"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
+            inputmode="text"
+            enterkeyhint="go"
           />
         </el-form-item>
         <el-button native-type="submit" type="primary" :loading="submitting">
