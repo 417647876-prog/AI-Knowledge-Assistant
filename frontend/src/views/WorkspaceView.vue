@@ -42,7 +42,9 @@ watch(() => store.activeKnowledgeBaseId, (knowledgeBaseId) => {
 watch(
   [() => auth.user?.id, () => store.activeKnowledgeBaseId],
   ([userId, knowledgeBaseId]) => {
-    if (userId && knowledgeBaseId) conversations.activate(userId, knowledgeBaseId)
+    if (userId && knowledgeBaseId) {
+      void conversations.activate(userId, knowledgeBaseId).catch(() => undefined)
+    }
   },
   { immediate: true },
 )

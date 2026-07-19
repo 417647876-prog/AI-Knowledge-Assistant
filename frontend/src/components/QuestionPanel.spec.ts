@@ -62,8 +62,8 @@ describe('QuestionPanel', () => {
 
   it('可新建分隔会话，并在确认后清空全部历史', async () => {
     const conversations = useConversationsStore()
-    const newConversation = vi.spyOn(conversations, 'newConversation')
-    const clear = vi.spyOn(conversations, 'clear')
+    const newConversation = vi.spyOn(conversations, 'newConversation').mockResolvedValue()
+    const clear = vi.spyOn(conversations, 'clear').mockResolvedValue()
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({ action: 'confirm' } as never)
     const wrapper = mountPanel()
 

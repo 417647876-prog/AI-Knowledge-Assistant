@@ -3,6 +3,10 @@ import type { ConversationHistory, QuestionStreamEvent } from '../types/conversa
 import { ApiError, apiRequest, authenticatedFetch } from './client'
 import { parseSse } from './sse'
 
+export function isAbortError(error: unknown): error is DOMException {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
 export const askQuestion = (knowledgeBaseId: string, question: string, topK = 5) =>
   apiRequest<QuestionResponse>(`/api/v1/knowledge-bases/${knowledgeBaseId}/questions`, {
     method: 'POST',

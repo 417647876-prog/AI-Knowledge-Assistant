@@ -26,7 +26,7 @@ describe('WorkspaceView', () => {
     store.activeKnowledgeBaseId = 'kb-1'
     const loadKnowledgeBases = vi.spyOn(store, 'loadKnowledgeBases').mockResolvedValue()
     const loadDocuments = vi.spyOn(store, 'loadDocuments').mockResolvedValue()
-    const activate = vi.spyOn(useConversationsStore(), 'activate')
+    const activate = vi.spyOn(useConversationsStore(), 'activate').mockResolvedValue()
 
     const wrapper = mount(WorkspaceView, { global: { plugins: [pinia, ElementPlus] } })
     await flushPromises()
@@ -51,7 +51,7 @@ describe('WorkspaceView', () => {
     const store = useWorkspaceStore()
     store.activeKnowledgeBaseId = 'kb-1'
     vi.spyOn(store, 'loadKnowledgeBases').mockResolvedValue()
-    const activate = vi.spyOn(useConversationsStore(), 'activate')
+    const activate = vi.spyOn(useConversationsStore(), 'activate').mockResolvedValue()
 
     mount(WorkspaceView, { global: { plugins: [pinia, ElementPlus] } })
     await flushPromises()

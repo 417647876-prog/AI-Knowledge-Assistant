@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { streamQuestion } from './questions'
+import { isAbortError, streamQuestion } from './questions'
 
 function responseOf(content: string): Response {
   const bytes = new TextEncoder().encode(content)
@@ -20,6 +20,11 @@ async function read(content: string) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('streamQuestion', () => {
+  it('保留 AbortError 供 Store 区分用户停止与网络失败', () => {
+    expect(isAbortError(new DOMException('aborted', 'AbortError'))).toBe(true)
+    expect(isAbortError(new Error('offline'))).toBe(false)
+  })
+
   it('logs unknown events and continues yielding known events', async () => {
     const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined)
     const events = await read(

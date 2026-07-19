@@ -36,9 +36,17 @@ async function clearHistory() {
       '清空历史',
       { type: 'warning' },
     )
-    conversations.clear()
+    await conversations.clear()
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
+    ElMessage.error(formatApiError(error))
+  }
+}
+
+async function startNewConversation() {
+  try {
+    await conversations.newConversation()
+  } catch (error) {
     ElMessage.error(formatApiError(error))
   }
 }
@@ -47,10 +55,22 @@ async function clearHistory() {
 <template>
   <section class="question-panel">
     <div class="question-toolbar">
-      <el-button data-test="new-conversation" @click="conversations.newConversation">
+      <el-button
+        data-test="new-conversation"
+        :loading="conversations.creating"
+        :disabled="conversations.creating || conversations.clearing || (conversations.submitting && !conversations.isStreaming)"
+        @click="startNewConversation"
+      >
         新建会话
       </el-button>
-      <el-button data-test="clear-conversation" @click="clearHistory">清空历史</el-button>
+      <el-button
+        data-test="clear-conversation"
+        :loading="conversations.clearing"
+        :disabled="conversations.creating || conversations.submitting || conversations.isStreaming || conversations.clearing"
+        @click="clearHistory"
+      >
+        清空历史
+      </el-button>
     </div>
     <ConversationTimeline :messages="conversations.messages" @retry="conversations.retry" />
     <el-input
@@ -65,7 +85,8 @@ async function clearHistory() {
       <el-button
         data-test="submit-question"
         type="primary"
-        :disabled="!auth.user?.id || !workspace.activeKnowledgeBaseId"
+        :loading="conversations.submitting && !conversations.isStreaming"
+        :disabled="!auth.user?.id || !workspace.activeKnowledgeBaseId || (conversations.submitting && !conversations.isStreaming) || conversations.clearing"
         @click="submitOrStop"
       >
         {{ conversations.isStreaming ? '停止' : '提问' }}

@@ -76,4 +76,24 @@ describe('服务端会话 API', () => {
       retry_of_message_id: 'message-1', top_k: 6,
     })
   })
+
+  it('发送新问题消息，并在缺少终态事件时明确报告流中断', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(streamResponse(
+      'event: token\ndata: {"delta":"半段"}\n\n',
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const consume = async () => {
+      for await (const _event of streamConversationMessage(
+        'conversation-1',
+        { question: '新问题' },
+        new AbortController().signal,
+      )) { /* 消费到传输结束。 */ }
+    }
+
+    await expect(consume()).rejects.toMatchObject({ code: 'STREAM_INTERRUPTED' })
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string)).toEqual({
+      question: '新问题',
+    })
+  })
 })
