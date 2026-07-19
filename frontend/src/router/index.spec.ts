@@ -5,6 +5,16 @@ import { useAuthStore } from '../stores/auth'
 import { createAppRouter } from './index'
 
 describe('router guards', () => {
+  it('业务视图使用动态导入，避免首屏打包全部页面', () => {
+    setActivePinia(createPinia())
+    const router = createAppRouter(createMemoryHistory())
+
+    for (const path of ['/', '/admin/users', '/forbidden']) {
+      const route = router.getRoutes().find((item) => item.path === path)
+      expect(route?.components?.default).toBeTypeOf('function')
+    }
+  })
+
   it('匿名用户访问工作台时跳转到登录页', async () => {
     setActivePinia(createPinia())
     const auth = useAuthStore()
