@@ -39,6 +39,27 @@ class SupportGrantResponse(BaseModel):
     last_used_at: datetime | None
 
 
+class SupportAdministratorResponse(BaseModel):
+    id: UUID
+    username: str
+
+
+@router.get("/api/v1/support-administrators", response_model=list[SupportAdministratorResponse])
+async def list_support_administrators(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> list[SupportAdministratorResponse]:
+    administrators = await session.scalars(
+        select(User)
+        .where(User.role == ADMIN_ROLE, User.is_active.is_(True))
+        .order_by(User.username, User.id)
+    )
+    return [
+        SupportAdministratorResponse(id=administrator.id, username=administrator.username)
+        for administrator in administrators
+    ]
+
+
 async def _audit_management_denial(
     *,
     current_user: User,

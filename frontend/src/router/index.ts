@@ -13,9 +13,15 @@ const routes = [
   },
   {
     path: '/',
-    component: () => import('../views/WorkspaceView.vue'),
+    component: () => import('../views/KnowledgeBasesView.vue'),
     meta: { requiresAuth: true },
   },
+  {
+    path: '/knowledge-bases/:knowledgeBaseId/documents',
+    component: () => import('../views/DocumentsView.vue'),
+    meta: { requiresAuth: true },
+  },
+  { path: '/trash', component: () => import('../views/TrashView.vue'), meta: { requiresAuth: true } },
   {
     path: '/admin/users',
     component: () => import('../views/AdminUsersView.vue'),

@@ -13,7 +13,12 @@ import {
   restoreTrashDocument,
   restoreTrashKnowledgeBase,
 } from './trash'
-import { createSupportGrant, listSupportGrants, revokeSupportGrant } from './supportGrants'
+import {
+  createSupportGrant,
+  listSupportAdministrators,
+  listSupportGrants,
+  revokeSupportGrant,
+} from './supportGrants'
 import {
   getOperationsJobs,
   getOperationsOverview,
@@ -62,6 +67,7 @@ describe('阶段 5 普通用户客户端', () => {
       .mockResolvedValueOnce(jsonResponse({ job_id: 'job-kb', status: 'pending' }, 202))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(jsonResponse({ job_id: 'job-doc', status: 'pending' }, 202))
+      .mockResolvedValueOnce(jsonResponse([{ id: 'admin-1', username: 'support' }]))
       .mockResolvedValueOnce(jsonResponse({ id: 'grant-1' }, 201))
       .mockResolvedValueOnce(jsonResponse([]))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
@@ -72,6 +78,7 @@ describe('阶段 5 普通用户客户端', () => {
     await purgeTrashKnowledgeBase('kb-1')
     await restoreTrashDocument('doc-1')
     await purgeTrashDocument('doc-1')
+    await listSupportAdministrators()
     await createSupportGrant('kb-1', { admin_user_id: 'admin-1', expires_in_minutes: 30 })
     await listSupportGrants('kb-1')
     await revokeSupportGrant('grant-1')
@@ -82,6 +89,7 @@ describe('阶段 5 普通用户客户端', () => {
       ['/api/v1/knowledge-bases/kb-1/purge', 'DELETE'],
       ['/api/v1/documents/doc-1/restore', 'POST'],
       ['/api/v1/documents/doc-1/purge', 'DELETE'],
+      ['/api/v1/support-administrators', undefined],
       ['/api/v1/knowledge-bases/kb-1/support-grants', 'POST'],
       ['/api/v1/knowledge-bases/kb-1/support-grants', undefined],
       ['/api/v1/support-grants/grant-1', 'DELETE'],

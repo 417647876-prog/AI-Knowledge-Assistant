@@ -33,6 +33,18 @@ class _FailingSession:
         raise self.error
 
 
+class _AdministratorSession:
+    def __init__(self) -> None:
+        self.statement = None
+
+    async def scalars(self, statement):
+        self.statement = statement
+        return [
+            SimpleNamespace(id=uuid4(), username="support_a"),
+            SimpleNamespace(id=uuid4(), username="support_b"),
+        ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error",
@@ -78,3 +90,17 @@ async def test_create_grant_does_not_disguise_unrelated_database_errors_as_confl
         )
 
     assert raised.value is error
+
+
+@pytest.mark.asyncio
+async def test_list_support_administrators_returns_only_minimal_identity_fields() -> None:
+    session = _AdministratorSession()
+
+    result = await support_grants.list_support_administrators(
+        session=session,
+        _current_user=SimpleNamespace(id=uuid4()),
+    )
+
+    assert [item.username for item in result] == ["support_a", "support_b"]
+    assert all(set(item.model_dump()) == {"id", "username"} for item in result)
+    assert session.statement is not None

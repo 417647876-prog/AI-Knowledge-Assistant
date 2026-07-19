@@ -1,4 +1,4 @@
-import type { SupportGrant } from '../types/api'
+import type { SupportAdministrator, SupportGrant } from '../types/api'
 import { apiRequest } from './client'
 
 export interface SupportGrantInput {
@@ -7,6 +7,9 @@ export interface SupportGrantInput {
 }
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
+
+export const listSupportAdministrators = () =>
+  apiRequest<SupportAdministrator[]>('/api/v1/support-administrators')
 
 export function createSupportGrant(
   knowledgeBaseId: string,

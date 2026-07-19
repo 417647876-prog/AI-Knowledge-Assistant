@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
 import { formatApiError } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 import { useWorkspaceStore } from '../stores/workspace'
 
 const auth = useAuthStore()
 const store = useWorkspaceStore()
+const router = useRouter()
 const dialogVisible = ref(false)
 const submitting = ref(false)
 const form = reactive({ name: '', description: '' })
@@ -24,6 +26,11 @@ async function submit() {
     ElMessage.error(formatApiError(error))
   } finally { submitting.value = false }
 }
+
+function selectKnowledgeBase(knowledgeBaseId: string) {
+  store.selectKnowledgeBase(knowledgeBaseId)
+  void router.push(`/knowledge-bases/${knowledgeBaseId}/documents`)
+}
 </script>
 
 <template>
@@ -37,7 +44,7 @@ async function submit() {
 
     <el-menu
       :default-active="store.activeKnowledgeBaseId ?? undefined"
-      @select="store.selectKnowledgeBase"
+      @select="selectKnowledgeBase"
     >
       <el-menu-item v-for="item in store.knowledgeBases" :key="item.id" :index="item.id">
         <span class="knowledge-base-label">

@@ -190,6 +190,11 @@ export interface SupportGrant {
   last_used_at: string | null
 }
 
+export interface SupportAdministrator {
+  id: string
+  username: string
+}
+
 export interface OperationsOverview {
   account_total: number
   active_account_total: number

@@ -37,6 +37,7 @@ async function logout(): Promise<void> {
     >
       工作台
     </router-link>
+    <router-link to="/trash" class="mobile-navigation-link" :aria-current="isCurrent('/trash') ? 'page' : undefined">回收站</router-link>
     <router-link
       v-if="auth.isAdmin"
       to="/admin/users"

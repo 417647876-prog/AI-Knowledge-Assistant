@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
+import { createMemoryHistory } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../api/knowledgeBases', () => ({
@@ -14,6 +15,7 @@ import { ApiError } from '../api/client'
 import { createKnowledgeBase } from '../api/knowledgeBases'
 import { useAuthStore } from '../stores/auth'
 import { useWorkspaceStore } from '../stores/workspace'
+import { createAppRouter } from '../router'
 import KnowledgeBaseSidebar from './KnowledgeBaseSidebar.vue'
 
 describe('KnowledgeBaseSidebar', () => {
@@ -21,9 +23,10 @@ describe('KnowledgeBaseSidebar', () => {
   afterEach(() => document.body.replaceChildren())
 
   function mountSidebar() {
+    const router = createAppRouter(createMemoryHistory())
     return mount(KnowledgeBaseSidebar, {
       attachTo: document.body,
-      global: { plugins: [ElementPlus], stubs: { teleport: true } },
+      global: { plugins: [ElementPlus, router], stubs: { teleport: true } },
     })
   }
 
