@@ -35,6 +35,41 @@ def test_cmd_launchers_delegate_to_powershell_and_preserve_exit_code() -> None:
         assert "exit /b %EXIT_CODE%" in content
 
 
+def test_start_script_guards_prerequisites_and_waits_for_api_ready() -> None:
+    content = _read(START_SCRIPT)
+
+    for required in (
+        "[switch]$Build",
+        "ReadyTimeoutSeconds = 180",
+        "FreePhysicalMemory",
+        "2MB",
+        "deploy/.env",
+        "docker desktop --help",
+        "docker desktop start",
+        "docker info",
+        "--build",
+        "/api/ready",
+        "StatusCode -eq 200",
+        "Start-Process",
+    ):
+        assert required in content
+    assert "/health" not in content
+
+
+def test_start_script_does_not_read_or_print_credentials() -> None:
+    content = _read(START_SCRIPT).lower()
+
+    for forbidden in (
+        "get-content",
+        "jwt_secret_key",
+        "gateway_shared_secret",
+        "chat_api_key",
+        "embedding_api_key",
+        "initial_admin_password",
+    ):
+        assert forbidden not in content
+
+
 @pytest.mark.skipif(os.name != "nt", reason="CMD 启动器仅在 Windows 上执行")
 @pytest.mark.parametrize(
     ("source_cmd", "script_name", "exit_code"),
