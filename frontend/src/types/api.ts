@@ -32,7 +32,7 @@ export interface DocumentListResponse {
 }
 export interface Citation {
   citation_id: number; document_id: string; file_name: string; content: string
-  relevance_score: number; page_number: number | null; sheet_name: string | null
+  relevance_score: number | null; page_number: number | null; sheet_name: string | null
   row_start: number | null; section_title: string | null
 }
 export interface QuestionResponse {

@@ -514,4 +514,186 @@ describe('服务端会话 Store', () => {
       'message-kb-2-user', 'message-kb-2-answer',
     ])
   })
+
+  it('建流前断网且服务端不存在消息时可用原问题手动重新生成', async () => {
+    let detailCall = 0
+    const completed = detail('conversation-1', [
+      message('message-user-retry', 1, 'user', '问题'),
+      message('message-assistant-retry', 2, 'assistant', '恢复后的回答'),
+    ])
+    vi.mocked(getConversation).mockImplementation(async () => {
+      detailCall += 1
+      return detailCall <= 7 ? detail('conversation-1') : completed
+    })
+    vi.mocked(streamConversationMessage)
+      .mockImplementationOnce(async function* () {
+        throw new TypeError('network unavailable before response')
+      })
+      .mockReturnValueOnce(events(done('request-after-network-recovery')))
+    const store = useConversationsStore()
+    await store.activate('u-1', 'kb-1')
+
+    await store.submit('问题')
+    const interrupted = last(store.messages)
+    expect(interrupted).toMatchObject({
+      id: expect.stringMatching(/^pending:/), status: 'interrupted', retryMode: 'question',
+    })
+
+    await store.retry(interrupted!.id)
+
+    expect(streamConversationMessage).toHaveBeenCalledTimes(2)
+    expect(last(store.messages)).toMatchObject({
+      id: 'message-assistant-retry', status: 'completed', content: '恢复后的回答',
+    })
+  })
+
+  it('服务端仍在结算时手动重新生成会给出明确提示且不重复请求', async () => {
+    vi.mocked(streamConversationMessage).mockImplementation(async function* () {
+      yield { event: 'token', data: { delta: '部分回答' } }
+      throw new TypeError('network stream closed')
+    })
+    const streaming = detail('conversation-1', [
+      message('message-user-1', 1, 'user', '问题'),
+      message('message-assistant-1', 2, 'assistant', '部分回答', {
+        status: 'streaming', completed_at: null, finish_reason: null,
+      }),
+    ])
+    vi.mocked(getConversation)
+      .mockResolvedValueOnce(detail('conversation-1'))
+      .mockResolvedValue(streaming)
+    const store = useConversationsStore()
+    await store.activate('u-1', 'kb-1')
+    await store.submit('问题')
+    const interrupted = last(store.messages)
+
+    await expect(store.retry(interrupted!.id)).rejects.toThrow('回答仍在服务端处理中')
+    expect(streamConversationMessage).toHaveBeenCalledOnce()
+  })
+
+  it('服务端从处理中转为中断后使用服务端消息 ID 重新生成', async () => {
+    const streaming = detail('conversation-1', [
+      message('message-user-1', 1, 'user', '问题'),
+      message('message-assistant-old', 2, 'assistant', '部分回答', {
+        status: 'streaming', completed_at: null, finish_reason: null,
+      }),
+    ])
+    const interrupted = detail('conversation-1', [
+      message('message-user-1', 1, 'user', '问题'),
+      message('message-assistant-old', 2, 'assistant', '部分回答', {
+        status: 'interrupted', error_code: 'CLIENT_DISCONNECTED', finish_reason: null,
+      }),
+    ])
+    const retried = detail('conversation-1', [
+      ...interrupted.messages,
+      message('message-assistant-new', 3, 'assistant', '重新生成成功', {
+        retry_of_message_id: 'message-assistant-old',
+      }),
+    ])
+    let detailCall = 0
+    vi.mocked(getConversation).mockImplementation(async () => {
+      detailCall += 1
+      if (detailCall === 1) return detail('conversation-1')
+      if (detailCall <= 7) return streaming
+      if (detailCall === 8) return interrupted
+      return retried
+    })
+    vi.mocked(streamConversationMessage)
+      .mockImplementationOnce(async function* () {
+        yield { event: 'token', data: { delta: '部分回答' } }
+        throw new TypeError('network stream closed')
+      })
+      .mockReturnValueOnce(events(done('request-retried')))
+    const store = useConversationsStore()
+    await store.activate('u-1', 'kb-1')
+    await store.submit('问题')
+    const pendingAnswerId = last(store.messages)!.id
+
+    await expect(store.retry(pendingAnswerId)).rejects.toThrow('回答仍在服务端处理中')
+    await store.retry(pendingAnswerId)
+
+    expect(streamConversationMessage).toHaveBeenLastCalledWith(
+      'conversation-1', { retry_of_message_id: 'message-assistant-old' },
+      expect.any(AbortSignal),
+    )
+    expect(last(store.messages)).toMatchObject({
+      id: 'message-assistant-new', status: 'completed', content: '重新生成成功',
+    })
+  })
+
+  it('历史引用快照字段不完整时会规范化为安全占位值', async () => {
+    vi.mocked(getConversation).mockResolvedValue(detail('conversation-1', [
+      message('message-user-1', 1, 'user', '问题'),
+      message('message-assistant-1', 2, 'assistant', '回答', {
+        citations_snapshot: [{ citation_id: 3, file_name: '简版快照.md' }],
+      }),
+    ]))
+    const store = useConversationsStore()
+
+    await store.activate('u-1', 'kb-1')
+
+    expect(last(store.messages)).toMatchObject({
+      citations: [{
+        citation_id: 3,
+        file_name: '简版快照.md',
+        content: '引用快照正文不可用。',
+        relevance_score: null,
+      }],
+    })
+  })
+
+  it('会话详情切换失败时恢复原活动会话和消息', async () => {
+    const originalMessages = [
+      message('message-user-1', 1, 'user', '原问题'),
+      message('message-assistant-1', 2, 'assistant', '原回答'),
+    ]
+    vi.mocked(listConversations).mockResolvedValue({
+      items: [conversation('conversation-1'), conversation('conversation-2')],
+      page: 1, page_size: 20, total: 2,
+    })
+    vi.mocked(getConversation)
+      .mockResolvedValueOnce(detail('conversation-1', originalMessages))
+      .mockRejectedValueOnce(new ApiError(404, 'CONVERSATION_NOT_FOUND', '会话不存在。'))
+    const store = useConversationsStore()
+    await store.activate('u-1', 'kb-1')
+
+    await expect(store.openConversation('conversation-2')).rejects.toMatchObject({
+      code: 'CONVERSATION_NOT_FOUND',
+    })
+
+    expect(store.activeConversationId).toBe('conversation-1')
+    expect(store.messages.map((item) => item.id)).toEqual([
+      'message-user-1', 'message-assistant-1',
+    ])
+  })
+
+  it('加载更多会话时追加并去重，切换知识库后重置页码', async () => {
+    vi.mocked(listConversations)
+      .mockResolvedValueOnce({
+        items: [conversation('conversation-1')], page: 1, page_size: 20, total: 2,
+      })
+      .mockResolvedValueOnce({
+        items: [conversation('conversation-1'), conversation('conversation-2')],
+        page: 2, page_size: 20, total: 2,
+      })
+      .mockResolvedValueOnce({
+        items: [conversation('conversation-kb-2', 'kb-2')], page: 1, page_size: 20, total: 1,
+      })
+    vi.mocked(getConversation).mockImplementation(async (conversationId) => detail(
+      conversationId,
+      [],
+      conversationId === 'conversation-kb-2' ? 'kb-2' : 'kb-1',
+    ))
+    const store = useConversationsStore()
+    await store.activate('u-1', 'kb-1')
+
+    await store.loadConversations(2)
+    expect(store.conversations.map((item) => item.id)).toEqual([
+      'conversation-1', 'conversation-2',
+    ])
+    expect(store.currentPage).toBe(2)
+
+    await store.activate('u-1', 'kb-2')
+    expect(store.currentPage).toBe(1)
+    expect(store.conversations.map((item) => item.id)).toEqual(['conversation-kb-2'])
+  })
 })

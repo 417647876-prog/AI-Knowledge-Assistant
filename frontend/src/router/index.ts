@@ -21,6 +21,11 @@ const routes = [
     component: () => import('../views/DocumentsView.vue'),
     meta: { requiresAuth: true },
   },
+  {
+    path: '/knowledge-bases/:knowledgeBaseId/conversations',
+    component: () => import('../views/ConversationsView.vue'),
+    meta: { requiresAuth: true },
+  },
   { path: '/trash', component: () => import('../views/TrashView.vue'), meta: { requiresAuth: true } },
   {
     path: '/admin/users',

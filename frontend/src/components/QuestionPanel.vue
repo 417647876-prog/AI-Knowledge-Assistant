@@ -7,6 +7,8 @@ import { useConversationsStore } from '../stores/conversations'
 import { useWorkspaceStore } from '../stores/workspace'
 import ConversationTimeline from './ConversationTimeline.vue'
 
+withDefaults(defineProps<{ showHistoryActions?: boolean }>(), { showHistoryActions: true })
+
 const auth = useAuthStore()
 const workspace = useWorkspaceStore()
 const conversations = useConversationsStore()
@@ -50,11 +52,19 @@ async function startNewConversation() {
     ElMessage.error(formatApiError(error))
   }
 }
+
+async function retryAnswer(answerId: string): Promise<void> {
+  try {
+    await conversations.retry(answerId)
+  } catch (error) {
+    ElMessage.error(formatApiError(error))
+  }
+}
 </script>
 
 <template>
   <section class="question-panel">
-    <div class="question-toolbar">
+    <div v-if="showHistoryActions" class="question-toolbar">
       <el-button
         data-test="new-conversation"
         :loading="conversations.creating"
@@ -72,25 +82,33 @@ async function startNewConversation() {
         清空历史
       </el-button>
     </div>
-    <ConversationTimeline :messages="conversations.messages" @retry="conversations.retry" />
-    <el-input
-      v-model="question"
-      type="textarea"
-      maxlength="2000"
-      placeholder="请输入关于当前知识库的问题"
-      :autosize="{ minRows: 3, maxRows: 8 }"
-      @keydown.ctrl.enter.prevent="submitOrStop"
-    />
-    <div class="question-actions">
-      <el-button
-        data-test="submit-question"
-        type="primary"
-        :loading="conversations.submitting && !conversations.isStreaming"
-        :disabled="!auth.user?.id || !workspace.activeKnowledgeBaseId || (conversations.submitting && !conversations.isStreaming) || conversations.clearing"
-        @click="submitOrStop"
-      >
-        {{ conversations.isStreaming ? '停止' : '提问' }}
-      </el-button>
+    <ConversationTimeline :messages="conversations.messages" @retry="retryAnswer" />
+    <div class="question-composer">
+      <label for="knowledge-question">向当前知识库提问</label>
+      <el-input
+        v-model="question"
+        input-id="knowledge-question"
+        type="textarea"
+        maxlength="2000"
+        show-word-limit
+        placeholder="例如：这份制度的适用范围是什么？"
+        :autosize="{ minRows: 2, maxRows: 6 }"
+        :disabled="conversations.clearing"
+        @keydown.ctrl.enter.prevent="submitOrStop"
+        @keydown.meta.enter.prevent="submitOrStop"
+      />
+      <div class="question-actions">
+        <span class="question-shortcut">Ctrl + Enter 提交</span>
+        <el-button
+          data-test="submit-question"
+          :type="conversations.isStreaming ? 'danger' : 'primary'"
+          :loading="conversations.submitting && !conversations.isStreaming"
+          :disabled="!auth.user?.id || !workspace.activeKnowledgeBaseId || (conversations.submitting && !conversations.isStreaming) || conversations.clearing"
+          @click="submitOrStop"
+        >
+          {{ conversations.isStreaming ? '停止生成' : '发送问题' }}
+        </el-button>
+      </div>
     </div>
   </section>
 </template>

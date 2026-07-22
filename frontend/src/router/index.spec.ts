@@ -9,7 +9,9 @@ describe('router guards', () => {
     setActivePinia(createPinia())
     const router = createAppRouter(createMemoryHistory())
 
-    for (const path of ['/', '/admin/users', '/forbidden']) {
+    for (const path of [
+      '/', '/knowledge-bases/:knowledgeBaseId/conversations', '/admin/users', '/forbidden',
+    ]) {
       const route = router.getRoutes().find((item) => item.path === path)
       expect(route?.components?.default).toBeTypeOf('function')
     }

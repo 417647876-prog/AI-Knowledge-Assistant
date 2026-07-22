@@ -60,6 +60,44 @@ describe('QuestionPanel', () => {
     expect(stop).toHaveBeenCalledOnce()
   })
 
+  it('中断回答只在用户操作后手动重新生成', async () => {
+    const conversations = useConversationsStore()
+    conversations.messages = [{
+      id: 'answer-interrupted', kind: 'assistant', questionId: 'question-1', content: '断线前内容',
+      createdAt: '2026-07-14T00:00:00Z', status: 'interrupted', phase: null,
+      citations: [], standaloneQuestion: '问题', retrievedChunkCount: 1, timings: null,
+      errorCode: 'CLIENT_DISCONNECTED', requestId: null, failureKind: 'network',
+    } satisfies AssistantMessage]
+    const retry = vi.spyOn(conversations, 'retry').mockResolvedValue()
+    const wrapper = mountPanel()
+
+    expect(retry).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('回答已中断')
+    await wrapper.get('[data-test="retry-answer"]').trigger('click')
+    await flushPromises()
+
+    expect(retry).toHaveBeenCalledWith('answer-interrupted')
+  })
+
+  it('用户停止后保留已有内容并允许手动重新生成', async () => {
+    const conversations = useConversationsStore()
+    conversations.messages = [{
+      id: 'answer-stopped', kind: 'assistant', questionId: 'question-1', content: '已生成内容',
+      createdAt: '2026-07-14T00:00:00Z', status: 'stopped', phase: null,
+      citations: [], standaloneQuestion: '问题', retrievedChunkCount: 1, timings: null,
+      errorCode: null, requestId: null, failureKind: 'user_stopped',
+    } satisfies AssistantMessage]
+    const retry = vi.spyOn(conversations, 'retry').mockResolvedValue()
+    const wrapper = mountPanel()
+
+    expect(wrapper.text()).toContain('已生成内容')
+    expect(wrapper.text()).toContain('回答已停止')
+    await wrapper.get('[data-test="retry-answer"]').trigger('click')
+    await flushPromises()
+
+    expect(retry).toHaveBeenCalledWith('answer-stopped')
+  })
+
   it('可新建分隔会话，并在确认后清空全部历史', async () => {
     const conversations = useConversationsStore()
     const newConversation = vi.spyOn(conversations, 'newConversation').mockResolvedValue()

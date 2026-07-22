@@ -3,7 +3,6 @@ import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { describe, expect, it, vi } from 'vitest'
-import { ApiError } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 import { useConversationsStore } from '../stores/conversations'
 import { useWorkspaceStore } from '../stores/workspace'
@@ -17,6 +16,7 @@ async function setup() {
     routes: [
       { path: '/', component: { template: '<main>首页</main>' } },
       { path: '/knowledge-bases/:knowledgeBaseId', component: DocumentsView },
+      { path: '/knowledge-bases/:knowledgeBaseId/conversations', component: { template: '<main>会话</main>' } },
     ],
   })
   await router.push('/knowledge-bases/kb-1')
@@ -34,43 +34,20 @@ async function setup() {
   return { pinia, router, workspace, conversations }
 }
 
-describe('DocumentsView 会话激活', () => {
-  it('会话加载失败后可显式强制重试', async () => {
+describe('DocumentsView 会话入口', () => {
+  it('只提供专用会话页入口，不在文档页重复激活或渲染会话', async () => {
     const { pinia, router, conversations } = await setup()
-    const activate = vi.spyOn(conversations, 'activate')
-      .mockRejectedValueOnce(new ApiError(503, 'SERVICE_UNAVAILABLE', '会话暂不可用'))
-      .mockResolvedValueOnce()
+    const activate = vi.spyOn(conversations, 'activate').mockResolvedValue()
     const wrapper = mount(DocumentsView, {
       global: { plugins: [pinia, router, ElementPlus] },
     })
     await flushPromises()
 
-    expect(wrapper.get('[data-test="conversation-load-error"]').text())
-      .toContain('会话暂不可用 [SERVICE_UNAVAILABLE]')
-    await wrapper.get('[data-test="reload-conversations"]').trigger('click')
+    expect(activate).not.toHaveBeenCalled()
+    expect(wrapper.find('.question-panel').exists()).toBe(false)
+    await wrapper.get('[data-test="open-conversations"]').trigger('click')
     await flushPromises()
 
-    expect(activate).toHaveBeenLastCalledWith('u-1', 'kb-1', true)
-    expect(wrapper.find('[data-test="conversation-load-error"]').exists()).toBe(false)
-  })
-
-  it('旧知识库迟到的失败不会覆盖新知识库成功状态', async () => {
-    const { pinia, router, workspace, conversations } = await setup()
-    let rejectOld!: (reason: unknown) => void
-    const activate = vi.spyOn(conversations, 'activate')
-      .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectOld = reject }))
-      .mockResolvedValueOnce()
-    const wrapper = mount(DocumentsView, {
-      global: { plugins: [pinia, router, ElementPlus] },
-    })
-    await flushPromises()
-
-    workspace.activeKnowledgeBaseId = 'kb-2'
-    await flushPromises()
-    rejectOld(new ApiError(503, 'OLD_FAILURE', '旧请求失败'))
-    await flushPromises()
-
-    expect(activate).toHaveBeenLastCalledWith('u-1', 'kb-2', false)
-    expect(wrapper.find('[data-test="conversation-load-error"]').exists()).toBe(false)
+    expect(router.currentRoute.value.fullPath).toBe('/knowledge-bases/kb-1/conversations')
   })
 })

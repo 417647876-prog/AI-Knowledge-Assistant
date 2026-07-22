@@ -25,9 +25,31 @@ import type {
 import { clearLegacyConversationsForUser } from './conversationStorage'
 
 const PAGE_SIZE = 20
+type ReconcileResult = 'terminal' | 'pending' | 'missing' | 'stale'
 
 function numberField(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function stringField(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
+
+function citationsFromSnapshot(values: Record<string, unknown>[]): Citation[] {
+  return values.flatMap((value, index) => {
+    if (!value || typeof value !== 'object') return []
+    return [{
+      citation_id: numberField(value.citation_id) ?? index + 1,
+      document_id: stringField(value.document_id) ?? '',
+      file_name: stringField(value.file_name)?.trim() || '未知来源',
+      content: stringField(value.content) ?? '引用快照正文不可用。',
+      relevance_score: numberField(value.relevance_score),
+      page_number: numberField(value.page_number),
+      sheet_name: stringField(value.sheet_name),
+      row_start: numberField(value.row_start),
+      section_title: stringField(value.section_title),
+    }]
+  })
 }
 
 function timingsOf(value: Record<string, unknown>): StreamTimings | null {
@@ -86,7 +108,7 @@ function messagesFromServer(detail: ConversationDetail): ConversationMessage[] {
       createdAt: message.created_at,
       status: assistantStatusOf(message),
       phase: null,
-      citations: message.citations_snapshot as unknown as Citation[],
+      citations: citationsFromSnapshot(message.citations_snapshot),
       standaloneQuestion: null,
       retrievedChunkCount: numberField(message.retrieval_stats.retrieved_chunk_count),
       timings: timingsOf(message.timings),
@@ -107,6 +129,7 @@ export const useConversationsStore = defineStore('conversations', () => {
   const activeKnowledgeBaseId = ref<string | null>(null)
   const activeConversationId = ref<string | null>(null)
   const total = ref(0)
+  const currentPage = ref(1)
   const loading = ref(false)
   const creating = ref(false)
   const submitting = ref(false)
@@ -171,10 +194,10 @@ export const useConversationsStore = defineStore('conversations', () => {
     generation: number,
     stoppedByUser = false,
     baselineAssistantIds: ReadonlySet<string> | null = null,
-  ): Promise<boolean> {
+  ): Promise<ReconcileResult> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const detail = await getConversation(conversationId)
-      if (generation !== stateGeneration || activeConversationId.value !== conversationId) return false
+      if (generation !== stateGeneration || activeConversationId.value !== conversationId) return 'stale'
       const serverMessages = messagesFromServer(detail)
       const latestAssistant = [...serverMessages].reverse().find(
         (item): item is AssistantMessage => item.kind === 'assistant'
@@ -186,7 +209,7 @@ export const useConversationsStore = defineStore('conversations', () => {
           await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)))
           continue
         }
-        return false
+        return latestAssistant ? 'pending' : 'missing'
       }
       messages.value = serverMessages
       if (stoppedByUser) Object.assign(latestAssistant, {
@@ -202,9 +225,9 @@ export const useConversationsStore = defineStore('conversations', () => {
         created_at: detail.created_at,
         updated_at: detail.updated_at,
       }
-      return true
+      return 'terminal'
     }
-    return false
+    return 'missing'
   }
 
   async function loadConversations(page = 1, pageSize = PAGE_SIZE): Promise<void> {
@@ -220,8 +243,16 @@ export const useConversationsStore = defineStore('conversations', () => {
         || activeKnowledgeBaseId.value !== knowledgeBaseId
         || sequence !== listLoadSequence
       ) return
-      conversations.value = result.items
+      conversations.value = page === 1
+        ? result.items
+        : [
+            ...conversations.value,
+            ...result.items.filter((item) => !conversations.value.some(
+              (current) => current.id === item.id,
+            )),
+          ]
       total.value = result.total
+      currentPage.value = page
     } finally {
       if (generation === stateGeneration && sequence === listLoadSequence) loading.value = false
     }
@@ -229,9 +260,19 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   async function openConversation(conversationId: string): Promise<void> {
     const generation = cancelForStateChange()
+    const previousConversationId = activeConversationId.value
+    const previousMessages = messages.value
     activeConversationId.value = conversationId
     messages.value = []
-    await applyDetail(conversationId, generation)
+    try {
+      await applyDetail(conversationId, generation)
+    } catch (error) {
+      if (generation === stateGeneration && activeConversationId.value === conversationId) {
+        activeConversationId.value = previousConversationId
+        messages.value = previousMessages
+      }
+      throw error
+    }
   }
 
   async function activate(
@@ -252,6 +293,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     conversations.value = []
     messages.value = []
     total.value = 0
+    currentPage.value = 1
     clearLegacyConversationsForUser(userId)
     loading.value = true
     try {
@@ -259,6 +301,7 @@ export const useConversationsStore = defineStore('conversations', () => {
       if (generation !== stateGeneration) return
       conversations.value = result.items
       total.value = result.total
+      currentPage.value = 1
       const first = result.items[0]
       if (!first) return
       activeConversationId.value = first.id
@@ -294,7 +337,7 @@ export const useConversationsStore = defineStore('conversations', () => {
         ) {
           await reconcileAfterStream(
             previousConversationId, generation, false, baselineAssistantIds,
-          ).catch(() => false)
+          ).catch((): ReconcileResult => 'stale')
         }
         throw error
       }
@@ -355,10 +398,12 @@ export const useConversationsStore = defineStore('conversations', () => {
     controller = runController
     let terminal = false
     let stoppedByUser = false
+    let receivedStreamEvent = false
     const baselineAssistantIds = serverAssistantIds()
 
     try {
       for await (const event of streamConversationMessage(conversationId, input, runController.signal)) {
+        receivedStreamEvent = true
         if (
           generation !== stateGeneration
           || activeConversationId.value !== conversationId
@@ -444,7 +489,7 @@ export const useConversationsStore = defineStore('conversations', () => {
           errorCode: error instanceof ApiError ? error.code : 'STREAM_INTERRUPTED',
           requestId: error instanceof ApiError ? error.requestId ?? null : null,
           usageStatus: 'unknown',
-          retryMode: serverHttpFailure ? 'question' : 'message',
+          retryMode: serverHttpFailure || !receivedStreamEvent ? 'question' : 'message',
         })
         terminal = true
       }
@@ -514,15 +559,22 @@ export const useConversationsStore = defineStore('conversations', () => {
       const pendingAnswer = old
       const stoppedByUser = pendingAnswer.failureKind === 'user_stopped'
       const baselineAssistantIds = serverAssistantIds()
-      const reconciled = await reconcileAfterStream(
+      const reconcileResult = await reconcileAfterStream(
         conversationId, stateGeneration, stoppedByUser, baselineAssistantIds,
-      ).catch(() => false)
-      if (!reconciled) {
-        if (pendingAnswer.retryMode !== 'question') return
+      ).catch((): ReconcileResult => 'stale')
+      if (reconcileResult !== 'terminal') {
+        if (reconcileResult === 'pending') {
+          throw new Error('回答仍在服务端处理中，请稍后再试。')
+        }
+        if (pendingAnswer.retryMode !== 'question' || reconcileResult === 'stale') {
+          throw new Error('回答尚未完成结算，请重新加载会话后再试。')
+        }
         const question = messages.value.find(
           (item) => item.kind === 'user' && item.id === pendingAnswer.questionId,
         )
-        if (!question || question.kind !== 'user') return
+        if (!question || question.kind !== 'user') {
+          throw new Error('原问题不可用，请重新输入问题。')
+        }
         messages.value = messages.value.filter(
           (item) => item.id !== pendingAnswer.id && item.id !== question.id,
         )
@@ -531,6 +583,7 @@ export const useConversationsStore = defineStore('conversations', () => {
       }
       old = [...messages.value].reverse().find(
         (item): item is AssistantMessage => item.kind === 'assistant'
+          && !baselineAssistantIds.has(item.id)
           && ['failed', 'interrupted', 'stopped'].includes(item.status),
       )
       if (!old) return
@@ -555,7 +608,7 @@ export const useConversationsStore = defineStore('conversations', () => {
       if (wasActive && generation === stateGeneration) {
         await reconcileAfterStream(
           conversationId, generation, false, baselineAssistantIds,
-        ).catch(() => false)
+        ).catch((): ReconcileResult => 'stale')
       }
       throw error
     }
@@ -602,6 +655,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     messages.value = []
     activeConversationId.value = null
     total.value = 0
+    currentPage.value = 1
   }
 
   async function clear(): Promise<void> {
@@ -630,6 +684,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     activeKnowledgeBaseId.value = null
     activeUserId.value = null
     total.value = 0
+    currentPage.value = 1
     loading.value = false
     creating.value = false
     submitting.value = false
@@ -643,6 +698,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     activeKnowledgeBaseId,
     activeConversationId,
     total,
+    currentPage,
     loading,
     creating,
     submitting,
