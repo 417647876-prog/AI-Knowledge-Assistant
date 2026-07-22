@@ -32,6 +32,28 @@ def test_readme_documents_simple_project_launchers() -> None:
     ):
         assert required in content
 
+    for required in (
+        "手工创建并填写本地配置",
+        "Copy-Item deploy/.env.example deploy/.env",
+        "启动器不会自动生成 `deploy/.env`",
+        "不会创建、修改或重置管理员凭据",
+        "唯一判断",
+        "/api/ready",
+        "HTTP 200",
+        "http://127.0.0.1:8080",
+        "保留",
+        "数据卷",
+        "低于 2 GiB",
+        "Docker Desktop",
+        "docker desktop start",
+        "8080 端口",
+        "`/api/ready` 超时",
+        "不代表已经配置远程访问",
+        "远程访问",
+        "另行配置",
+    ):
+        assert required in content
+
 
 def test_cmd_launchers_delegate_to_powershell_and_preserve_exit_code() -> None:
     expectations = [
