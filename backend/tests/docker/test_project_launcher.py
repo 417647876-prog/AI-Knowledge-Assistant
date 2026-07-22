@@ -19,6 +19,20 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8-sig")
 
 
+def test_readme_documents_simple_project_launchers() -> None:
+    content = _read(README)
+
+    for required in (
+        "## 一键启动",
+        "启动项目.cmd",
+        r".\scripts\start-project.ps1",
+        r".\scripts\start-project.ps1 -Build",
+        "停止项目.cmd",
+        "Copy-Item deploy/.env.example deploy/.env",
+    ):
+        assert required in content
+
+
 def test_cmd_launchers_delegate_to_powershell_and_preserve_exit_code() -> None:
     expectations = [
         (START_CMD, r"scripts\start-project.ps1"),

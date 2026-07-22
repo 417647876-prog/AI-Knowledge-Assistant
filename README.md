@@ -198,6 +198,59 @@ Write-Output "accept_stage3 exit code: $acceptanceExitCode"
 [阶段 3 验证与演示](docs/验收与演示/阶段3验证与演示.md)。manifest 最后写入，并记录五个公开产物的
 SHA-256，便于判断一组报告是否完整且同源。
 
+## 一键启动
+
+面向 Windows 本机 Docker 演示，最简单的方式是双击项目根目录的 `启动项目.cmd`。启动成功的唯一判断是 <http://127.0.0.1:8080/api/ready> 返回 HTTP 200；演示入口是 <http://127.0.0.1:8080>。这只是本机回环地址的演示入口，不代表已经配置远程访问。
+
+首次运行前，请在项目根目录手工创建并填写本地配置；启动器不会自动生成 `deploy/.env`，也不会创建、修改或重置管理员凭据：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Copy-Item deploy/.env.example deploy/.env
+notepad deploy/.env
+```
+
+本机 HTTP 演示需要按下方“阶段 4 完整容器演示”章节填写 `APP_ENV`、Cookie 和 Origin 的本机值。`deploy/.env` 已被 Git 忽略；不要提交真实密钥。管理员仍应按该章节的安全命令手工创建。
+
+配置完成后，PowerShell 的等价启动命令为：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+.\scripts\start-project.ps1
+```
+
+当代码或镜像定义变更、需要显式重建镜像时，使用：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+.\scripts\start-project.ps1 -Build
+```
+
+启动器会先检查可用内存、Docker 和 `deploy/.env`，再启动完整 Compose，并最多等待 180 秒的 `/api/ready` HTTP 200。它不会把 `/health` 当作项目就绪，也不会替你配置 `.env` 或管理员。
+
+停止时双击 `停止项目.cmd`，或在项目根目录执行：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+.\scripts\stop-project.ps1
+```
+
+停止器只停止本项目的 Compose 容器，保留数据库、上传文件和 Hugging Face 模型缓存的数据卷。日常停止不要使用 `docker compose down -v`，否则会删除数据卷。
+
+常见故障与安全排查：
+
+- 可用物理内存低于 2 GiB 时，启动器会拒绝启动 Docker 重任务；关闭不相关的应用后重试。
+- Docker Desktop 未运行或引擎超时时，先手工打开 Docker Desktop，确认它显示为运行，再重试启动器。
+- 8080 端口冲突或 Compose 启动失败时，不要停止其他项目；在项目根目录运行下列命令，只查看当前项目的状态和最近日志：
+
+  ```powershell
+  Set-Location (git rev-parse --show-toplevel)
+  docker compose -f deploy/docker-compose.yml ps
+  docker compose -f deploy/docker-compose.yml logs --tail 100 gateway api worker postgres
+  ```
+
+- `/api/ready` 超时表示容器可能已启动但业务尚未就绪；使用上述命令查看状态和日志，不要仅因 `/health` 可访问就认定启动成功。
+
 ## 本地启动
 
 ```powershell
