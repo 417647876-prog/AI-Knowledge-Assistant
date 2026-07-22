@@ -4,3 +4,4 @@ backend/tests/fixtures/documents/11-超过20MB限制.txt
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/
+frontend/output/

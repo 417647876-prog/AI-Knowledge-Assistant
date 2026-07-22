@@ -1,8 +1,12 @@
 import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
+import { vendorChunkName } from './src/build/vendorChunks'
 
 export default defineConfig({
   plugins: [vue()],
+  build: {
+    rollupOptions: { output: { manualChunks: vendorChunkName } },
+  },
   server: { proxy: {
     '/api': 'http://127.0.0.1:8000',
     '/health': 'http://127.0.0.1:8000',
