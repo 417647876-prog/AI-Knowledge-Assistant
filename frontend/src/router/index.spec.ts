@@ -10,7 +10,7 @@ describe('router guards', () => {
     const router = createAppRouter(createMemoryHistory())
 
     for (const path of [
-      '/', '/knowledge-bases/:knowledgeBaseId/conversations', '/admin/users', '/forbidden',
+      '/', '/knowledge-bases/:knowledgeBaseId/conversations', '/profile', '/admin/users', '/forbidden',
     ]) {
       const route = router.getRoutes().find((item) => item.path === path)
       expect(route?.components?.default).toBeTypeOf('function')
@@ -67,6 +67,19 @@ describe('router guards', () => {
     await router.isReady()
 
     expect(router.currentRoute.value.fullPath).toBe('/admin/users')
+  })
+
+  it('已登录用户可以进入个人页', async () => {
+    setActivePinia(createPinia())
+    const auth = useAuthStore()
+    auth.user = { id: 'u-1', username: 'alice', role: 'user', is_active: true }
+    vi.spyOn(auth, 'initialize').mockResolvedValue()
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push('/profile')
+    await router.isReady()
+
+    expect(router.currentRoute.value.fullPath).toBe('/profile')
   })
 
   it('已登录普通用户可以停留在无权限页', async () => {

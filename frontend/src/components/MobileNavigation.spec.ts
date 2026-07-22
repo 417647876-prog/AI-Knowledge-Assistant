@@ -41,6 +41,17 @@ describe('MobileNavigation', () => {
     expect(wrapper.get('[data-test="mobile-admin-users-link"]').attributes('aria-current')).toBe('page')
   })
 
+  it('普通用户可以从底部导航进入我的页面', async () => {
+    const { pinia, router } = setup()
+    await router.push('/profile')
+    await router.isReady()
+    const wrapper = mount(MobileNavigation, {
+      global: { plugins: [pinia, router, ElementPlus] },
+    })
+
+    expect(wrapper.get('[data-test="mobile-profile-link"]').attributes('aria-current')).toBe('page')
+  })
+
   it('退出时清理认证状态并回到登录页', async () => {
     const { auth, pinia, router } = setup()
     const logout = vi.spyOn(auth, 'logout').mockImplementation(async () => {

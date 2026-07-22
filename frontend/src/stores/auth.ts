@@ -8,6 +8,7 @@ import {
 import { configureAuthentication } from '../api/client'
 import type { AuthSession, CurrentUser } from '../types/api'
 import { useConversationsStore } from './conversations'
+import { useProfileStore } from './profile'
 import { useWorkspaceStore } from './workspace'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -18,6 +19,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isAdmin = computed(() => user.value?.role === 'admin')
   const workspace = useWorkspaceStore()
   const conversations = useConversationsStore()
+  const profile = useProfileStore()
   let authenticationGeneration = 0
   let refreshSessionPromise: Promise<AuthSession> | null = null
   let loginSessionPromise: Promise<AuthSession> | null = null
@@ -35,6 +37,7 @@ export const useAuthStore = defineStore('auth', () => {
     accessToken.value = null
     user.value = null
     workspace.reset()
+    profile.reset()
   }
 
   function requestRefreshSession(): Promise<AuthSession> {

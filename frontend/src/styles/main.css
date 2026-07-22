@@ -82,7 +82,7 @@ body { margin: 0; min-height: 100vh; overflow-x: hidden; }
 .regenerate-answer { min-height: 44px; margin-top: 12px; }
 .retrieval-details dl { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 12px; }
 .conversation-divider { color: #667085; text-align: center; }
-.knowledge-bases-page, .documents-page, .trash-page, .conversations-page { display: grid; gap: 16px; max-width: 980px; margin: 0 auto; padding: 24px; }
+.knowledge-bases-page, .documents-page, .trash-page, .conversations-page, .profile-page { display: grid; gap: 16px; max-width: 980px; margin: 0 auto; padding: 24px; }
 .conversations-page { max-width: 1180px; }
 .conversations-heading h2 { margin-bottom: 4px; }
 .conversations-heading p { max-width: 60ch; margin: 0; color: #667085; }
@@ -148,12 +148,31 @@ body { margin: 0; min-height: 100vh; overflow-x: hidden; }
 .trash-card span, .support-grant-item span { color: #667085; overflow-wrap: anywhere; }
 .support-grant-list { display: grid; gap: 10px; margin-top: 20px; }
 .document-list-mobile { display: none; }
+.profile-heading, .profile-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.profile-heading h2, .profile-section h3 { margin: 0; }
+.profile-heading p, .profile-section-heading p { margin: 6px 0 0; color: #667085; }
+.profile-section { display: grid; gap: 18px; }
+.quota-summary, .usage-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.usage-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.quota-summary article, .usage-summary article { display: grid; min-width: 0; gap: 6px; padding: 16px; border-radius: 12px; background: #f8fafc; }
+.quota-summary span, .usage-summary span, .quota-summary small { color: #667085; }
+.quota-summary strong, .usage-summary strong { overflow-wrap: anywhere; font-size: 20px; }
+.usage-unknown { grid-column: 1 / -1; margin: 0; padding: 12px; border-radius: 10px; color: #7a2e0e; background: #fff4e8; }
+.profile-error { margin: 0; padding: 12px; border-radius: 10px; color: #b42318; background: #fef3f2; }
+.profile-empty { margin: 0; color: #667085; }
+.feedback-list { display: grid; gap: 10px; min-height: 48px; }
+.feedback-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 12px; border-top: 1px solid #e5e7eb; }
+.feedback-item:first-child { padding-top: 0; border-top: 0; }
+.feedback-item > div { display: grid; min-width: 0; gap: 4px; }
+.feedback-item span, .feedback-item small { color: #667085; }
+.feedback-item .el-button { min-height: 44px; margin: 0; }
+.profile-pagination { justify-content: flex-end; }
 
 @media (max-width: 900px) {
   .workspace-layout { grid-template-columns: 1fr; }
   .knowledge-sidebar { border-right: 0; border-bottom: 1px solid #e5e7eb; }
   .workspace-main { padding: 16px; }
-  .knowledge-bases-page, .documents-page, .trash-page, .conversations-page { padding: 16px; }
+  .knowledge-bases-page, .documents-page, .trash-page, .conversations-page, .profile-page { padding: 16px; }
   .conversations-layout { grid-template-columns: 1fr; }
   .conversation-history-card { position: static; }
   .conversation-history-list {
@@ -215,7 +234,13 @@ body { margin: 0; min-height: 100vh; overflow-x: hidden; }
   .login-card { width: 100%; }
   .login-card .el-input__wrapper { min-height: 44px; }
   .login-card .el-button { min-height: 44px; }
-  .knowledge-bases-page, .documents-page, .trash-page, .conversations-page { padding: 12px; }
+  .knowledge-bases-page, .documents-page, .trash-page, .conversations-page, .profile-page { padding: 12px; }
+  .profile-heading { align-items: stretch; }
+  .profile-heading .el-button { min-height: 44px; }
+  .quota-summary, .usage-summary { grid-template-columns: 1fr; }
+  .usage-unknown { grid-column: auto; }
+  .feedback-item { align-items: stretch; flex-direction: column; }
+  .feedback-item .el-button { width: 100%; }
   .page-toolbar { flex-direction: column; }
   .page-toolbar-actions { width: 100%; justify-content: stretch; }
   .page-toolbar-actions .el-button, .page-toolbar-actions a { flex: 1 1 120px; min-height: 44px; }

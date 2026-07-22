@@ -27,6 +27,7 @@ const routes = [
     meta: { requiresAuth: true },
   },
   { path: '/trash', component: () => import('../views/TrashView.vue'), meta: { requiresAuth: true } },
+  { path: '/profile', component: () => import('../views/ProfileView.vue'), meta: { requiresAuth: true } },
   {
     path: '/admin/users',
     component: () => import('../views/AdminUsersView.vue'),

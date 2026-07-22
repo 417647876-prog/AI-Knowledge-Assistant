@@ -30,6 +30,7 @@ async function logout() {
       <span>{{ auth.isAdmin ? '管理员' : '普通用户' }}</span>
       <nav class="desktop-navigation" aria-label="桌面主导航">
         <router-link data-test="workspace-link" to="/">工作台</router-link>
+        <router-link data-test="profile-link" to="/profile">我的</router-link>
         <router-link v-if="auth.isAdmin" data-test="admin-users-link" to="/admin/users">
           用户管理
         </router-link>
