@@ -172,6 +172,36 @@ def test_start_script_does_not_read_or_print_credentials() -> None:
         assert forbidden not in content
 
 
+def test_stop_script_only_stops_the_current_compose_project() -> None:
+    content = _read(STOP_SCRIPT)
+    lowered = content.lower()
+
+    assert "deploy/docker-compose.yml" in content
+    assert "docker info" in content
+    assert "down --remove-orphans" in content
+    for forbidden in (
+        "down -v",
+        "docker volume",
+        "volume rm",
+        "docker desktop stop",
+        "remove-item",
+    ):
+        assert forbidden not in lowered
+
+
+def test_launchers_do_not_contain_credentials() -> None:
+    for path in (START_CMD, STOP_CMD, START_SCRIPT, STOP_SCRIPT):
+        content = _read(path).lower()
+        for forbidden in (
+            "jwt_secret_key",
+            "gateway_shared_secret",
+            "chat_api_key",
+            "embedding_api_key",
+            "initial_admin_password",
+        ):
+            assert forbidden not in content
+
+
 @pytest.mark.skipif(os.name != "nt", reason="CMD 启动器仅在 Windows 上执行")
 @pytest.mark.parametrize(
     ("source_cmd", "script_name", "exit_code"),
