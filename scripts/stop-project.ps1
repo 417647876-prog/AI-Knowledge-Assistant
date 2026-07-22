@@ -19,7 +19,7 @@ if ($LASTEXITCODE -ne 0) {
 
 & docker compose -f $composeFile down --remove-orphans
 if ($LASTEXITCODE -ne 0) {
-    throw '停止本项目 Docker Compose 服务失败；持久化数据卷未被删除。'
+    throw "停止本项目 Docker Compose 服务失败，退出码：$LASTEXITCODE；持久化数据卷未被删除。"
 }
 
 Write-Host '项目容器已停止；数据库、uploads 和 Hugging Face 缓存卷均已保留。'

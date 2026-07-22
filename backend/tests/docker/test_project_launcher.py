@@ -189,6 +189,103 @@ def test_stop_script_only_stops_the_current_compose_project() -> None:
         assert forbidden not in lowered
 
 
+def _run_stop_script_harness(
+    tmp_path: Path, *, info_exit_code: int, compose_exit_code: int
+) -> tuple[str, list[str], list[str]]:
+    """在含空格的临时项目中运行停止脚本，docker 始终为受控函数替身。"""
+    project_root = tmp_path / "project with spaces"
+    scripts_dir = project_root / "scripts"
+    deploy_dir = project_root / "deploy"
+    scripts_dir.mkdir(parents=True)
+    deploy_dir.mkdir()
+    shutil.copy2(STOP_SCRIPT, scripts_dir / "stop-project.ps1")
+    compose_file = deploy_dir / "docker-compose.yml"
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+
+    harness = tmp_path / "stop-launcher-harness.ps1"
+    harness.write_text(
+        f"""$ErrorActionPreference = 'Stop'
+$events = [System.Collections.Generic.List[string]]::new()
+$scriptPath = '{(scripts_dir / 'stop-project.ps1').as_posix()}'
+
+function docker {{
+    $events.Add(($args | ForEach-Object {{ "[{{0}}]" -f $_ }}) -join '')
+    if ($args[0] -eq 'info') {{ $global:LASTEXITCODE = {info_exit_code}; return }}
+    if ($args[0] -eq 'compose') {{ $global:LASTEXITCODE = {compose_exit_code}; return }}
+    $global:LASTEXITCODE = 0
+}}
+
+Push-Location '{tmp_path.as_posix()}'
+try {{
+    & $scriptPath
+    'RESULT:success'
+}}
+catch {{
+    "RESULT:error:$($_.Exception.Message)"
+}}
+finally {{
+    Pop-Location
+}}
+$events | ForEach-Object {{ "EVENT:$($_)" }}
+""",
+        encoding="utf-8-sig",
+    )
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(harness)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=15,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.splitlines()
+    result = next(line.removeprefix("RESULT:") for line in lines if line.startswith("RESULT:"))
+    events = [line.removeprefix("EVENT:") for line in lines if line.startswith("EVENT:")]
+    output = [line for line in lines if not line.startswith(("RESULT:", "EVENT:"))]
+    return result, events, output
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
+def test_stop_script_stops_only_the_absolute_current_compose_file(tmp_path: Path) -> None:
+    result, events, output = _run_stop_script_harness(
+        tmp_path, info_exit_code=0, compose_exit_code=0
+    )
+    compose_file = tmp_path / "project with spaces" / "deploy" / "docker-compose.yml"
+
+    assert result == "success"
+    assert events == [
+        "[info]",
+        f"[compose][-f][{compose_file.resolve()}][down][--remove-orphans]",
+    ]
+    assert output == ["项目容器已停止；数据库、uploads 和 Hugging Face 缓存卷均已保留。"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
+def test_stop_script_does_not_compose_when_docker_daemon_is_unavailable(tmp_path: Path) -> None:
+    result, events, output = _run_stop_script_harness(
+        tmp_path, info_exit_code=19, compose_exit_code=0
+    )
+
+    assert "Docker 引擎不可用" in result
+    assert events == ["[info]"]
+    assert "项目容器已停止" not in "\n".join(output)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
+def test_stop_script_reports_compose_exit_code_without_success_message(tmp_path: Path) -> None:
+    result, events, output = _run_stop_script_harness(
+        tmp_path, info_exit_code=0, compose_exit_code=41
+    )
+
+    assert "Docker Compose 服务失败" in result
+    assert "41" in result
+    assert len(events) == 2
+    assert events[1].endswith("][down][--remove-orphans]")
+    assert "项目容器已停止" not in "\n".join(output)
+
+
 def test_launchers_do_not_contain_credentials() -> None:
     for path in (START_CMD, STOP_CMD, START_SCRIPT, STOP_SCRIPT):
         content = _read(path).lower()
