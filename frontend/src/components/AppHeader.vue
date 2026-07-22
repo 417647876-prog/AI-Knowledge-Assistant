@@ -34,6 +34,9 @@ async function logout() {
         <router-link v-if="auth.isAdmin" data-test="admin-users-link" to="/admin/users">
           用户管理
         </router-link>
+        <router-link v-if="auth.isAdmin" data-test="admin-operations-link" to="/admin/operations">
+          运营概览
+        </router-link>
       </nav>
       <el-button data-test="logout" :loading="loggingOut" @click="logout">
         退出

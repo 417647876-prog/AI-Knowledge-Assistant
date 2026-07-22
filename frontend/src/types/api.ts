@@ -16,6 +16,11 @@ export interface AdminUser extends CurrentUser {
   created_at: string
   updated_at: string
 }
+export interface AdminQuota {
+  daily_question_limit: number | null
+  daily_upload_limit: number | null
+  storage_bytes_limit: number | null
+}
 export interface KnowledgeBase {
   id: string
   name: string

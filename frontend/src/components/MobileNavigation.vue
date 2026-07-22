@@ -55,6 +55,15 @@ async function logout(): Promise<void> {
     >
       用户管理
     </router-link>
+    <router-link
+      v-if="auth.isAdmin"
+      to="/admin/operations"
+      data-test="mobile-admin-operations-link"
+      class="mobile-navigation-link"
+      :aria-current="isCurrent('/admin/operations') ? 'page' : undefined"
+    >
+      运营
+    </router-link>
     <el-button
       data-test="mobile-logout"
       text

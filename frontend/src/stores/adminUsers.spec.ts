@@ -5,15 +5,19 @@ import type { AdminUser } from '../types/api'
 vi.mock('../api/adminUsers', () => ({
   listAdminUsers: vi.fn(),
   createAdminUser: vi.fn(),
+  getAdminUserQuota: vi.fn(),
   updateAdminUser: vi.fn(),
+  updateAdminUserQuota: vi.fn(),
   resetAdminUserPassword: vi.fn(),
 }))
 
 import {
   createAdminUser,
+  getAdminUserQuota,
   listAdminUsers,
   resetAdminUserPassword,
   updateAdminUser,
+  updateAdminUserQuota,
 } from '../api/adminUsers'
 import { useAdminUsersStore } from './adminUsers'
 
@@ -240,5 +244,21 @@ describe('admin users store', () => {
     expect(store.users).toEqual([resetUser])
     expect(store).not.toHaveProperty('password')
     expect(JSON.stringify(store.$state)).not.toContain('replacement pass 123')
+  })
+
+  it('按用户加载并调整额度覆盖值', async () => {
+    const quota = {
+      daily_question_limit: 30,
+      daily_upload_limit: null,
+      storage_bytes_limit: 1073741824,
+    }
+    vi.mocked(getAdminUserQuota).mockResolvedValue(quota)
+    vi.mocked(updateAdminUserQuota).mockResolvedValue({ ...quota, daily_upload_limit: 8 })
+    const store = useAdminUsersStore()
+
+    await store.loadQuota('u-1')
+    await store.updateQuota('u-1', { ...quota, daily_upload_limit: 8 })
+
+    expect(store.quotas['u-1']).toEqual({ ...quota, daily_upload_limit: 8 })
   })
 })

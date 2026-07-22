@@ -10,6 +10,8 @@ import { login, logout, refresh } from '../api/auth'
 import { apiRequest } from '../api/client'
 import { useAuthStore } from './auth'
 import { useConversationsStore } from './conversations'
+import { useAdminOperationsStore } from './adminOperations'
+import { useAdminUsersStore } from './adminUsers'
 import { useWorkspaceStore } from './workspace'
 
 const userSession: AuthSession = {
@@ -185,12 +187,23 @@ describe('auth store', () => {
     const store = useAuthStore()
     const workspace = useWorkspaceStore()
     const clearUser = vi.spyOn(useConversationsStore(), 'clearUser')
+    const adminUsers = useAdminUsersStore()
+    const operations = useAdminOperationsStore()
     await store.login('alice', 'secret')
     workspace.knowledgeBases = [{
       id: 'kb-1', name: '制度', description: null,
       owner_id: 'u-1', owner_username: 'alice',
     }]
     workspace.activeKnowledgeBaseId = 'kb-1'
+    adminUsers.users = [{
+      id: 'u-1', username: 'alice', role: 'user', is_active: true,
+      created_at: '2026-07-13T08:00:00Z', updated_at: '2026-07-13T08:00:00Z',
+    }]
+    operations.users = [{
+      user_id: 'u-1', username: 'alice', role: 'user', is_active: true,
+      knowledge_base_total: 1, document_total: 1, effective_document_bytes: 1,
+      job_total: 1, token_total: 1, cost_total: '0.1',
+    }]
 
     await expect(store.logout()).rejects.toBe(apiError)
 
@@ -199,6 +212,8 @@ describe('auth store', () => {
     expect(workspace.knowledgeBases).toEqual([])
     expect(workspace.activeKnowledgeBaseId).toBeNull()
     expect(clearUser).toHaveBeenCalledWith('u-1')
+    expect(adminUsers.users).toEqual([])
+    expect(operations.users).toEqual([])
   })
 
   it('认证刷新失败后清理当前用户的会话历史', async () => {

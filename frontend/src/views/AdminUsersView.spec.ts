@@ -40,6 +40,16 @@ function mountView(loadUsers?: (store: ReturnType<typeof useAdminUsersStore>) =>
   vi.spyOn(store, 'createUser').mockResolvedValue(alice)
   vi.spyOn(store, 'updateUser').mockResolvedValue(alice)
   vi.spyOn(store, 'resetPassword').mockResolvedValue(alice)
+  vi.spyOn(store, 'loadQuota').mockResolvedValue({
+    daily_question_limit: 20,
+    daily_upload_limit: null,
+    storage_bytes_limit: 1073741824,
+  })
+  vi.spyOn(store, 'updateQuota').mockResolvedValue({
+    daily_question_limit: 30,
+    daily_upload_limit: null,
+    storage_bytes_limit: 1073741824,
+  })
   const wrapper = mount(AdminUsersView, {
     attachTo: document.body,
     global: { plugins: [pinia, ElementPlus] },
@@ -276,6 +286,23 @@ describe('AdminUsersView', () => {
     expect(store.resetPassword).toHaveBeenCalledWith('u-1', 'replacement pass 123')
     expect((password.element as HTMLInputElement).value).toBe('')
     expect(elementMocks.success).toHaveBeenCalledWith('密码重置成功。')
+  })
+
+  it('查看并调整用户问答、上传和存储额度覆盖值', async () => {
+    const { wrapper, store } = mountView()
+    await wrapper.get('[data-test="quota-mobile-u-1"]').trigger('click')
+    await flushPromises()
+
+    expect(store.loadQuota).toHaveBeenCalledWith('u-1')
+    await wrapper.get('[data-test="quota-questions"]').setValue('30')
+    await wrapper.get('[data-test="submit-quota"]').trigger('click')
+    await flushPromises()
+
+    expect(store.updateQuota).toHaveBeenCalledWith('u-1', {
+      daily_question_limit: 30,
+      daily_upload_limit: null,
+      storage_bytes_limit: 1073741824,
+    })
   })
 
   it('重置密码过短时显示清晰提示且不发请求', async () => {

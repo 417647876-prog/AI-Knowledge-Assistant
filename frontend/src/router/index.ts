@@ -34,6 +34,11 @@ const routes = [
     meta: { requiresAuth: true, admin: true },
   },
   {
+    path: '/admin/operations',
+    component: () => import('../views/AdminOperationsView.vue'),
+    meta: { requiresAuth: true, admin: true },
+  },
+  {
     path: '/forbidden',
     component: () => import('../views/ForbiddenView.vue'),
     meta: { requiresAuth: true },

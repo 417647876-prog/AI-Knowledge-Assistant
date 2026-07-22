@@ -9,11 +9,20 @@ const store = useAdminUsersStore()
 const pageError = ref<string | null>(null)
 const createVisible = ref(false)
 const resetVisible = ref(false)
+const quotaVisible = ref(false)
 const submittingCreate = ref(false)
 const submittingReset = ref(false)
+const loadingQuota = ref(false)
+const submittingQuota = ref(false)
 const pendingUserIds = ref(new Set<string>())
 const createForm = reactive({ username: '', password: '', role: 'user' as UserRole })
 const resetForm = reactive({ userId: '', username: '', password: '' })
+const quotaForm = reactive({
+  userId: '', username: '',
+  daily_question_limit: null as number | null,
+  daily_upload_limit: null as number | null,
+  storage_bytes_limit: null as number | null,
+})
 
 function showError(error: unknown): void {
   pageError.value = formatApiError(error)
@@ -149,6 +158,78 @@ async function submitReset(): Promise<void> {
 onMounted(async () => {
   try { await store.loadUsers() } catch (error) { showError(error) }
 })
+
+function resetQuotaForm(): void {
+  quotaForm.userId = ''
+  quotaForm.username = ''
+  quotaForm.daily_question_limit = null
+  quotaForm.daily_upload_limit = null
+  quotaForm.storage_bytes_limit = null
+  pageError.value = null
+}
+
+watch(quotaVisible, (visible) => {
+  if (!visible) resetQuotaForm()
+}, { flush: 'sync' })
+
+async function openQuota(user: AdminUser): Promise<void> {
+  if (store.loading || loadingQuota.value) return
+  pageError.value = null
+  quotaForm.userId = user.id
+  quotaForm.username = user.username
+  quotaVisible.value = true
+  loadingQuota.value = true
+  try {
+    const quota = await store.loadQuota(user.id)
+    if (quotaForm.userId !== user.id) return
+    quotaForm.daily_question_limit = quota.daily_question_limit
+    quotaForm.daily_upload_limit = quota.daily_upload_limit
+    quotaForm.storage_bytes_limit = quota.storage_bytes_limit
+  } catch (error) {
+    showError(error)
+  } finally {
+    loadingQuota.value = false
+  }
+}
+
+function setQuotaField(
+  field: 'daily_question_limit' | 'daily_upload_limit' | 'storage_bytes_limit',
+  event: Event,
+): void {
+  const value = (event.target as HTMLInputElement).value
+  quotaForm[field] = value === '' ? null : Number(value)
+}
+
+async function submitQuota(): Promise<void> {
+  if (!quotaForm.userId || loadingQuota.value || submittingQuota.value) return
+  const values = [
+    quotaForm.daily_question_limit,
+    quotaForm.daily_upload_limit,
+    quotaForm.storage_bytes_limit,
+  ]
+  if (values.some((value) => value !== null && (!Number.isInteger(value) || value < 0))) {
+    pageError.value = '额度必须是大于或等于 0 的整数，留空表示使用系统默认值。'
+    return
+  }
+  submittingQuota.value = true
+  pageError.value = null
+  try {
+    await ElMessageBox.confirm(`确认调整用户“${quotaForm.username}”的额度吗？`, '调整额度确认', {
+      confirmButtonText: '确认调整', cancelButtonText: '取消', type: 'warning',
+    })
+    await store.updateQuota(quotaForm.userId, {
+      daily_question_limit: quotaForm.daily_question_limit,
+      daily_upload_limit: quotaForm.daily_upload_limit,
+      storage_bytes_limit: quotaForm.storage_bytes_limit,
+    })
+    quotaVisible.value = false
+    ElMessage.success('用户额度已更新。')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') showError(error)
+  } finally {
+    submittingQuota.value = false
+  }
+}
 </script>
 
 <template>
@@ -170,7 +251,7 @@ onMounted(async () => {
       </div>
 
       <p
-        v-if="pageError && !createVisible && !resetVisible"
+        v-if="pageError && !createVisible && !resetVisible && !quotaVisible"
         data-test="admin-users-error"
         class="admin-users-error"
       >
@@ -215,6 +296,13 @@ onMounted(async () => {
                   {{ row.is_active ? '停用' : '启用' }}
                 </el-button>
                 <el-button
+                  :data-test="`quota-${row.id}`"
+                  :disabled="store.loading"
+                  @click="openQuota(row)"
+                >
+                  调整额度
+                </el-button>
+                <el-button
                   :data-test="`reset-${row.id}`"
                   :disabled="store.loading"
                   @click="openReset(row)"
@@ -252,6 +340,13 @@ onMounted(async () => {
               :loading="pendingUserIds.has(user.id)"
               @click="updateUser(user, { is_active: !user.is_active })"
             >{{ user.is_active ? '停用' : '启用' }}</el-button>
+            <el-button
+              :data-test="`quota-mobile-${user.id}`"
+              :disabled="store.loading"
+              @click="openQuota(user)"
+            >
+              调整额度
+            </el-button>
             <el-button
               :data-test="`reset-mobile-${user.id}`"
               :disabled="store.loading"
@@ -342,6 +437,62 @@ onMounted(async () => {
           @click="resetVisible = false"
         >取消</el-button>
       </el-form>
+    </el-dialog>
+
+    <el-dialog
+      v-model="quotaVisible"
+      title="调整用户额度"
+      width="min(92vw, 520px)"
+      @close="resetQuotaForm"
+    >
+      <p>用户：{{ quotaForm.username }}</p>
+      <p class="quota-form-note">留空表示使用系统默认值，填写 0 表示禁用对应额度。</p>
+      <p v-if="pageError" class="admin-users-error" role="alert">{{ pageError }}</p>
+      <form class="quota-form-grid" @submit.prevent="submitQuota">
+        <label>
+          每日问答次数
+          <input
+            data-test="quota-questions"
+            type="number"
+            min="0"
+            step="1"
+            :value="quotaForm.daily_question_limit ?? ''"
+            @input="setQuotaField('daily_question_limit', $event)"
+          >
+        </label>
+        <label>
+          每日上传次数
+          <input
+            data-test="quota-uploads"
+            type="number"
+            min="0"
+            step="1"
+            :value="quotaForm.daily_upload_limit ?? ''"
+            @input="setQuotaField('daily_upload_limit', $event)"
+          >
+        </label>
+        <label>
+          存储字节数
+          <input
+            data-test="quota-storage"
+            type="number"
+            min="0"
+            step="1"
+            :value="quotaForm.storage_bytes_limit ?? ''"
+            @input="setQuotaField('storage_bytes_limit', $event)"
+          >
+        </label>
+        <div>
+          <el-button
+            data-test="submit-quota"
+            native-type="submit"
+            type="primary"
+            :disabled="loadingQuota || store.loading"
+            :loading="submittingQuota"
+          >确认调整</el-button>
+          <el-button :disabled="submittingQuota" @click="quotaVisible = false">取消</el-button>
+        </div>
+      </form>
     </el-dialog>
   </main>
 </template>

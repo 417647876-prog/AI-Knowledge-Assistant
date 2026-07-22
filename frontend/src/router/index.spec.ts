@@ -10,7 +10,8 @@ describe('router guards', () => {
     const router = createAppRouter(createMemoryHistory())
 
     for (const path of [
-      '/', '/knowledge-bases/:knowledgeBaseId/conversations', '/profile', '/admin/users', '/forbidden',
+      '/', '/knowledge-bases/:knowledgeBaseId/conversations', '/profile', '/admin/users',
+      '/admin/operations', '/forbidden',
     ]) {
       const route = router.getRoutes().find((item) => item.path === path)
       expect(route?.components?.default).toBeTypeOf('function')
@@ -67,6 +68,19 @@ describe('router guards', () => {
     await router.isReady()
 
     expect(router.currentRoute.value.fullPath).toBe('/admin/users')
+  })
+
+  it('管理员可以进入脱敏运营页', async () => {
+    setActivePinia(createPinia())
+    const auth = useAuthStore()
+    auth.user = { id: 'u-admin', username: 'root', role: 'admin', is_active: true }
+    vi.spyOn(auth, 'initialize').mockResolvedValue()
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push('/admin/operations')
+    await router.isReady()
+
+    expect(router.currentRoute.value.fullPath).toBe('/admin/operations')
   })
 
   it('已登录用户可以进入个人页', async () => {
