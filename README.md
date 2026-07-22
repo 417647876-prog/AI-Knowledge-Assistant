@@ -21,6 +21,9 @@
 - 阶段 4A～4B：PostgreSQL 持久化任务、租约/心跳/重试、独立 Worker，以及重启后的任务恢复。
 - 阶段 4C～4D：严格所属人隔离、临时只读支持授权、回收站、服务端会话与用量、额度、限速、日志、指标、审计和脱敏运营接口。
 - 阶段 4E～4F：gateway 同源容器编排、持久卷与重启恢复，以及后端、前端、数据库和阶段 3 质量全量回归。
+- 阶段 5A～5C：响应式应用壳、手机知识库/文档/回收站、服务端会话问答/引用、“我的”用量反馈和脱敏管理员运营界面。
+- 阶段 5D：PostgreSQL 与 uploads 的显式备份恢复脚本，以及隔离 Compose 上的真实恢复冒烟。
+- 阶段 5E：Tailscale Funnel 显式启停脚本和脱敏验收手册已实现；首次登录授权与真实手机关闭 Wi-Fi 的公网验收仍是用户硬门，尚不能宣称阶段 5 全部验收完成。
 
 当前闭环为：管理员初始化账号 → 用户登录 → 创建自己的知识库 → 上传文档 → 持久化任务入队与 Worker 处理 → 检索问答 → 返回可追溯引用 → 会话、用量和反馈留存。系统不提供公开注册；普通业务接口始终按当前用户隔离，管理员也不能绕过所属人读取他人内容，只能通过限知识库、限管理员、只读、可撤销且会过期的支持授权排障。
 
@@ -338,11 +341,33 @@ docker volume ls
 
 逻辑卷为 `knowledge_postgres_data`、`knowledge_uploads` 和 `knowledge_hf_cache`，Docker 实际名称会带 Compose 项目前缀。只有确认不再需要数据库、上传文件和模型缓存时才可执行 `down -v`；该命令会删除数据，不能作为普通停止命令。
 
-完整命令、测试统计、隐私矩阵、恢复证据和已接受边界见[阶段 4 验证与演示](docs/验收与演示/阶段4验证与演示.md)。阶段 4 已完成，当前下一目标是阶段 5 的手机 H5、受控 HTTPS 访问与备份恢复闭环。
+阶段 4 的完整命令、测试统计、隐私矩阵和恢复证据见[阶段 4 验证与演示](docs/验收与演示/阶段4验证与演示.md)。阶段 5 的手机界面、拆包和备份恢复代码已经交付；最新本地证据、Funnel 命令、十步手机验收和未完成硬门见[阶段 5 验证与演示](docs/验收与演示/阶段5验证与演示.md)。
+
+## 阶段 5 备份、恢复与 Funnel
+
+备份和恢复只针对完整 Compose 的 PostgreSQL 与 uploads，不包含 `.env`、模型 Key、镜像、日志或可重建的 Hugging Face 缓存。恢复默认拒绝，必须显式确认：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/backup.ps1 `
+  -DestinationRoot D:\AI-Knowledge-Backups -UseDocker
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/restore.ps1 `
+  -BackupDirectory D:\AI-Knowledge-Backups\stage5-backup-YYYYMMDD-HHMMSS `
+  -UseDocker -ConfirmRestore
+```
+
+Tailscale 安装、登录并完成首次 Funnel 授权后，只把回环 gateway `http://127.0.0.1:8080` 映射为公网 HTTPS。脚本会拒绝覆盖已有 Funnel 配置，并以本项目标记约束关闭范围：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/start-funnel.ps1 -ConfirmEnable
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/stop-funnel.ps1 -ConfirmDisable
+```
+
+不要使用 `tailscale funnel reset` 作为本项目停止命令；它会清空当前节点的 Funnel 配置，而不是只关闭本项目映射。
 
 ## 部署与手机访问边界
 
-本阶段只验证本机开发运行，不代表已经具备公网生产安全。生产部署必须使用随机高强度 `JWT_SECRET_KEY`、`REFRESH_COOKIE_SECURE=true`，由同一 HTTPS 域名提供前端和 `/api` 反向代理，并严格配置 `TRUSTED_ORIGINS`。PostgreSQL、Vite 和 Uvicorn 内部端口不能直接暴露公网。
+本项目的 Funnel 定位是本人和少量演示用户使用的临时公网入口，不等于生产部署。生产环境仍必须使用随机高强度 `JWT_SECRET_KEY`、`REFRESH_COOKIE_SECURE=true`，由同一 HTTPS 域名提供前端和 `/api` 反向代理，并严格配置 `TRUSTED_ORIGINS`。PostgreSQL、Vite、Uvicorn、Worker 和内部指标端点不能直接暴露公网。
 
 反向代理还必须提供两类入口保护：对登录接口按来源和账号维度做限速、限制并发连接；对文档上传设置真实请求体硬上限。例如 Nginx 的 `client_max_body_size` 应按“20 MB 文件 + multipart 编码开销”配置，不能只写 20 MB。应用内同时限制完整 multipart 请求体和文件内容大小，属于第二层防护；密码 128 字符上限和 Argon2 线程池隔离也不能替代代理层的抗 DoS、连接数与请求速率限制。
 

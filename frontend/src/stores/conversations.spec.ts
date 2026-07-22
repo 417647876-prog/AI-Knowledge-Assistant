@@ -1,4 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
+import { watch } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../api/conversations', () => ({
@@ -304,8 +305,18 @@ describe('服务端会话 Store', () => {
     })
     const store = useConversationsStore()
     await store.activate('u-1', 'kb-1')
+    const observedStatuses: string[] = []
+    const stopWatching = watch(
+      () => {
+        const current = last(store.messages)
+        return current?.kind === 'assistant' ? current.status : null
+      },
+      (status) => { if (status) observedStatuses.push(status) },
+      { flush: 'sync' },
+    )
 
     await store.submit('新问题')
+    stopWatching()
 
     expect(store.messages.slice(0, 2).map((item) => item.id)).toEqual([
       'message-user-old', 'message-assistant-old',
@@ -314,6 +325,7 @@ describe('服务端会话 Store', () => {
       id: expect.stringMatching(/^pending:/),
       status: 'failed', errorCode: 'QUESTION_RATE_LIMITED', retryMode: 'question',
     })
+    expect(observedStatuses).toContain('failed')
     expect(store.messages.some(
       (item) => item.kind === 'user' && item.content === '新问题',
     )).toBe(true)

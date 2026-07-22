@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 BACKUP_SCRIPT = PROJECT_ROOT / "deploy" / "backup.ps1"
 RESTORE_SCRIPT = PROJECT_ROOT / "deploy" / "restore.ps1"

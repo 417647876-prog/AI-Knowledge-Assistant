@@ -6,3 +6,4 @@ frontend/dist/
 frontend/coverage/
 frontend/output/
 frontend/.playwright-cli/
+deploy/.stage5-funnel.json

@@ -526,8 +526,9 @@ export const useConversationsStore = defineStore('conversations', () => {
         content: question,
         createdAt: new Date().toISOString(),
       })
-      const answer = makePendingAnswer(answerId, questionId)
-      messages.value.push(answer)
+      messages.value.push(makePendingAnswer(answerId, questionId))
+      const answer = streamingAnswer()
+      if (!answer || answer.id !== answerId) throw new Error('创建临时回答失败。')
       await consume(conversationId, { question }, answer)
     } finally {
       submitting.value = false
@@ -590,11 +591,10 @@ export const useConversationsStore = defineStore('conversations', () => {
       answerId = old.id
     }
     const nextGeneration = stateGeneration + 1
-    const answer = makePendingAnswer(
-      `pending:${conversationId}:${nextGeneration}:assistant`,
-      old.questionId,
-    )
-    messages.value.push(answer)
+    const pendingAnswerId = `pending:${conversationId}:${nextGeneration}:assistant`
+    messages.value.push(makePendingAnswer(pendingAnswerId, old.questionId))
+    const answer = streamingAnswer()
+    if (!answer || answer.id !== pendingAnswerId) throw new Error('创建临时回答失败。')
     await consume(conversationId, { retry_of_message_id: answerId }, answer)
   }
 
