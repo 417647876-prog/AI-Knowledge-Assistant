@@ -42,7 +42,7 @@ def test_start_script_guards_prerequisites_and_waits_for_api_ready() -> None:
         "[switch]$Build",
         "ReadyTimeoutSeconds = 180",
         "FreePhysicalMemory",
-        "2MB",
+        "$minimumFreeKiB = 2GB / 1KB",
         "deploy/.env",
         "docker desktop --help",
         "docker desktop start",
@@ -54,6 +54,108 @@ def test_start_script_guards_prerequisites_and_waits_for_api_ready() -> None:
     ):
         assert required in content
     assert "/health" not in content
+
+
+def _run_start_script_harness(
+    tmp_path: Path, *, free_memory_kib: int, compose_exit_code: int, ready_status: int
+) -> tuple[str, list[str]]:
+    """在临时项目中用 PowerShell 函数替身运行脚本，绝不调用真实 Docker。"""
+    project_root = tmp_path / "project with spaces"
+    scripts_dir = project_root / "scripts"
+    deploy_dir = project_root / "deploy"
+    scripts_dir.mkdir(parents=True)
+    deploy_dir.mkdir()
+    shutil.copy2(START_SCRIPT, scripts_dir / "start-project.ps1")
+    (deploy_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (deploy_dir / ".env").write_text("TEST_ONLY=1\n", encoding="utf-8")
+
+    harness = tmp_path / "launcher-harness.ps1"
+    harness.write_text(
+        f"""$ErrorActionPreference = 'Stop'
+$events = [System.Collections.Generic.List[string]]::new()
+$scriptPath = '{(scripts_dir / 'start-project.ps1').as_posix()}'
+
+function Get-CimInstance {{
+    [pscustomobject]@{{ FreePhysicalMemory = {free_memory_kib} }}
+}}
+function docker {{
+    $commandLine = $args -join ' '
+    $events.Add("docker $commandLine")
+    if ($commandLine -eq 'info') {{ $global:LASTEXITCODE = 0; return }}
+    if ($commandLine -match 'compose .* up -d') {{ $global:LASTEXITCODE = {compose_exit_code}; return }}
+    $global:LASTEXITCODE = 0
+}}
+function Invoke-WebRequest {{
+    $events.Add('ready-check')
+    [pscustomobject]@{{ StatusCode = {ready_status} }}
+}}
+function Start-Process {{
+    $events.Add('browser-open')
+}}
+function Start-Sleep {{
+    $events.Add('sleep')
+}}
+
+try {{
+    & $scriptPath -ReadyTimeoutSeconds 10
+    'RESULT:success'
+}}
+catch {{
+    "RESULT:error:$($_.Exception.Message)"
+}}
+$events | ForEach-Object {{ "EVENT:$($_)" }}
+""",
+        encoding="utf-8-sig",
+    )
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(harness)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=15,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.splitlines()
+    result = next(line.removeprefix("RESULT:") for line in lines if line.startswith("RESULT:"))
+    events = [line.removeprefix("EVENT:") for line in lines if line.startswith("EVENT:")]
+    return result, events
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
+def test_start_script_rejects_low_memory_before_calling_docker(tmp_path: Path) -> None:
+    result, events = _run_start_script_harness(
+        tmp_path, free_memory_kib=1, compose_exit_code=0, ready_status=200
+    )
+
+    assert "可用物理内存低于 2 GiB" in result
+    assert not any(event.startswith("docker ") for event in events)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
+def test_start_script_preserves_compose_failure_and_does_not_open_browser(tmp_path: Path) -> None:
+    result, events = _run_start_script_harness(
+        tmp_path, free_memory_kib=3 * 1024 * 1024, compose_exit_code=37, ready_status=200
+    )
+
+    assert "Docker Compose 启动失败" in result
+    assert "37" in result
+    assert any("compose" in event and "up -d" in event for event in events)
+    assert "browser-open" not in events
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
+def test_start_script_opens_browser_only_after_ready_200(tmp_path: Path) -> None:
+    result, events = _run_start_script_harness(
+        tmp_path, free_memory_kib=3 * 1024 * 1024, compose_exit_code=0, ready_status=200
+    )
+
+    assert result == "success"
+    compose_up_index = next(i for i, event in enumerate(events) if "compose" in event and "up -d" in event)
+    ready_index = events.index("ready-check")
+    browser_index = events.index("browser-open")
+    assert compose_up_index < ready_index < browser_index
 
 
 def test_start_script_does_not_read_or_print_credentials() -> None:

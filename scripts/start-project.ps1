@@ -20,21 +20,23 @@ function Test-DockerEngine {
 
 function Show-ComposeHelp {
     Write-Host '可使用以下命令排查：'
-    Write-Host '  docker compose -f deploy/docker-compose.yml ps'
-    Write-Host '  docker compose -f deploy/docker-compose.yml logs --tail 100 gateway api worker postgres'
+    Write-Host "  docker compose -f `"$composeFile`" ps"
+    Write-Host "  docker compose -f `"$composeFile`" logs --tail 100 gateway api worker postgres"
 }
 
+# Win32_OperatingSystem.FreePhysicalMemory 的单位是 KiB。
+$minimumFreeKiB = 2GB / 1KB
 $availableKiB = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory
-if ($availableKiB -lt 2MB) {
+if ($availableKiB -lt $minimumFreeKiB) {
     throw '可用物理内存低于 2 GiB，已拒绝启动 Docker 重任务。'
 }
 if (-not (Test-Path -LiteralPath $composeFile -PathType Leaf)) {
-    throw '缺少 deploy/docker-compose.yml。'
+    throw "缺少 Docker Compose 文件：`"$composeFile`"。"
 }
 if (-not (Test-Path -LiteralPath $environmentFile -PathType Leaf)) {
     Write-Host '缺少 deploy/.env，请先执行：'
-    Write-Host '  Copy-Item deploy/.env.example deploy/.env'
-    Write-Host '  notepad deploy/.env'
+    Write-Host "  Copy-Item `"$(Join-Path $projectRoot 'deploy/.env.example')`" `"$environmentFile`""
+    Write-Host "  notepad `"$environmentFile`""
     throw '完成配置后请重新运行启动器。'
 }
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -76,8 +78,12 @@ if ($composeExitCode -ne 0) {
 $ready = $false
 $readyDeadline = [DateTime]::UtcNow.AddSeconds($ReadyTimeoutSeconds)
 while ([DateTime]::UtcNow -lt $readyDeadline) {
+    $remainingSeconds = [Math]::Ceiling(($readyDeadline - [DateTime]::UtcNow).TotalSeconds)
+    if ($remainingSeconds -le 0) {
+        break
+    }
     try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri $readyUrl -TimeoutSec 5
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $readyUrl -TimeoutSec ([Math]::Min(5, [Math]::Max(1, $remainingSeconds)))
         if ($response.StatusCode -eq 200) {
             $ready = $true
             break
@@ -86,7 +92,10 @@ while ([DateTime]::UtcNow -lt $readyDeadline) {
     catch {
         # 容器启动期间连接失败属于预期状态，继续有限轮询。
     }
-    Start-Sleep -Seconds 3
+    $sleepSeconds = [Math]::Min(3, [Math]::Max(0, ($readyDeadline - [DateTime]::UtcNow).TotalSeconds))
+    if ($sleepSeconds -gt 0) {
+        Start-Sleep -Seconds $sleepSeconds
+    }
 }
 
 if (-not $ready) {
