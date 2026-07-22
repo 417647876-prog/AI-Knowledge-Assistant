@@ -386,6 +386,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/stop-funnel.ps1 -
 ## 学习资料
 
 - [项目学习笔记](docs/学习记录/学习笔记.md)
+- [AI 知识库后端学习资源](docs/学习记录/AI知识库学习资源.md)
 - [RAG 后端总体设计](docs/设计/2026-07-10-RAG后端总体设计.md)
 - [阶段 1B 文档解析设计](docs/设计/2026-07-12-阶段1B文档解析设计.md)
 - [阶段 1C 向量入库设计](docs/设计/2026-07-13-阶段1C向量入库设计.md)
