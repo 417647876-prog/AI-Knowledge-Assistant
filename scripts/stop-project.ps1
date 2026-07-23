@@ -1,5 +1,8 @@
 ﻿[CmdletBinding()]
-param()
+param(
+    [ValidatePattern('^[a-z0-9][a-z0-9_-]*$')]
+    [string]$ProjectName = 'ai-knowledge-assistant'
+)
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -37,7 +40,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Docker 引擎不可用，请先打开 Docker Desktop 后重试；未对任何容器或数据卷做出更改。'
 }
 
-Invoke-DockerCommand -DockerArguments @('compose', '-f', $composeFile, 'down', '--remove-orphans')
+Invoke-DockerCommand -DockerArguments @('compose', '-p', $ProjectName, '-f', $composeFile, 'down', '--remove-orphans')
 if ($LASTEXITCODE -ne 0) {
     throw "停止本项目 Docker Compose 服务失败，退出码：$LASTEXITCODE；持久化数据卷未被删除。"
 }

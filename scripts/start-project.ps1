@@ -3,7 +3,10 @@ param(
     [switch]$Build,
 
     [ValidateRange(10, 600)]
-    [int]$ReadyTimeoutSeconds = 180
+    [int]$ReadyTimeoutSeconds = 180,
+
+    [ValidatePattern('^[a-z0-9][a-z0-9_-]*$')]
+    [string]$ProjectName = 'ai-knowledge-assistant'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,8 +43,8 @@ function Test-DockerEngine {
 
 function Show-ComposeHelp {
     Write-Host '可使用以下命令排查：'
-    Write-Host "  docker compose -f `"$composeFile`" ps"
-    Write-Host "  docker compose -f `"$composeFile`" logs --tail 100 gateway api worker postgres"
+    Write-Host "  docker compose -p $ProjectName -f `"$composeFile`" ps"
+    Write-Host "  docker compose -p $ProjectName -f `"$composeFile`" logs --tail 100 gateway api worker postgres"
 }
 
 # Win32_OperatingSystem.FreePhysicalMemory 的单位是 KiB。
@@ -83,14 +86,14 @@ if (-not (Test-DockerEngine)) {
 }
 
 if ($Build) {
-    Invoke-DockerCommand -DockerArguments @('compose', '-f', $composeFile, 'up', '-d', '--build')
+    Invoke-DockerCommand -DockerArguments @('compose', '-p', $ProjectName, '-f', $composeFile, 'up', '-d', '--build')
 }
 else {
-    Invoke-DockerCommand -DockerArguments @('compose', '-f', $composeFile, 'up', '-d')
+    Invoke-DockerCommand -DockerArguments @('compose', '-p', $ProjectName, '-f', $composeFile, 'up', '-d')
 }
 $composeExitCode = $LASTEXITCODE
 if ($composeExitCode -ne 0) {
-    Invoke-DockerCommand -DockerArguments @('compose', '-f', $composeFile, 'ps')
+    Invoke-DockerCommand -DockerArguments @('compose', '-p', $ProjectName, '-f', $composeFile, 'ps')
     Show-ComposeHelp
     throw "Docker Compose 启动失败，退出码：$composeExitCode。"
 }
@@ -119,12 +122,12 @@ while ([DateTime]::UtcNow -lt $readyDeadline) {
 }
 
 if (-not $ready) {
-    Invoke-DockerCommand -DockerArguments @('compose', '-f', $composeFile, 'ps')
+    Invoke-DockerCommand -DockerArguments @('compose', '-p', $ProjectName, '-f', $composeFile, 'ps')
     Show-ComposeHelp
     throw "容器已经启动，但 /api/ready 在 $ReadyTimeoutSeconds 秒内未返回 HTTP 200。"
 }
 
-Invoke-DockerCommand -DockerArguments @('compose', '-f', $composeFile, 'ps')
+Invoke-DockerCommand -DockerArguments @('compose', '-p', $ProjectName, '-f', $composeFile, 'ps')
 Write-Host "项目已就绪：$appUrl"
 try {
     Start-Process $appUrl

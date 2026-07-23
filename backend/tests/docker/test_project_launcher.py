@@ -13,6 +13,8 @@ STOP_CMD = PROJECT_ROOT / "停止项目.cmd"
 START_SCRIPT = PROJECT_ROOT / "scripts" / "start-project.ps1"
 STOP_SCRIPT = PROJECT_ROOT / "scripts" / "stop-project.ps1"
 README = PROJECT_ROOT / "README.md"
+LAUNCHER_DESIGN = PROJECT_ROOT / "docs" / "设计" / "2026-07-23-项目一键启动设计.md"
+LAUNCHER_PLAN = PROJECT_ROOT / "docs" / "superpowers" / "plans" / "2026-07-23-simple-project-launcher.md"
 
 
 def _read(path: Path) -> str:
@@ -34,8 +36,10 @@ def test_readme_documents_simple_project_launchers() -> None:
         "启动项目.cmd",
         r".\scripts\start-project.ps1",
         r".\scripts\start-project.ps1 -Build",
+        r".\scripts\start-project.ps1 -ProjectName stage5launcher",
         "停止项目.cmd",
         "Copy-Item deploy/.env.example deploy/.env",
+        "ai-knowledge-assistant",
     ):
         assert required in content
 
@@ -99,14 +103,24 @@ def test_start_script_guards_prerequisites_and_waits_for_api_ready() -> None:
     assert "/health" not in content
 
 
+def test_launcher_docs_document_explicit_project_owner_isolation() -> None:
+    for path in (LAUNCHER_DESIGN, LAUNCHER_PLAN):
+        content = _read(path)
+        assert "-ProjectName stage5launcher" in content
+    assert "$env:COMPOSE_PROJECT_NAME" not in _read(LAUNCHER_PLAN)
+
+
 def _run_start_script_harness(
     tmp_path: Path,
     *,
     free_memory_kib: int,
     compose_exit_code: int,
     ready_status: int,
+    ready_statuses: tuple[int, ...] | None = None,
     info_failures_before_ready: int = 0,
     compose_writes_error: bool = False,
+    build: bool = False,
+    project_name: str | None = None,
 ) -> tuple[str, list[str]]:
     """在临时项目中用 PowerShell 函数替身运行脚本，绝不调用真实 Docker。"""
     project_root = tmp_path / "project with spaces"
@@ -123,6 +137,8 @@ def _run_start_script_harness(
         f"""$ErrorActionPreference = 'Stop'
 $events = [System.Collections.Generic.List[string]]::new()
 $infoCalls = 0
+$readyStatuses = @({', '.join(map(str, ready_statuses or (ready_status,)))})
+$readyCall = 0
 $scriptPath = '{(scripts_dir / 'start-project.ps1').as_posix()}'
 
 function Get-CimInstance {{
@@ -156,8 +172,10 @@ function docker {{
     $global:LASTEXITCODE = 0
 }}
 function Invoke-WebRequest {{
-    $events.Add('ready-check')
-    [pscustomobject]@{{ StatusCode = {ready_status} }}
+    $status = $readyStatuses[[Math]::Min($script:readyCall, $readyStatuses.Count - 1)]
+    $events.Add("ready-check:$status")
+    $script:readyCall++
+    [pscustomobject]@{{ StatusCode = $status }}
 }}
 function Start-Process {{
     $events.Add('browser-open')
@@ -167,7 +185,8 @@ function Start-Sleep {{
 }}
 
 try {{
-    & $scriptPath -ReadyTimeoutSeconds 10
+    $env:COMPOSE_PROJECT_NAME = 'foreign-owner'
+    & $scriptPath -ReadyTimeoutSeconds 10 {'-Build' if build else ''} {'-ProjectName ' + project_name if project_name else ''}
     'RESULT:success'
 }}
 catch {{
@@ -222,14 +241,67 @@ def test_start_script_preserves_compose_failure_and_does_not_open_browser(tmp_pa
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
 def test_start_script_opens_browser_only_after_ready_200(tmp_path: Path) -> None:
     result, events = _run_start_script_harness(
-        tmp_path, free_memory_kib=3 * 1024 * 1024, compose_exit_code=0, ready_status=200
+        tmp_path,
+        free_memory_kib=3 * 1024 * 1024,
+        compose_exit_code=0,
+        ready_status=200,
+        ready_statuses=(503, 200),
     )
 
     assert result == "success"
     compose_up_index = next(i for i, event in enumerate(events) if "compose" in event and "up -d" in event)
-    ready_index = events.index("ready-check")
+    ready_503_index = events.index("ready-check:503")
+    ready_200_index = events.index("ready-check:200")
     browser_index = events.index("browser-open")
-    assert compose_up_index < ready_index < browser_index
+    assert compose_up_index < ready_503_index < ready_200_index < browser_index
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
+@pytest.mark.parametrize(("build", "expected_suffix"), [(False, " up -d"), (True, " up -d --build")])
+def test_start_script_only_adds_build_for_explicit_build_switch(
+    tmp_path: Path, build: bool, expected_suffix: str
+) -> None:
+    result, events = _run_start_script_harness(
+        tmp_path,
+        free_memory_kib=3 * 1024 * 1024,
+        compose_exit_code=0,
+        ready_status=200,
+        build=build,
+    )
+
+    assert result == "success"
+    compose_up = next(event for event in events if "compose" in event and " up -d" in event)
+    assert compose_up.endswith(expected_suffix)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
+def test_start_script_explicit_project_name_overrides_foreign_environment_for_every_compose_call(
+    tmp_path: Path,
+) -> None:
+    result, events = _run_start_script_harness(
+        tmp_path,
+        free_memory_kib=3 * 1024 * 1024,
+        compose_exit_code=0,
+        ready_status=200,
+        project_name="stage5launcher",
+    )
+
+    assert result == "success"
+    compose_calls = [event for event in events if event.startswith("docker compose ")]
+    assert compose_calls
+    assert all("compose -p stage5launcher -f " in event for event in compose_calls)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
+def test_start_script_default_project_name_overrides_foreign_environment(tmp_path: Path) -> None:
+    result, events = _run_start_script_harness(
+        tmp_path, free_memory_kib=3 * 1024 * 1024, compose_exit_code=0, ready_status=200
+    )
+
+    assert result == "success"
+    compose_calls = [event for event in events if event.startswith("docker compose ")]
+    assert compose_calls
+    assert all("compose -p ai-knowledge-assistant -f " in event for event in compose_calls)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
@@ -251,7 +323,7 @@ def test_start_script_treats_daemon_stderr_as_probe_and_recovers_after_desktop_s
     assert events[0] == "docker info"
     assert desktop_help_index < desktop_start_index < compose_up_index
     assert events.count("docker info") >= 2
-    assert "ready-check" in events
+    assert "ready-check:200" in events
 
 
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
@@ -307,6 +379,7 @@ def _run_stop_script_harness(
     compose_exit_code: int,
     info_writes_error: bool = False,
     compose_writes_error: bool = False,
+    project_name: str | None = None,
 ) -> tuple[str, list[str], list[str]]:
     """在含空格的临时项目中运行停止脚本，docker 始终为受控函数替身。"""
     project_root = tmp_path / "project with spaces"
@@ -345,7 +418,8 @@ function docker {{
 
 Push-Location '{tmp_path.as_posix()}'
 try {{
-    & $scriptPath
+    $env:COMPOSE_PROJECT_NAME = 'foreign-owner'
+    & $scriptPath {'-ProjectName ' + project_name if project_name else ''}
     'RESULT:success'
 }}
 catch {{
@@ -385,7 +459,7 @@ def test_stop_script_stops_only_the_absolute_current_compose_file(tmp_path: Path
     assert result == "success"
     assert events == [
         "[info]",
-        f"[compose][-f][{compose_file.resolve()}][down][--remove-orphans]",
+        f"[compose][-p][ai-knowledge-assistant][-f][{compose_file.resolve()}][down][--remove-orphans]",
     ]
     assert output == ["项目容器已停止；数据库、uploads 和 Hugging Face 缓存卷均已保留。"]
 
@@ -412,6 +486,20 @@ def test_stop_script_reports_compose_exit_code_without_success_message(tmp_path:
     assert len(events) == 2
     assert events[1].endswith("][down][--remove-orphans]")
     assert "项目容器已停止" not in "\n".join(output)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
+def test_stop_script_explicit_project_name_overrides_foreign_environment(tmp_path: Path) -> None:
+    result, events, _ = _run_stop_script_harness(
+        tmp_path, info_exit_code=0, compose_exit_code=0, project_name="stage5launcher"
+    )
+    compose_file = tmp_path / "project with spaces" / "deploy" / "docker-compose.yml"
+
+    assert result == "success"
+    assert events == [
+        "[info]",
+        f"[compose][-p][stage5launcher][-f][{compose_file.resolve()}][down][--remove-orphans]",
+    ]
 
 
 def test_launchers_do_not_contain_credentials() -> None:

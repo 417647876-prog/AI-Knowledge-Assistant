@@ -226,6 +226,13 @@ Set-Location (git rev-parse --show-toplevel)
 .\scripts\start-project.ps1 -Build
 ```
 
+启动器默认固定使用 Compose owner `ai-knowledge-assistant`，不会继承终端中已有的 `COMPOSE_PROJECT_NAME`。日常双击和默认命令无需增加参数；仅在需要与其他本机演示隔离时，启动和停止使用相同的显式名称：
+
+```powershell
+.\scripts\start-project.ps1 -ProjectName stage5launcher
+.\scripts\stop-project.ps1 -ProjectName stage5launcher
+```
+
 启动器会先检查可用内存、Docker 和 `deploy/.env`，再启动完整 Compose，并最多等待 180 秒的 `/api/ready` HTTP 200。它不会把 `/health` 当作项目就绪，也不会替你配置 `.env` 或管理员。
 
 停止时双击 `停止项目.cmd`，或在项目根目录执行：
@@ -245,8 +252,8 @@ Set-Location (git rev-parse --show-toplevel)
 
   ```powershell
   Set-Location (git rev-parse --show-toplevel)
-  docker compose -f deploy/docker-compose.yml ps
-  docker compose -f deploy/docker-compose.yml logs --tail 100 gateway api worker postgres
+  docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml ps
+  docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml logs --tail 100 gateway api worker postgres
   ```
 
 - `/api/ready` 超时表示容器可能已启动但业务尚未就绪；使用上述命令查看状态和日志，不要仅因 `/health` 可访问就认定启动成功。

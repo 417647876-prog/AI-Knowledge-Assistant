@@ -216,7 +216,10 @@ param(
     [switch]$Build,
 
     [ValidateRange(10, 600)]
-    [int]$ReadyTimeoutSeconds = 180
+    [int]$ReadyTimeoutSeconds = 180,
+
+    [ValidatePattern('^[a-z0-9][a-z0-9_-]*$')]
+    [string]$ProjectName = 'ai-knowledge-assistant'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -233,8 +236,8 @@ function Test-DockerEngine {
 
 function Show-ComposeHelp {
     Write-Host '可使用以下命令排查：'
-    Write-Host '  docker compose -f deploy/docker-compose.yml ps'
-    Write-Host '  docker compose -f deploy/docker-compose.yml logs --tail 100 gateway api worker postgres'
+    Write-Host '  docker compose -p $ProjectName -f deploy/docker-compose.yml ps'
+    Write-Host '  docker compose -p $ProjectName -f deploy/docker-compose.yml logs --tail 100 gateway api worker postgres'
 }
 
 $availableKiB = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory
@@ -274,14 +277,14 @@ if (-not (Test-DockerEngine)) {
 }
 
 if ($Build) {
-    & docker compose -f $composeFile up -d --build
+    & docker compose -p $ProjectName -f $composeFile up -d --build
 }
 else {
-    & docker compose -f $composeFile up -d
+    & docker compose -p $ProjectName -f $composeFile up -d
 }
 $composeExitCode = $LASTEXITCODE
 if ($composeExitCode -ne 0) {
-    & docker compose -f $composeFile ps
+    & docker compose -p $ProjectName -f $composeFile ps
     Show-ComposeHelp
     throw "Docker Compose 启动失败，退出码：$composeExitCode。"
 }
@@ -303,12 +306,12 @@ while ([DateTime]::UtcNow -lt $readyDeadline) {
 }
 
 if (-not $ready) {
-    & docker compose -f $composeFile ps
+    & docker compose -p $ProjectName -f $composeFile ps
     Show-ComposeHelp
     throw "容器已经启动，但 /api/ready 在 $ReadyTimeoutSeconds 秒内未返回 HTTP 200。"
 }
 
-& docker compose -f $composeFile ps
+& docker compose -p $ProjectName -f $composeFile ps
 Write-Host "项目已就绪：$appUrl"
 try {
     Start-Process $appUrl
@@ -416,7 +419,10 @@ Expected: FAIL，错误为找不到 `scripts/stop-project.ps1`。
 
 ```powershell
 [CmdletBinding()]
-param()
+param(
+    [ValidatePattern('^[a-z0-9][a-z0-9_-]*$')]
+    [string]$ProjectName = 'ai-knowledge-assistant'
+)
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -433,7 +439,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Docker 引擎不可用，请先打开 Docker Desktop。'
 }
 
-& docker compose -f $composeFile down --remove-orphans
+& docker compose -p $ProjectName -f $composeFile down --remove-orphans
 if ($LASTEXITCODE -ne 0) {
     throw '停止本项目 Docker Compose 失败。'
 }
@@ -649,12 +655,11 @@ BACKUP_ROOT=../backups
 Run:
 
 ```powershell
-$env:COMPOSE_PROJECT_NAME = 'stage5launcher'
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-project.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-project.ps1 -ProjectName stage5launcher
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $ready = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8080/api/ready
 if ($ready.StatusCode -ne 200) { throw '真实启动后 /api/ready 未返回 HTTP 200。' }
-docker compose -f deploy/docker-compose.yml ps
+docker compose -p stage5launcher -f deploy/docker-compose.yml ps
 ```
 
 Expected: 启动脚本返回 0，gateway/API/Worker/PostgreSQL healthy，`/api/ready` 为 HTTP 200。
@@ -664,7 +669,7 @@ Expected: 启动脚本返回 0，gateway/API/Worker/PostgreSQL healthy，`/api/r
 Run:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/stop-project.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/stop-project.ps1 -ProjectName stage5launcher
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $remainingContainers = @(docker ps -a --filter 'label=com.docker.compose.project=stage5launcher' --format '{{.Names}}')
 if ($remainingContainers.Count -ne 0) { throw '隔离冒烟容器未全部停止。' }
@@ -684,7 +689,7 @@ stage5launcher_knowledge_uploads
 stage5launcher_knowledge_hf_cache
 ```
 
-移除 `$env:COMPOSE_PROJECT_NAME`。若 `deploy/.env` 是本任务临时创建的，使用 `apply_patch` 删除；若原本存在则保持不变。不得删除任何其他卷或停止其他进程。
+无需设置或移除 `COMPOSE_PROJECT_NAME`。若 `deploy/.env` 是本任务临时创建的，使用 `apply_patch` 删除；若原本存在则保持不变。不得删除任何其他卷或停止其他进程。
 
 - [ ] **Step 7: 最终 Git 和远程状态验证**
 
