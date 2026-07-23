@@ -183,8 +183,14 @@ def test_generator_creates_exact_tree_and_parseable_knowledge_files(tmp_path: Pa
     files = sorted(path for path in knowledge_root.rglob("*") if path.is_file())
     question_files = sorted(path for path in questions_root.rglob("*.md"))
 
-    assert len(files) == 15
-    assert len(question_files) == 3
+    expected_knowledge_paths = {
+        Path(document.folder) / document.filename for document in KNOWLEDGE_DOCUMENTS
+    }
+    expected_question_paths = {
+        Path(folder) / "测试问题与预期答案.md" for folder in QUESTION_SETS
+    }
+    assert {path.relative_to(knowledge_root) for path in files} == expected_knowledge_paths
+    assert {path.relative_to(questions_root) for path in question_files} == expected_question_paths
     registry = create_parser_registry()
     for path in files:
         assert path.stat().st_size < 20 * 1024 * 1024
@@ -198,12 +204,27 @@ def test_generator_creates_exact_tree_and_parseable_knowledge_files(tmp_path: Pa
 
 def test_question_documents_are_marked_not_for_upload(tmp_path: Path) -> None:
     _, questions_root = generate_demo_files(tmp_path)
-    for path in questions_root.rglob("*.md"):
+    for folder, questions in QUESTION_SETS.items():
+        path = questions_root / folder / "测试问题与预期答案.md"
         text = path.read_text(encoding="utf-8")
         assert "不要上传知识库" in text
-        assert text.count("### 问题 ") == 10
-        assert "实际回答：" in text
-        assert "实际引用：" in text
+        assert text.count("### 问题 ") == len(questions) == 10
+        for number, question in enumerate(questions, start=1):
+            expected_sources = (
+                "、".join(question.source_files)
+                if question.source_files
+                else "无；应明确说明知识库缺少答案"
+            )
+            question_block = (
+                f"### 问题 {number}\n\n"
+                f"问题类型：{question.kind}\n\n"
+                f"提问：{question.question}\n\n"
+                f"预期要点：{'；'.join(question.expected_points)}\n\n"
+                f"预期来源：{expected_sources}\n\n"
+                f"通过标准：{question.pass_criteria}\n\n"
+                "实际回答：\n\n实际引用："
+            )
+            assert question_block in text
 
 
 def test_generator_rebuilds_only_its_two_output_directories(tmp_path: Path) -> None:

@@ -28,3 +28,9 @@
 
 - Task 2 只在 pytest 的临时目录中生成文件，正式的 15 个知识资料与 3 份测试问题留给 Task 3 生成、解析和可视化抽查。
 - 本机未检测到 LibreOffice，因此 DOCX 渲染 PNG 的可视化验收留给 Task 3 按环境能力处理；本 Task 已完成结构与生产解析器验证。
+
+## 审查修复
+
+- 审查指出生成测试只校验文件总数，无法阻止文件被放错主题目录；现已从 `KNOWLEDGE_DOCUMENTS` 和 `QUESTION_SETS` 构造精确相对路径集合并断言生成结果完全一致。
+- 审查指出问题文档测试仅校验通用标记，无法覆盖 30 道题的内容；现已按每个主题、每题逐一断言题型、题干、预期要点、来源（或“知识库缺少答案”表述）、通过标准，以及实际回答/实际引用字段。
+- 修复后复跑：`Set-Location backend; uv run pytest tests/scripts/test_generate_demo_knowledge_files.py -q`，结果 `9 passed in 20.62s`。
