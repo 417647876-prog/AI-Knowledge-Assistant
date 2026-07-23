@@ -1,14 +1,17 @@
 from collections import Counter
 from dataclasses import FrozenInstanceError, fields
+from pathlib import Path
 
 import pytest
 
+from app.knowledge.parser_factory import create_parser_registry
 from scripts.demo_knowledge_manifest import (
     KNOWLEDGE_DOCUMENTS,
     QUESTION_SETS,
     KnowledgeDocumentSpec,
     QuestionSpec,
 )
+from scripts.generate_demo_knowledge_files import generate_demo_files
 
 
 EXPECTED_DOCUMENTS = {
@@ -173,3 +176,50 @@ def test_manifest_contains_exact_retrieval_facts_and_no_sensitive_placeholders()
         assert fact in text
     for forbidden in ("sk-", "AKIA", "13800138000", "110101199001011234"):
         assert forbidden not in text
+
+
+def test_generator_creates_exact_tree_and_parseable_knowledge_files(tmp_path: Path) -> None:
+    knowledge_root, questions_root = generate_demo_files(tmp_path)
+    files = sorted(path for path in knowledge_root.rglob("*") if path.is_file())
+    question_files = sorted(path for path in questions_root.rglob("*.md"))
+
+    assert len(files) == 15
+    assert len(question_files) == 3
+    registry = create_parser_registry()
+    for path in files:
+        assert path.stat().st_size < 20 * 1024 * 1024
+        sections = registry.get_parser(path.suffix).parse(path)
+        parsed_text = "\n".join(section.text for section in sections)
+        expected = next(item for item in KNOWLEDGE_DOCUMENTS if item.filename == path.name)
+        assert expected.document_code in parsed_text
+        minimum_chars = 400 if path.suffix == ".xlsx" else 800
+        assert len(parsed_text.strip()) >= minimum_chars
+
+
+def test_question_documents_are_marked_not_for_upload(tmp_path: Path) -> None:
+    _, questions_root = generate_demo_files(tmp_path)
+    for path in questions_root.rglob("*.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "不要上传知识库" in text
+        assert text.count("### 问题 ") == 10
+        assert "实际回答：" in text
+        assert "实际引用：" in text
+
+
+def test_generator_rebuilds_only_its_two_output_directories(tmp_path: Path) -> None:
+    unrelated = tmp_path / "保留目录" / "说明.txt"
+    unrelated.parent.mkdir()
+    unrelated.write_text("不可删除", encoding="utf-8")
+    knowledge_root, _ = generate_demo_files(tmp_path)
+    stale = knowledge_root / "过期资料.txt"
+    stale.write_text("下次生成应删除", encoding="utf-8")
+
+    generate_demo_files(tmp_path)
+
+    assert unrelated.read_text(encoding="utf-8") == "不可删除"
+    assert not stale.exists()
+
+
+def test_generator_rejects_a_filesystem_root() -> None:
+    with pytest.raises(ValueError, match="文件系统根目录"):
+        generate_demo_files(Path(Path.cwd().anchor))
