@@ -13,8 +13,28 @@ $environmentFile = Join-Path $projectRoot 'deploy/.env'
 $readyUrl = 'http://127.0.0.1:8080/api/ready'
 $appUrl = 'http://127.0.0.1:8080'
 
+function Invoke-DockerCommand {
+    [CmdletBinding()]
+    param(
+        [string[]]$DockerArguments
+    )
+
+    # Windows PowerShell 5.1 会在 Stop 模式下把 Docker 的 stderr 提升为终止错误。
+    # Docker 的成功与否仍由调用方紧接着读取的 $LASTEXITCODE 决定。
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & docker @DockerArguments
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    $global:LASTEXITCODE = $exitCode
+}
+
 function Test-DockerEngine {
-    & docker info *> $null
+    Invoke-DockerCommand -DockerArguments @('info') *> $null
     return $LASTEXITCODE -eq 0
 }
 
@@ -45,11 +65,11 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 
 if (-not (Test-DockerEngine)) {
     Write-Host 'Docker 引擎未运行，正在尝试启动 Docker Desktop...'
-    $desktopHelp = (& docker desktop --help 2>&1) -join "`n"
+    $desktopHelp = (Invoke-DockerCommand -DockerArguments @('desktop', '--help') 2>&1) -join "`n"
     if ($LASTEXITCODE -ne 0 -or $desktopHelp -notmatch '(?m)^\s*start\b') {
         throw '当前 Docker CLI 不支持自动启动，请手动打开 Docker Desktop。'
     }
-    & docker desktop start
+    Invoke-DockerCommand -DockerArguments @('desktop', 'start')
     if ($LASTEXITCODE -ne 0) {
         throw 'Docker Desktop 自动启动失败，请手动打开后重试。'
     }
@@ -63,14 +83,14 @@ if (-not (Test-DockerEngine)) {
 }
 
 if ($Build) {
-    & docker compose -f $composeFile up -d --build
+    Invoke-DockerCommand -DockerArguments @('compose', '-f', $composeFile, 'up', '-d', '--build')
 }
 else {
-    & docker compose -f $composeFile up -d
+    Invoke-DockerCommand -DockerArguments @('compose', '-f', $composeFile, 'up', '-d')
 }
 $composeExitCode = $LASTEXITCODE
 if ($composeExitCode -ne 0) {
-    & docker compose -f $composeFile ps
+    Invoke-DockerCommand -DockerArguments @('compose', '-f', $composeFile, 'ps')
     Show-ComposeHelp
     throw "Docker Compose 启动失败，退出码：$composeExitCode。"
 }
@@ -99,12 +119,12 @@ while ([DateTime]::UtcNow -lt $readyDeadline) {
 }
 
 if (-not $ready) {
-    & docker compose -f $composeFile ps
+    Invoke-DockerCommand -DockerArguments @('compose', '-f', $composeFile, 'ps')
     Show-ComposeHelp
     throw "容器已经启动，但 /api/ready 在 $ReadyTimeoutSeconds 秒内未返回 HTTP 200。"
 }
 
-& docker compose -f $composeFile ps
+Invoke-DockerCommand -DockerArguments @('compose', '-f', $composeFile, 'ps')
 Write-Host "项目已就绪：$appUrl"
 try {
     Start-Process $appUrl

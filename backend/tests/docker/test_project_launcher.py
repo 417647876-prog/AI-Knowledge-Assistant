@@ -19,6 +19,13 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8-sig")
 
 
+def test_deploy_env_is_ignored_but_example_remains_trackable() -> None:
+    ignore_entries = _read(PROJECT_ROOT / ".gitignore").splitlines()
+
+    assert ignore_entries.count("deploy/.env") == 1
+    assert "deploy/.env.example" not in ignore_entries
+
+
 def test_readme_documents_simple_project_launchers() -> None:
     content = _read(README)
 
@@ -80,9 +87,9 @@ def test_start_script_guards_prerequisites_and_waits_for_api_ready() -> None:
         "FreePhysicalMemory",
         "$minimumFreeKiB = 2GB / 1KB",
         "deploy/.env",
-        "docker desktop --help",
-        "docker desktop start",
-        "docker info",
+            "'desktop', '--help'",
+            "'desktop', 'start'",
+            "@('info')",
         "--build",
         "/api/ready",
         "StatusCode -eq 200",
@@ -93,7 +100,13 @@ def test_start_script_guards_prerequisites_and_waits_for_api_ready() -> None:
 
 
 def _run_start_script_harness(
-    tmp_path: Path, *, free_memory_kib: int, compose_exit_code: int, ready_status: int
+    tmp_path: Path,
+    *,
+    free_memory_kib: int,
+    compose_exit_code: int,
+    ready_status: int,
+    info_failures_before_ready: int = 0,
+    compose_writes_error: bool = False,
 ) -> tuple[str, list[str]]:
     """在临时项目中用 PowerShell 函数替身运行脚本，绝不调用真实 Docker。"""
     project_root = tmp_path / "project with spaces"
@@ -109,6 +122,7 @@ def _run_start_script_harness(
     harness.write_text(
         f"""$ErrorActionPreference = 'Stop'
 $events = [System.Collections.Generic.List[string]]::new()
+$infoCalls = 0
 $scriptPath = '{(scripts_dir / 'start-project.ps1').as_posix()}'
 
 function Get-CimInstance {{
@@ -117,8 +131,28 @@ function Get-CimInstance {{
 function docker {{
     $commandLine = $args -join ' '
     $events.Add("docker $commandLine")
-    if ($commandLine -eq 'info') {{ $global:LASTEXITCODE = 0; return }}
-    if ($commandLine -match 'compose .* up -d') {{ $global:LASTEXITCODE = {compose_exit_code}; return }}
+    if ($commandLine -eq 'info') {{
+        $script:infoCalls++
+        if ($script:infoCalls -le {info_failures_before_ready}) {{
+            Write-Error 'Docker daemon is unavailable (controlled stderr).'
+            $global:LASTEXITCODE = 19
+            return
+        }}
+        $global:LASTEXITCODE = 0
+        return
+    }}
+    if ($commandLine -eq 'desktop --help') {{
+        Write-Output '  start'
+        $global:LASTEXITCODE = 0
+        return
+    }}
+    if ($commandLine -match 'compose .* up -d') {{
+        if ({'$true' if compose_writes_error else '$false'}) {{
+            Write-Error 'Compose emitted controlled stderr.'
+        }}
+        $global:LASTEXITCODE = {compose_exit_code}
+        return
+    }}
     $global:LASTEXITCODE = 0
 }}
 function Invoke-WebRequest {{
@@ -172,7 +206,11 @@ def test_start_script_rejects_low_memory_before_calling_docker(tmp_path: Path) -
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
 def test_start_script_preserves_compose_failure_and_does_not_open_browser(tmp_path: Path) -> None:
     result, events = _run_start_script_harness(
-        tmp_path, free_memory_kib=3 * 1024 * 1024, compose_exit_code=37, ready_status=200
+        tmp_path,
+        free_memory_kib=3 * 1024 * 1024,
+        compose_exit_code=37,
+        ready_status=200,
+        compose_writes_error=True,
     )
 
     assert "Docker Compose 启动失败" in result
@@ -194,6 +232,43 @@ def test_start_script_opens_browser_only_after_ready_200(tmp_path: Path) -> None
     assert compose_up_index < ready_index < browser_index
 
 
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
+def test_start_script_treats_daemon_stderr_as_probe_and_recovers_after_desktop_start(
+    tmp_path: Path,
+) -> None:
+    result, events = _run_start_script_harness(
+        tmp_path,
+        free_memory_kib=3 * 1024 * 1024,
+        compose_exit_code=0,
+        ready_status=200,
+        info_failures_before_ready=1,
+    )
+
+    assert result == "success"
+    desktop_help_index = events.index("docker desktop --help")
+    desktop_start_index = events.index("docker desktop start")
+    compose_up_index = next(i for i, event in enumerate(events) if "compose" in event and "up -d" in event)
+    assert events[0] == "docker info"
+    assert desktop_help_index < desktop_start_index < compose_up_index
+    assert events.count("docker info") >= 2
+    assert "ready-check" in events
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
+def test_start_script_accepts_compose_stderr_when_exit_code_is_zero(tmp_path: Path) -> None:
+    result, events = _run_start_script_harness(
+        tmp_path,
+        free_memory_kib=3 * 1024 * 1024,
+        compose_exit_code=0,
+        ready_status=200,
+        compose_writes_error=True,
+    )
+
+    assert result == "success"
+    assert any("compose" in event and "up -d" in event for event in events)
+    assert "browser-open" in events
+
+
 def test_start_script_does_not_read_or_print_credentials() -> None:
     content = _read(START_SCRIPT).lower()
 
@@ -213,8 +288,8 @@ def test_stop_script_only_stops_the_current_compose_project() -> None:
     lowered = content.lower()
 
     assert "deploy/docker-compose.yml" in content
-    assert "docker info" in content
-    assert "down --remove-orphans" in content
+    assert "@('info')" in content
+    assert "'down', '--remove-orphans'" in content
     for forbidden in (
         "down -v",
         "docker volume",
@@ -226,7 +301,12 @@ def test_stop_script_only_stops_the_current_compose_project() -> None:
 
 
 def _run_stop_script_harness(
-    tmp_path: Path, *, info_exit_code: int, compose_exit_code: int
+    tmp_path: Path,
+    *,
+    info_exit_code: int,
+    compose_exit_code: int,
+    info_writes_error: bool = False,
+    compose_writes_error: bool = False,
 ) -> tuple[str, list[str], list[str]]:
     """在含空格的临时项目中运行停止脚本，docker 始终为受控函数替身。"""
     project_root = tmp_path / "project with spaces"
@@ -246,8 +326,20 @@ $scriptPath = '{(scripts_dir / 'stop-project.ps1').as_posix()}'
 
 function docker {{
     $events.Add(($args | ForEach-Object {{ "[{{0}}]" -f $_ }}) -join '')
-    if ($args[0] -eq 'info') {{ $global:LASTEXITCODE = {info_exit_code}; return }}
-    if ($args[0] -eq 'compose') {{ $global:LASTEXITCODE = {compose_exit_code}; return }}
+    if ($args[0] -eq 'info') {{
+        if ({'$true' if info_writes_error else '$false'}) {{
+            Write-Error 'Docker daemon is unavailable (controlled stderr).'
+        }}
+        $global:LASTEXITCODE = {info_exit_code}
+        return
+    }}
+    if ($args[0] -eq 'compose') {{
+        if ({'$true' if compose_writes_error else '$false'}) {{
+            Write-Error 'Compose emitted controlled stderr.'
+        }}
+        $global:LASTEXITCODE = {compose_exit_code}
+        return
+    }}
     $global:LASTEXITCODE = 0
 }}
 
@@ -301,7 +393,7 @@ def test_stop_script_stops_only_the_absolute_current_compose_file(tmp_path: Path
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
 def test_stop_script_does_not_compose_when_docker_daemon_is_unavailable(tmp_path: Path) -> None:
     result, events, output = _run_stop_script_harness(
-        tmp_path, info_exit_code=19, compose_exit_code=0
+        tmp_path, info_exit_code=19, compose_exit_code=0, info_writes_error=True
     )
 
     assert "Docker 引擎不可用" in result
@@ -312,7 +404,7 @@ def test_stop_script_does_not_compose_when_docker_daemon_is_unavailable(tmp_path
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell 受控替身测试仅在 Windows 执行")
 def test_stop_script_reports_compose_exit_code_without_success_message(tmp_path: Path) -> None:
     result, events, output = _run_stop_script_harness(
-        tmp_path, info_exit_code=0, compose_exit_code=41
+        tmp_path, info_exit_code=0, compose_exit_code=41, compose_writes_error=True
     )
 
     assert "Docker Compose 服务失败" in result
