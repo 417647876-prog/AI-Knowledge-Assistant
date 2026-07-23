@@ -127,6 +127,15 @@ def write_text(target: Path, spec: KnowledgeDocumentSpec) -> None:
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _section_preview(text: str, limit: int = 96) -> str:
+    """返回适合速览表的首句，避免在 DOCX 中完整重复详细正文。"""
+    first_sentence, separator, _ = text.partition("。")
+    preview = first_sentence + separator
+    if len(preview) <= limit:
+        return preview
+    return preview[: limit - 1].rstrip("；，。 ") + "…"
+
+
 def write_docx(target: Path, spec: KnowledgeDocumentSpec) -> None:
     document = Document()
     section = document.sections[0]
@@ -191,7 +200,7 @@ def write_docx(target: Path, spec: KnowledgeDocumentSpec) -> None:
     for number, text in enumerate(spec.sections, start=1):
         row = table.add_row().cells
         left = row[0].paragraphs[0].add_run(f"第 {number} 部分")
-        right = row[1].paragraphs[0].add_run(text)
+        right = row[1].paragraphs[0].add_run(_section_preview(text))
         _set_east_asia_font(left)
         _set_east_asia_font(right)
 

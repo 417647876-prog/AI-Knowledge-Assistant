@@ -202,8 +202,14 @@ def test_generator_creates_exact_tree_and_parseable_knowledge_files(tmp_path: Pa
         parsed_text = "\n".join(section.text for section in sections)
         expected = next(item for item in KNOWLEDGE_DOCUMENTS if item.filename == path.name)
         assert expected.document_code in parsed_text
-        minimum_chars = 400 if path.suffix == ".xlsx" else 800
-        assert len(parsed_text.strip()) >= minimum_chars
+        normalized_parsed = "".join(parsed_text.split())
+        for fact in EXPECTED_DOCUMENTS[path.name][2]:
+            assert "".join(fact.split()) in normalized_parsed
+        parsed_length = len(parsed_text.strip())
+        if path.suffix == ".xlsx":
+            assert parsed_length >= 400
+        else:
+            assert 800 <= parsed_length <= 1800
 
 
 def test_xlsx_keeps_each_source_section_on_its_own_row_with_readable_widths(tmp_path: Path) -> None:
