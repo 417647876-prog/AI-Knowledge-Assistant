@@ -214,7 +214,7 @@ notepad deploy/.env
 
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
-docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml exec api uv run python -m scripts.create_admin --username "YOUR_ADMIN_USERNAME"
+docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml exec api python -m scripts.create_admin --username "YOUR_ADMIN_USERNAME"
 ```
 
 配置完成后，PowerShell 的等价启动命令为：
@@ -364,7 +364,7 @@ Copy-Item deploy/.env.example deploy/.env
 notepad deploy/.env
 docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml up -d --build
 docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml ps
-docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml exec api uv run python -m scripts.create_admin --username "YOUR_ADMIN_USERNAME"
+docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml exec api python -m scripts.create_admin --username "YOUR_ADMIN_USERNAME"
 ```
 
 本机 HTTP 演示仅可在回环地址使用 `APP_ENV=development`、`REFRESH_COOKIE_SECURE=false` 和精确的 `TRUSTED_ORIGINS=["http://127.0.0.1:8080"]`。`JWT_SECRET_KEY` 与 `GATEWAY_SHARED_SECRET` 必须使用互不相同的随机高强度值；模型 Key 只放在本地环境文件。正式 HTTPS 环境必须改回 `APP_ENV=production`、`REFRESH_COOKIE_SECURE=true` 和实际 HTTPS Origin。

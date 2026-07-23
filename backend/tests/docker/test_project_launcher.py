@@ -68,11 +68,12 @@ def test_readme_documents_simple_project_launchers() -> None:
 
 def test_readme_admin_command_uses_the_launcher_compose_owner() -> None:
     content = _read(README)
+    launcher_section = content.split("## 一键启动", maxsplit=1)[1].split("\n## ", maxsplit=1)[0]
 
     assert (
         "docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml "
-        "exec api uv run python -m scripts.create_admin"
-    ) in content
+        "exec api python -m scripts.create_admin --username \"YOUR_ADMIN_USERNAME\""
+    ) in launcher_section
 
 
 def test_cmd_launchers_delegate_to_powershell_and_preserve_exit_code() -> None:
