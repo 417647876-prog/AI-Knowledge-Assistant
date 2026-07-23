@@ -108,11 +108,21 @@ def _question(question: str, kind: str, points: tuple[str, ...], sources: tuple[
     return QuestionSpec(question, kind, points, sources, criterion)
 
 
-def _set(folder: str, points: tuple[tuple[str, ...], ...]) -> tuple[QuestionSpec, ...]:
+def _set(
+    folder: str,
+    points: tuple[tuple[str, ...], ...],
+    single_sources: tuple[str, ...],
+) -> tuple[QuestionSpec, ...]:
     files = tuple(doc.filename for doc in KNOWLEDGE_DOCUMENTS if doc.folder == folder)
+    assert len(points) == len(single_sources) == 6
     singles = tuple(
-        _question(f"请根据《{files[index % 5]}》说明其中一项关键精确规则。", "single_document", points[index], (files[index % 5],))
-        for index in range(6)
+        _question(
+            f"请根据《{source}》说明其中一项关键精确规则。",
+            "single_document",
+            expected_points,
+            (source,),
+        )
+        for expected_points, source in zip(points, single_sources, strict=True)
     )
     cross = (
         _question("请综合前两份资料说明两项相关规则。", "cross_document", points[1] + points[2], (files[1], files[2])),
@@ -124,7 +134,19 @@ def _set(folder: str, points: tuple[tuple[str, ...], ...]) -> tuple[QuestionSpec
 
 
 QUESTION_SETS = {
-    OPS: _set(OPS, (("ai-knowledge-assistant", "HTTP 200"), ("20 MB", "ready"), ("先检索再生成", "不得编造"), ("8080", "8000", "5432"), ("180 秒", "3 个持久卷"), ("错误原因",))),
-    LEARN: _set(LEARN, (("List<T>", "Dictionary<TKey,TValue>"), ("六阶段", "600 字符", "80 字符"), ("HTTP 422", "400"), ("top-k 6", "0.82", "148 ms"), ("12 周", "周日"), ("async/await",))),
-    ENTERPRISE: _set(ENTERPRISE, (("7 个自然日", "3 个工作日"), ("14 个字符", "24 小时"), ("10 天", "90 天"), ("¥399/月", "2 小时"), ("2026-09-15", "2026-09-08"), ("2 小时",))),
+    OPS: _set(
+        OPS,
+        (("ai-knowledge-assistant", "HTTP 200"), ("20 MB", "ready"), ("先检索再生成", "不得编造"), ("8080", "8000", "5432"), ("180 秒", "3 个持久卷"), ("错误原因",)),
+        ("项目快速开始.md", "知识库上传规范.txt", "RAG问答与引用指南.docx", "部署端口与健康检查.xlsx", "常见故障排查手册.pdf", "知识库上传规范.txt"),
+    ),
+    LEARN: _set(
+        LEARN,
+        (("List<T>", "Dictionary<TKey,TValue>"), ("六阶段", "600 字符", "80 字符"), ("HTTP 422", "400"), ("top-k 6", "0.82", "148 ms"), ("12 周", "周日"), ("async/await",)),
+        ("Python与CSharp语法对照.md", "RAG检索流程.txt", "FastAPI与ASP.NET-Core对照.docx", "向量检索参数实验.xlsx", "AI-Agent学习路线.pdf", "Python与CSharp语法对照.md"),
+    ),
+    ENTERPRISE: _set(
+        ENTERPRISE,
+        (("7 个自然日", "3 个工作日"), ("14 个字符", "24 小时"), ("10 天", "90 天"), ("¥399/月", "2 小时"), ("2026-09-15", "2026-09-08"), ("2 小时",)),
+        ("客服退款FAQ.md", "IT账号安全规范.txt", "员工手册与休假制度.docx", "产品套餐与服务时效.xlsx", "项目会议纪要与行动项.pdf", "客服退款FAQ.md"),
+    ),
 }
