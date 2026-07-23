@@ -4,20 +4,45 @@ import {
   type RouterHistory,
 } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import AdminUsersView from '../views/AdminUsersView.vue'
-import ForbiddenView from '../views/ForbiddenView.vue'
-import LoginView from '../views/LoginView.vue'
-import WorkspaceView from '../views/WorkspaceView.vue'
 
 const routes = [
-  { path: '/login', component: LoginView, meta: { public: true } },
-  { path: '/', component: WorkspaceView, meta: { requiresAuth: true } },
+  {
+    path: '/login',
+    component: () => import('../views/LoginView.vue'),
+    meta: { public: true },
+  },
+  {
+    path: '/',
+    component: () => import('../views/KnowledgeBasesView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/knowledge-bases/:knowledgeBaseId/documents',
+    component: () => import('../views/DocumentsView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/knowledge-bases/:knowledgeBaseId/conversations',
+    component: () => import('../views/ConversationsView.vue'),
+    meta: { requiresAuth: true },
+  },
+  { path: '/trash', component: () => import('../views/TrashView.vue'), meta: { requiresAuth: true } },
+  { path: '/profile', component: () => import('../views/ProfileView.vue'), meta: { requiresAuth: true } },
   {
     path: '/admin/users',
-    component: AdminUsersView,
+    component: () => import('../views/AdminUsersView.vue'),
     meta: { requiresAuth: true, admin: true },
   },
-  { path: '/forbidden', component: ForbiddenView, meta: { requiresAuth: true } },
+  {
+    path: '/admin/operations',
+    component: () => import('../views/AdminOperationsView.vue'),
+    meta: { requiresAuth: true, admin: true },
+  },
+  {
+    path: '/forbidden',
+    component: () => import('../views/ForbiddenView.vue'),
+    meta: { requiresAuth: true },
+  },
 ]
 
 export function createAppRouter(history: RouterHistory = createWebHistory()) {

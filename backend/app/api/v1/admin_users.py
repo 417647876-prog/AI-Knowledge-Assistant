@@ -3,19 +3,20 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.api.auth_dependencies import require_admin
+from app.audit.service import add_audit_event
 from app.auth.schemas import CurrentUserResponse
 from app.auth.service import AuthService
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError
 from app.core.security import hash_password
-from app.db.models import ADMIN_ROLE, User
+from app.db.models import ADMIN_ROLE, User, UserQuota
 from app.db.session import get_session
 
 router = APIRouter(prefix="/api/v1/admin/users", tags=["admin-users"])
@@ -55,6 +56,20 @@ class AdminUserResponse(CurrentUserResponse):
     updated_at: datetime
 
 
+class AdminQuotaUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    daily_question_limit: int | None = Field(default=None, ge=0)
+    daily_upload_limit: int | None = Field(default=None, ge=0)
+    storage_bytes_limit: int | None = Field(default=None, ge=0)
+
+
+class AdminQuotaResponse(BaseModel):
+    daily_question_limit: int | None
+    daily_upload_limit: int | None
+    storage_bytes_limit: int | None
+
+
 @router.get("", response_model=list[AdminUserResponse])
 async def list_users(
     _admin: Annotated[User, Depends(require_admin)],
@@ -71,7 +86,7 @@ async def list_users(
 )
 async def create_user(
     payload: AdminUserCreate,
-    _admin: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AdminUserResponse:
     normalized_username = payload.username.strip().lower()
@@ -86,13 +101,75 @@ async def create_user(
         role=payload.role,
         is_active=True,
     )
-    session.add(user)
     try:
+        session.add(user)
+        await session.flush()
+        add_audit_event(
+            session,
+            actor_user_id=admin.id,
+            action="user.create",
+            resource_type="user",
+            resource_id=user.id,
+            result="success",
+        )
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
         raise _username_exists() from exc
     return AdminUserResponse.model_validate(user)
+
+
+async def _get_quota_target(session: AsyncSession, user_id: UUID) -> User:
+    target = await session.scalar(select(User).where(User.id == user_id).with_for_update())
+    if target is None:
+        raise _user_not_found()
+    return target
+
+
+@router.get("/{user_id}/quota", response_model=AdminQuotaResponse)
+async def get_user_quota(
+    user_id: UUID,
+    _admin: Annotated[User, Depends(require_admin)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> AdminQuotaResponse:
+    await _get_quota_target(session, user_id)
+    quota = await session.get(UserQuota, user_id)
+    return AdminQuotaResponse(
+        daily_question_limit=quota.daily_question_limit if quota else None,
+        daily_upload_limit=quota.daily_upload_limit if quota else None,
+        storage_bytes_limit=quota.storage_bytes_limit if quota else None,
+    )
+
+
+@router.put("/{user_id}/quota", response_model=AdminQuotaResponse)
+async def update_user_quota(
+    user_id: UUID,
+    payload: AdminQuotaUpdate,
+    admin: Annotated[User, Depends(require_admin)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> AdminQuotaResponse:
+    await _get_quota_target(session, user_id)
+    quota = await session.get(UserQuota, user_id, with_for_update=True)
+    if quota is None:
+        quota = UserQuota(user_id=user_id)
+        session.add(quota)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(quota, field, value)
+    add_audit_event(
+        session,
+        actor_user_id=admin.id,
+        action="quota.update",
+        resource_type="user",
+        resource_id=user_id,
+        result="success",
+    )
+    await session.commit()
+    await session.refresh(quota)
+    return AdminQuotaResponse(
+        daily_question_limit=quota.daily_question_limit,
+        daily_upload_limit=quota.daily_upload_limit,
+        storage_bytes_limit=quota.storage_bytes_limit,
+    )
 
 
 @router.patch("/{user_id}", response_model=AdminUserResponse)
@@ -149,6 +226,14 @@ async def update_user(
             session=session,
             settings=settings,
         ).revoke_all_for_user_in_transaction(target.id)
+    add_audit_event(
+        session,
+        actor_user_id=admin.id,
+        action="user.disable" if payload.is_active is False else "user.update",
+        resource_type="user",
+        resource_id=target.id,
+        result="success",
+    )
     await session.commit()
     await session.refresh(target)
     return AdminUserResponse.model_validate(target)

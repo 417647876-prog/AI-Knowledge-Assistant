@@ -1,5 +1,6 @@
 from uuid import uuid4
 
+from app.rag import prompt as prompt_module
 from app.rag.citations import map_citations
 from app.rag.prompt import build_rag_prompt
 from app.rag.schemas import RetrievedChunk
@@ -26,6 +27,24 @@ def test_build_prompt_numbers_context_and_includes_real_source() -> None:
     assert "页码：12" in user_prompt
     assert "第1条制度内容" in user_prompt
     assert "年假有几天？" in user_prompt
+
+
+def test_answer_reservation_estimate_covers_max_history_top_k_and_chunk_metadata() -> None:
+    estimate = getattr(prompt_module, "estimate_rag_input_token_upper_bound", None)
+
+    assert estimate is not None
+    bound = estimate(
+        question="问" * 2000,
+        history=[
+            {"role": "user", "content": "问" * 2000},
+            {"role": "assistant", "content": "答" * 8000},
+        ]
+        * 6,
+        top_k=20,
+        chunk_size=800,
+    )
+
+    assert bound > 32768
 
 
 def test_map_citations_ignores_unknown_numbers_and_preserves_answer_order() -> None:

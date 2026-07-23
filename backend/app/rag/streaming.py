@@ -1,5 +1,5 @@
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from app.rag.citations import map_citations
 from app.rag.schemas import Citation, RetrievedChunk
@@ -9,6 +9,8 @@ from app.rag.schemas import Citation, RetrievedChunk
 class StreamEvent:
     event: str
     data: dict[str, object]
+    persistence: dict[str, object] = field(default_factory=dict)
+    emit: bool = True
 
 
 class CitationTracker:

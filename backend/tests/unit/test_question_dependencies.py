@@ -15,6 +15,13 @@ class FakeSession:
     async def get(self, model: object, identity: object) -> object:
         return object()
 
+    async def scalar(self, statement: object) -> object:
+        return object()
+
+
+class FakeUser:
+    id = uuid4()
+
 
 def _chunk() -> RetrievedChunk:
     return RetrievedChunk(
@@ -35,6 +42,7 @@ async def test_rag_service_factory_uses_fake_rewriter_and_keeps_answer_path_avai
     )
     service = await get_rag_service(
         session=FakeSession(),
+        current_user=FakeUser(),
         embedding_provider=FakeEmbeddingProvider(dimensions=512),
         chat_provider=FakeChatProvider(answer="员工可享受五天年假。[1]"),
         question_rewriter=question_rewriter,
@@ -67,6 +75,9 @@ async def test_rag_service_factory_wraps_real_chat_provider_for_question_rewriti
             embedding_provider="fake",
             chat_provider="deepseek",
             chat_api_key="test-key",
+            chat_cache_hit_input_price_per_million="0.25",
+            chat_cache_miss_input_price_per_million="1",
+            chat_output_price_per_million="2",
         )
         question_rewriter = await get_question_rewriter(
             settings=settings,
@@ -74,6 +85,7 @@ async def test_rag_service_factory_wraps_real_chat_provider_for_question_rewriti
         )
         service = await get_rag_service(
             session=FakeSession(),
+            current_user=FakeUser(),
             embedding_provider=FakeEmbeddingProvider(dimensions=512),
             chat_provider=chat_provider,
             question_rewriter=question_rewriter,

@@ -12,6 +12,7 @@ from app.db.models.knowledge_base import KnowledgeBase
 from app.db.models.user import USER_ROLE, User
 from app.db.session import session_factory
 from app.rag.retriever import VectorRetriever
+from tests.database_cleanup import delete_owned_knowledge_bases
 
 pytestmark = [
     pytest.mark.integration,
@@ -37,7 +38,7 @@ async def knowledge_base_owner() -> AsyncIterator[User]:
         yield user
     finally:
         async with session_factory.begin() as session:
-            await session.execute(delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id))
+            await delete_owned_knowledge_bases(session, [user.id])
             await session.execute(delete(User).where(User.id == user.id))
 
 
@@ -45,9 +46,10 @@ def _vector(first: float, second: float = 0.0) -> list[float]:
     return [first, second, *([0.0] * 510)]
 
 
-async def _add_document(session, knowledge_base_id, name: str) -> Document:
+async def _add_document(session, knowledge_base_id, uploader_id, name: str) -> Document:
     document = Document(
         knowledge_base_id=knowledge_base_id,
+        uploaded_by_user_id=uploader_id,
         original_file_name=name,
         stored_file_name=f"{uuid4()}.txt",
         content_type="text/plain",
@@ -70,8 +72,12 @@ async def test_search_orders_filters_limits_and_isolates_knowledge_base(
         other = KnowledgeBase(name=f"其他知识库-{uuid4()}", owner_id=knowledge_base_owner.id)
         session.add_all([target, other])
         await session.flush()
-        target_document = await _add_document(session, target.id, "员工手册.txt")
-        other_document = await _add_document(session, other.id, "其他资料.txt")
+        target_document = await _add_document(
+            session, target.id, knowledge_base_owner.id, "员工手册.txt"
+        )
+        other_document = await _add_document(
+            session, other.id, knowledge_base_owner.id, "其他资料.txt"
+        )
         session.add_all(
             [
                 DocumentChunk(

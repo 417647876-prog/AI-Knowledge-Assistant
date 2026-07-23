@@ -12,7 +12,7 @@ from app.auth.service import AuthService
 from app.core.config import Settings
 from app.core.exceptions import AppError
 from app.core.security import create_refresh_token, hash_password, hash_refresh_secret
-from app.db.models import ADMIN_ROLE, RefreshSession, User
+from app.db.models import ADMIN_ROLE, AuditEvent, RefreshSession, User
 
 
 class AsyncTransaction:
@@ -64,7 +64,8 @@ async def test_login_issues_access_and_persisted_refresh_session() -> None:
 
 @pytest.mark.asyncio
 async def test_unknown_username_still_runs_virtual_password_verification() -> None:
-    service = make_service(make_session(None), datetime.now(UTC))
+    session = make_session(None)
+    service = make_service(session, datetime.now(UTC))
 
     with (
         patch("app.auth.service.verify_password", return_value=False) as verify,
@@ -75,6 +76,29 @@ async def test_unknown_username_still_runs_virtual_password_verification() -> No
     assert error.value.code == "INVALID_CREDENTIALS"
     verify.assert_called_once()
     assert verify.call_args.args[0] == "wrong password"
+    audit_calls = session.add.call_args_list
+    audit = next(item.args[0] for item in audit_calls if isinstance(item.args[0], AuditEvent))
+    assert audit.action == "login.failure"
+    assert audit.result == "denied"
+
+
+@pytest.mark.asyncio
+async def test_login_success_adds_audit_event_in_the_session_transaction() -> None:
+    user = User(
+        id=uuid4(),
+        username="reader",
+        password_hash=hash_password("correct password"),
+        role="user",
+        is_active=True,
+    )
+    session = make_session(user)
+
+    await make_service(session, datetime.now(UTC)).login("reader", "correct password")
+
+    audit_calls = session.add.call_args_list
+    audit = next(item.args[0] for item in audit_calls if isinstance(item.args[0], AuditEvent))
+    assert audit.action == "login.success"
+    assert audit.actor_user_id == user.id
 
 
 @pytest.mark.asyncio

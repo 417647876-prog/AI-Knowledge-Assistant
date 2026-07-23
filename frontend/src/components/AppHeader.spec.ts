@@ -44,7 +44,26 @@ describe('AppHeader', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('管理员')
-    expect(router.currentRoute.value.fullPath).toBe('/admin/users')
+    await vi.waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/admin/users'))
+  })
+
+  it('已登录用户可通过头部进入我的页面', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const auth = useAuthStore()
+    auth.initialized = true
+    auth.user = { id: 'u-1', username: 'alice', role: 'user', is_active: true }
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppHeader, {
+      global: { plugins: [pinia, router, ElementPlus] },
+    })
+
+    await wrapper.get('[data-test="profile-link"]').trigger('click')
+    await flushPromises()
+
+    await vi.waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/profile'))
   })
 
   it('退出后调用认证状态清理并返回登录页', async () => {
@@ -68,6 +87,6 @@ describe('AppHeader', () => {
     await flushPromises()
 
     expect(logout).toHaveBeenCalledOnce()
-    expect(router.currentRoute.value.fullPath).toBe('/login')
+    await vi.waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/login'))
   })
 })

@@ -4,7 +4,6 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,8 +23,8 @@ from app.ai.embeddings import (
 from app.ai.rerankers import FakeRerankerProvider, get_local_reranker_provider
 from app.ai.rewrite import ChatQuestionRewriter, FakeQuestionRewriter
 from app.api.auth_dependencies import get_current_user
-from app.api.sse import iter_sse
-from app.authorization.service import get_accessible_knowledge_base
+from app.api.sse import DisconnectAwareStreamingResponse, iter_sse
+from app.authorization.service import get_owned_knowledge_base
 from app.core.config import Settings, get_settings
 from app.db.models import User
 from app.db.session import get_session
@@ -147,7 +146,10 @@ async def get_question_rewriter(
 ) -> QuestionRewriter:
     if settings.chat_provider == "fake":
         return FakeQuestionRewriter()
-    return ChatQuestionRewriter(chat_provider)
+    return ChatQuestionRewriter(
+        chat_provider,
+        max_output_tokens=settings.chat_rewrite_max_output_tokens,
+    )
 
 
 def get_question_reranker(
@@ -177,6 +179,7 @@ def build_retriever(session: AsyncSession, settings: Settings) -> Retriever:
 
 async def get_rag_service(
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
     embedding_provider: Annotated[EmbeddingProvider, Depends(get_question_embedding_provider)],
     chat_provider: Annotated[StreamingChatProvider, Depends(get_question_chat_provider)],
     question_rewriter: Annotated[QuestionRewriter, Depends(get_question_rewriter)],
@@ -185,6 +188,7 @@ async def get_rag_service(
 ) -> RagService:
     return RagService(
         session=session,
+        owner_user_id=current_user.id,
         embedding_provider=embedding_provider,
         retriever=build_retriever(session, settings),
         chat_provider=chat_provider,
@@ -194,10 +198,15 @@ async def get_rag_service(
         candidate_k=settings.rag_candidate_k,
         reranker_allow_fallback=settings.rag_reranker_allow_fallback,
         reranker_min_score=settings.rag_reranker_min_score,
+        answer_max_output_tokens=settings.chat_answer_max_output_tokens,
     )
 
 
-@router.post("/{knowledge_base_id}/questions", response_model=QuestionResponse)
+@router.post(
+    "/{knowledge_base_id}/questions",
+    response_model=QuestionResponse,
+    deprecated=True,
+)
 async def ask_question(
     knowledge_base_id: UUID,
     payload: QuestionRequest,
@@ -207,7 +216,7 @@ async def ask_question(
     service: Annotated[RagService, Depends(get_rag_service)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> QuestionResponse:
-    await get_accessible_knowledge_base(session, current_user, knowledge_base_id)
+    await get_owned_knowledge_base(session, current_user, knowledge_base_id)
     top_k = payload.top_k or settings.rag_top_k_default
     result = await service.answer(knowledge_base_id, payload.question, top_k)
     return QuestionResponse(
@@ -218,7 +227,7 @@ async def ask_question(
     )
 
 
-@router.post("/{knowledge_base_id}/questions/stream")
+@router.post("/{knowledge_base_id}/questions/stream", deprecated=True)
 async def stream_question(
     knowledge_base_id: UUID,
     payload: StreamQuestionRequest,
@@ -227,14 +236,14 @@ async def stream_question(
     current_user: Annotated[User, Depends(get_current_user)],
     service: Annotated[RagService, Depends(get_rag_service)],
     settings: Annotated[Settings, Depends(get_settings)],
-) -> StreamingResponse:
-    await get_accessible_knowledge_base(session, current_user, knowledge_base_id)
+) -> DisconnectAwareStreamingResponse:
+    await get_owned_knowledge_base(session, current_user, knowledge_base_id)
     top_k = payload.top_k or settings.rag_top_k_default
     history = [
         ConversationMessage(role=item.role, content=item.content) for item in payload.history
     ]
     source = service.stream_answer(knowledge_base_id, payload.question, top_k, history)
-    return StreamingResponse(
+    return DisconnectAwareStreamingResponse(
         iter_sse(request, source, request.state.request_id),
         media_type="text/event-stream; charset=utf-8",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

@@ -1,26 +1,35 @@
 import hashlib
+import logging
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Response, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_dependencies import get_current_user
+from app.audit.service import add_audit_event, record_denied_audit_event
 from app.authorization.service import (
-    get_accessible_document,
-    get_accessible_knowledge_base,
+    get_owned_document,
+    get_owned_knowledge_base,
 )
 from app.core.config import get_settings
 from app.core.exceptions import AppError
-from app.db.models import Document, User
-from app.db.models.ingestion_job import IngestionJob
+from app.db.models import Document, DocumentJob, User
 from app.db.session import get_session
-from app.knowledge.background import run_ingestion
+from app.jobs.repository import enqueue_job
+from app.lifecycle.service import (
+    effective_purge_after,
+    request_purge_document,
+    restore_document,
+    soft_delete_document,
+)
+from app.quotas.service import QuotaDefaults, consume_upload
 
 router = APIRouter(tags=["documents"])
+logger = logging.getLogger(__name__)
 _allowed_extensions = {".pdf", ".docx", ".xlsx", ".md", ".txt"}
 
 
@@ -37,22 +46,39 @@ class DocumentListResponse(BaseModel):
     items: list[DocumentTaskResponse]
 
 
-def _document_response(document: Document, job: IngestionJob) -> DocumentTaskResponse:
+class PurgeJobResponse(BaseModel):
+    job_id: UUID
+    status: str
+
+
+def _document_response(document: Document, job: DocumentJob) -> DocumentTaskResponse:
+    if job.status == "failed":
+        status = "failed"
+        error_code = job.error_code
+        error_message = job.error_message
+    else:
+        status = document.status
+        error_code = document.error_code
+        error_message = document.error_message
     return DocumentTaskResponse(
         document_id=document.id,
         job_id=job.id,
         file_name=document.original_file_name,
-        status=document.status,
-        error_code=document.error_code,
-        error_message=document.error_message,
+        status=status,
+        error_code=error_code,
+        error_message=error_message,
     )
 
 
-async def _latest_job(session: AsyncSession, document_id: UUID) -> IngestionJob | None:
+async def _latest_job(session: AsyncSession, document_id: UUID) -> DocumentJob | None:
     return await session.scalar(
-        select(IngestionJob)
-        .where(IngestionJob.document_id == document_id)
-        .order_by(IngestionJob.created_at.desc(), IngestionJob.id.desc())
+        select(DocumentJob)
+        .where(
+            DocumentJob.job_type == "ingest_document",
+            DocumentJob.resource_type == "document",
+            DocumentJob.resource_id == document_id,
+        )
+        .order_by(DocumentJob.created_at.desc(), DocumentJob.id.desc())
         .limit(1)
     )
 
@@ -64,12 +90,13 @@ async def _latest_job(session: AsyncSession, document_id: UUID) -> IngestionJob 
 )
 async def upload_document(
     knowledge_base_id: UUID,
-    background_tasks: BackgroundTasks,
     file: Annotated[UploadFile, File()],
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> DocumentTaskResponse:
-    await get_accessible_knowledge_base(session, current_user, knowledge_base_id)
+    knowledge_base = await get_owned_knowledge_base(
+        session, current_user, knowledge_base_id, for_update=True
+    )
     extension = Path(file.filename or "").suffix.lower()
     if extension not in _allowed_extensions:
         raise AppError(
@@ -86,18 +113,88 @@ async def upload_document(
     file_hash = hashlib.sha256(content).hexdigest()
     duplicate = await session.scalar(
         select(Document.id).where(
-            Document.knowledge_base_id == knowledge_base_id, Document.file_hash == file_hash
+            Document.knowledge_base_id == knowledge_base_id,
+            Document.file_hash == file_hash,
+            Document.deleted_at.is_(None),
         )
     )
     if duplicate is not None:
         raise AppError(
             code="DUPLICATE_DOCUMENT", message="该知识库已上传相同文件。", status_code=409
         )
+    trashed_duplicates = (
+        await session.scalars(
+            select(Document).where(
+                Document.knowledge_base_id == knowledge_base_id,
+                Document.file_hash == file_hash,
+                Document.deleted_at.is_not(None),
+            )
+        )
+    ).all()
+    database_now = await session.scalar(select(func.clock_timestamp()))
+    assert database_now is not None
+    recoverable_duplicate = next(
+        (
+            item
+            for item in trashed_duplicates
+            if (
+                effective_purge_after(
+                    item.deleted_at,
+                    item.purge_after,
+                    settings.trash_retention_days,
+                )
+                or database_now
+            )
+            > database_now
+        ),
+        None,
+    )
+    if recoverable_duplicate is not None:
+        actor_user_id = current_user.id
+        recoverable_duplicate_id = recoverable_duplicate.id
+        error = AppError(
+            code="DOCUMENT_IN_TRASH",
+            message="相同文件仍在回收站中，请先恢复或永久清理。",
+            status_code=409,
+        )
+        await session.rollback()
+        await record_denied_audit_event(
+            actor_user_id=actor_user_id,
+            action="document.upload",
+            resource_type="document",
+            resource_id=recoverable_duplicate_id,
+            security_summary={"reason": error.code},
+        )
+        raise error
+    await consume_upload(
+        session,
+        user_id=current_user.id,
+        content_bytes=len(content),
+        defaults=QuotaDefaults(
+            daily_questions=settings.default_daily_question_limit,
+            daily_uploads=settings.default_daily_upload_limit,
+            storage_bytes=settings.default_storage_bytes_limit,
+        ),
+    )
     stored_file_name = f"{uuid4()}{extension}"
     settings.upload_directory.mkdir(parents=True, exist_ok=True)
-    (settings.upload_directory / stored_file_name).write_bytes(content)
+    stored_file = settings.upload_directory / stored_file_name
+    try:
+        stored_file.write_bytes(content)
+    except OSError as error:
+        await session.rollback()
+        try:
+            stored_file.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("清理写入失败的上传文件失败", extra={"file": stored_file_name})
+        raise AppError(
+            code="DOCUMENT_UPLOAD_FAILED",
+            message="文档上传失败，请稍后重试。",
+            status_code=500,
+        ) from error
     document = Document(
         knowledge_base_id=knowledge_base_id,
+        uploaded_by_user_id=current_user.id,
         original_file_name=file.filename or "upload",
         stored_file_name=stored_file_name,
         content_type=file.content_type or "application/octet-stream",
@@ -105,12 +202,35 @@ async def upload_document(
         file_size=len(content),
         file_hash=file_hash,
     )
-    session.add(document)
-    await session.flush()
-    job = IngestionJob(document_id=document.id)
-    session.add(job)
-    await session.commit()
-    background_tasks.add_task(run_ingestion, document.id)
+    try:
+        session.add(document)
+        await session.flush()
+        job = await enqueue_job(
+            session,
+            job_type="ingest_document",
+            resource_type="document",
+            resource_id=document.id,
+            owner_user_id=knowledge_base.owner_id,
+            knowledge_base_id=knowledge_base.id,
+            max_attempts=settings.job_max_attempts,
+        )
+        add_audit_event(
+            session,
+            actor_user_id=current_user.id,
+            action="document.upload",
+            resource_type="document",
+            resource_id=document.id,
+            result="success",
+            security_summary={"size_bytes": len(content)},
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        try:
+            stored_file.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("清理未入库的上传文件失败", extra={"file": stored_file_name})
+        raise
     return _document_response(document, job)
 
 
@@ -120,7 +240,7 @@ async def get_document(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> DocumentTaskResponse:
-    document = await get_accessible_document(session, current_user, document_id)
+    document = await get_owned_document(session, current_user, document_id)
     job = await _latest_job(session, document_id)
     if job is None:
         raise AppError(code="DOCUMENT_NOT_FOUND", message="文档任务不存在。", status_code=404)
@@ -136,11 +256,14 @@ async def list_documents(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> DocumentListResponse:
-    await get_accessible_knowledge_base(session, current_user, knowledge_base_id)
+    await get_owned_knowledge_base(session, current_user, knowledge_base_id)
     documents = (
         await session.scalars(
             select(Document)
-            .where(Document.knowledge_base_id == knowledge_base_id)
+            .where(
+                Document.knowledge_base_id == knowledge_base_id,
+                Document.deleted_at.is_(None),
+            )
             .order_by(Document.created_at.desc(), Document.id.desc())
         )
     ).all()
@@ -159,15 +282,19 @@ async def list_documents(
 )
 async def reprocess_document(
     document_id: UUID,
-    background_tasks: BackgroundTasks,
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> DocumentTaskResponse:
-    document = await get_accessible_document(session, current_user, document_id, for_update=True)
+    document = await get_owned_document(session, current_user, document_id, for_update=True)
+    knowledge_base = await get_owned_knowledge_base(
+        session, current_user, document.knowledge_base_id
+    )
     active_job = await session.scalar(
-        select(IngestionJob.id).where(
-            IngestionJob.document_id == document_id,
-            IngestionJob.status.in_(("pending", "running")),
+        select(DocumentJob.id).where(
+            DocumentJob.job_type == "ingest_document",
+            DocumentJob.resource_type == "document",
+            DocumentJob.resource_id == document_id,
+            DocumentJob.status.in_(("pending", "processing", "retry_wait")),
         )
     )
     if active_job is not None:
@@ -179,10 +306,24 @@ async def reprocess_document(
     document.status = "pending"
     document.error_code = None
     document.error_message = None
-    job = IngestionJob(document_id=document.id)
-    session.add(job)
+    job = await enqueue_job(
+        session,
+        job_type="ingest_document",
+        resource_type="document",
+        resource_id=document.id,
+        owner_user_id=knowledge_base.owner_id,
+        knowledge_base_id=knowledge_base.id,
+        max_attempts=get_settings().job_max_attempts,
+    )
+    add_audit_event(
+        session,
+        actor_user_id=current_user.id,
+        action="document.retry",
+        resource_type="document",
+        resource_id=document.id,
+        result="success",
+    )
     await session.commit()
-    background_tasks.add_task(run_ingestion, document.id)
     return _document_response(document, job)
 
 
@@ -192,38 +333,84 @@ async def delete_document(
     session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Response:
-    document = await get_accessible_document(session, current_user, document_id, for_update=True)
-    active_job = await session.scalar(
-        select(IngestionJob.id).where(
-            IngestionJob.document_id == document_id,
-            IngestionJob.status.in_(("pending", "running")),
-        )
-    )
-    if active_job is not None:
-        raise AppError(
-            code="DOCUMENT_PROCESSING",
-            message="文档正在处理中，请稍后再删除。",
-            status_code=409,
-        )
-
-    upload_root = get_settings().upload_directory.resolve()
-    stored_file = (upload_root / document.stored_file_name).resolve()
-    if not stored_file.is_relative_to(upload_root):
-        raise AppError(
-            code="DOCUMENT_DELETE_FAILED",
-            message="文档删除失败，请稍后重试。",
-            status_code=500,
-        )
     try:
-        await session.delete(document)
-        await session.flush()
-        stored_file.unlink(missing_ok=True)
+        await soft_delete_document(
+            session,
+            owner_user_id=current_user.id,
+            document_id=document_id,
+            retention_days=get_settings().trash_retention_days,
+        )
         await session.commit()
-    except OSError as error:
+    except AppError as error:
+        actor_user_id = current_user.id
         await session.rollback()
-        raise AppError(
-            code="DOCUMENT_DELETE_FAILED",
-            message="文档删除失败，请稍后重试。",
-            status_code=500,
-        ) from error
+        await record_denied_audit_event(
+            actor_user_id=actor_user_id,
+            action="document.delete",
+            resource_type="document",
+            resource_id=document_id,
+            security_summary={"reason": error.code},
+        )
+        raise
     return Response(status_code=204)
+
+
+@router.post("/api/v1/documents/{document_id}/restore", status_code=204)
+async def restore_deleted_document(
+    document_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Response:
+    try:
+        await restore_document(
+            session,
+            owner_user_id=current_user.id,
+            document_id=document_id,
+            retention_days=get_settings().trash_retention_days,
+        )
+        await session.commit()
+    except AppError as error:
+        actor_user_id = current_user.id
+        await session.rollback()
+        await record_denied_audit_event(
+            actor_user_id=actor_user_id,
+            action="document.restore",
+            resource_type="document",
+            resource_id=document_id,
+            security_summary={"reason": error.code},
+        )
+        raise
+    return Response(status_code=204)
+
+
+@router.delete(
+    "/api/v1/documents/{document_id}/purge",
+    response_model=PurgeJobResponse,
+    status_code=202,
+)
+async def purge_deleted_document(
+    document_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> PurgeJobResponse:
+    try:
+        job = await request_purge_document(
+            session,
+            owner_user_id=current_user.id,
+            document_id=document_id,
+            max_attempts=get_settings().job_max_attempts,
+            retention_days=get_settings().trash_retention_days,
+        )
+        await session.commit()
+    except AppError as error:
+        actor_user_id = current_user.id
+        await session.rollback()
+        await record_denied_audit_event(
+            actor_user_id=actor_user_id,
+            action="document.purge_request",
+            resource_type="document",
+            resource_id=document_id,
+            security_summary={"reason": error.code},
+        )
+        raise
+    return PurgeJobResponse(job_id=job.id, status=job.status)

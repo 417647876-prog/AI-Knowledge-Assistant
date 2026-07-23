@@ -1,5 +1,6 @@
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -9,15 +10,17 @@ from app.ai.embeddings import FakeEmbeddingProvider
 from app.core.security import hash_password
 from app.db.models.document import Document
 from app.db.models.document_chunk import DocumentChunk
-from app.db.models.ingestion_job import IngestionJob
+from app.db.models.document_job import DocumentJob
 from app.db.models.knowledge_base import KnowledgeBase
 from app.db.models.user import USER_ROLE, User
 from app.db.session import session_factory
+from app.jobs.repository import claim_next_job, complete_job
 from app.knowledge.chunking import RecursiveTextChunker
 from app.knowledge.ingestion_service import IngestionService
 from app.knowledge.parsers.registry import ParserRegistry
 from app.knowledge.parsers.text import TextParser
 from app.knowledge.search_tokens import build_search_text
+from tests.database_cleanup import delete_owned_knowledge_bases
 
 pytestmark = [
     pytest.mark.integration,
@@ -43,7 +46,7 @@ async def knowledge_base_owner() -> AsyncIterator[User]:
         yield user
     finally:
         async with session_factory.begin() as session:
-            await session.execute(delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id))
+            await delete_owned_knowledge_bases(session, [user.id])
             await session.execute(delete(User).where(User.id == user.id))
 
 
@@ -60,6 +63,7 @@ async def test_process_stores_vectors_and_is_safe_to_retry(
         await session.flush()
         document = Document(
             knowledge_base_id=knowledge_base.id,
+            uploaded_by_user_id=knowledge_base_owner.id,
             original_file_name="制度.txt",
             stored_file_name=stored_name,
             content_type="text/plain",
@@ -69,9 +73,26 @@ async def test_process_stores_vectors_and_is_safe_to_retry(
         )
         session.add(document)
         await session.flush()
-        job = IngestionJob(document_id=document.id)
+        job = DocumentJob(
+            job_type="ingest_document",
+            resource_type="document",
+            resource_id=document.id,
+            owner_user_id=knowledge_base_owner.id,
+            knowledge_base_id=knowledge_base.id,
+            stage="parse",
+        )
         session.add(job)
         await session.commit()
+
+        claim_at = datetime.now(UTC) + timedelta(seconds=1)
+        lease = await claim_next_job(
+            session,
+            worker_id="vector-ingestion-test",
+            now=claim_at,
+            lease_seconds=120,
+        )
+        await session.commit()
+        assert lease is not None
 
         service = IngestionService(
             session=session,
@@ -81,8 +102,24 @@ async def test_process_stores_vectors_and_is_safe_to_retry(
             embedding_provider=FakeEmbeddingProvider(dimensions=512),
             embedding_dimensions=512,
         )
-        await service.process(document.id)
-        await service.process(document.id)
+        chunk_count = await service.process(
+            document_id=document.id,
+            job_id=job.id,
+            lease_token=lease.lease_token,
+        )
+        await service.process(
+            document_id=document.id,
+            job_id=job.id,
+            lease_token=lease.lease_token,
+        )
+        assert await complete_job(
+            session,
+            job_id=job.id,
+            lease_token=lease.lease_token,
+            chunk_count=chunk_count,
+            now=claim_at + timedelta(seconds=1),
+        )
+        await session.commit()
 
         await session.refresh(document)
         await session.refresh(job)

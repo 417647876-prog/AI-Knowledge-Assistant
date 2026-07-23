@@ -14,6 +14,7 @@ from app.core.security import create_access_token, hash_password
 from app.db.models import ADMIN_ROLE, USER_ROLE, KnowledgeBase, RefreshSession, User
 from app.db.session import session_factory
 from app.main import create_app
+from tests.database_cleanup import delete_owned_knowledge_bases
 
 pytestmark = [
     pytest.mark.integration,
@@ -97,7 +98,7 @@ async def permission_context() -> AsyncIterator[KnowledgeBasePermissionContext]:
             await client.aclose()
         user_ids = [user.id for user in users]
         async with session_factory.begin() as session:
-            await session.execute(delete(KnowledgeBase).where(KnowledgeBase.owner_id.in_(user_ids)))
+            await delete_owned_knowledge_bases(session, user_ids)
             await session.execute(
                 delete(RefreshSession).where(RefreshSession.user_id.in_(user_ids))
             )
@@ -135,9 +136,8 @@ async def test_create_and_list_knowledge_bases_are_isolated_by_owner(
 
     assert [item["name"] for item in alice_items] == ["Alice KB"]
     assert bob_items == []
-    assert [item["name"] for item in admin_items] == ["Alice KB", "Admin KB"]
-    assert admin_items[0]["owner_username"] == permission_context.alice.username
-    assert admin_items[1]["owner_username"] == permission_context.admin.username
+    assert [item["name"] for item in admin_items] == ["Admin KB"]
+    assert admin_items[0]["owner_username"] == permission_context.admin.username
 
 
 @pytest.mark.asyncio
@@ -170,20 +170,23 @@ async def test_accessible_knowledge_base_hides_other_users_resources(
 
     async with session_factory() as session:
         with pytest.raises(AppError) as forbidden:
-            await service.get_accessible_knowledge_base(
+            await service.get_owned_knowledge_base(
                 session, permission_context.bob, knowledge_base_id
             )
         with pytest.raises(AppError) as missing:
-            await service.get_accessible_knowledge_base(session, permission_context.bob, uuid4())
-        admin_result = await service.get_accessible_knowledge_base(
-            session,
-            permission_context.admin,
-            knowledge_base_id,
-            for_update=True,
-        )
+            await service.get_owned_knowledge_base(session, permission_context.bob, uuid4())
+        with pytest.raises(AppError) as admin_forbidden:
+            await service.get_owned_knowledge_base(
+                session,
+                permission_context.admin,
+                knowledge_base_id,
+                for_update=True,
+            )
 
     assert forbidden.value.status_code == 404
     assert forbidden.value.code == "KNOWLEDGE_BASE_NOT_FOUND"
     assert missing.value.status_code == 404
     assert missing.value.code == forbidden.value.code
-    assert admin_result.id == knowledge_base_id
+    assert admin_forbidden.value.status_code == 404
+    assert admin_forbidden.value.code == forbidden.value.code
+    assert not hasattr(service, "get_accessible_knowledge_base")

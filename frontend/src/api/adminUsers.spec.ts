@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureAuthentication } from './client'
 import {
   createAdminUser,
+  getAdminUserQuota,
   listAdminUsers,
   resetAdminUserPassword,
+  updateAdminUserQuota,
   updateAdminUser,
 } from './adminUsers'
 
@@ -93,5 +95,29 @@ describe('admin users API', () => {
       message: `管理员请求失败 ${status}。`,
       requestId: `req-${status}`,
     })
+  })
+
+  it('查看和调整用户额度时只发送三个可覆盖字段', async () => {
+    const quota = {
+      daily_question_limit: 30,
+      daily_upload_limit: null,
+      storage_bytes_limit: 1073741824,
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(quota), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(quota), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getAdminUserQuota('u-1')
+    await updateAdminUserQuota('u-1', quota)
+
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/admin/users/u-1/quota')
+    expect(fetchMock.mock.calls[1]![0]).toBe('/api/v1/admin/users/u-1/quota')
+    expect(fetchMock.mock.calls[1]![1]).toMatchObject({ method: 'PUT' })
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body as string)).toEqual(quota)
   })
 })

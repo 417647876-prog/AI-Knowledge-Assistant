@@ -13,7 +13,7 @@ defineProps<{ citations: Citation[] }>()
       </template>
       <p>{{ citation.content }}</p>
       <div class="citation-meta">
-        <span>相关度 {{ citation.relevance_score.toFixed(2) }}</span>
+        <span v-if="citation.relevance_score !== null">相关度 {{ citation.relevance_score.toFixed(2) }}</span>
         <span v-if="citation.page_number !== null">第 {{ citation.page_number }} 页</span>
         <span v-if="citation.sheet_name !== null">工作表：{{ citation.sheet_name }}</span>
         <span v-if="citation.row_start !== null">行号：{{ citation.row_start }}</span>

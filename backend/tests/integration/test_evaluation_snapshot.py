@@ -12,6 +12,7 @@ from app.db.models.knowledge_base import KnowledgeBase
 from app.db.models.user import USER_ROLE, User
 from app.db.session import session_factory
 from app.evaluation import snapshot
+from tests.database_cleanup import delete_owned_knowledge_bases
 
 pytestmark = [
     pytest.mark.integration,
@@ -37,7 +38,7 @@ async def snapshot_owner() -> AsyncIterator[User]:
         yield user
     finally:
         async with session_factory.begin() as session:
-            await session.execute(delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id))
+            await delete_owned_knowledge_bases(session, [user.id])
             await session.execute(delete(User).where(User.id == user.id))
 
 
@@ -48,12 +49,14 @@ def _vector(value: float) -> list[float]:
 async def _add_document_with_chunk(
     session,
     knowledge_base_id: UUID,
+    uploader_id: UUID,
     name: str,
     content: str,
     embedding_value: float,
 ) -> DocumentChunk:
     document = Document(
         knowledge_base_id=knowledge_base_id,
+        uploaded_by_user_id=uploader_id,
         original_file_name=name,
         stored_file_name=f"{uuid4()}.txt",
         content_type="text/plain",
@@ -94,6 +97,7 @@ async def test_snapshot_changes_only_for_target_knowledge_base(
         target_chunk = await _add_document_with_chunk(
             session,
             target.id,
+            snapshot_owner.id,
             "目标资料.txt",
             "目标知识库正文",
             0.1,
@@ -101,6 +105,7 @@ async def test_snapshot_changes_only_for_target_knowledge_base(
         other_chunk = await _add_document_with_chunk(
             session,
             other.id,
+            snapshot_owner.id,
             "其他资料.txt",
             "其他知识库正文",
             0.2,

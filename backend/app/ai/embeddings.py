@@ -11,8 +11,8 @@ from app.core.exceptions import AppError
 BGE_ZH_QUERY_INSTRUCTION = "为这个句子生成表示以用于检索相关文章："
 
 
-def _provider_error(message: str) -> AppError:
-    return AppError(code="EMBEDDING_PROVIDER_ERROR", message=message, status_code=502)
+def _provider_error(message: str, *, code: str = "EMBEDDING_PROVIDER_ERROR") -> AppError:
+    return AppError(code=code, message=message, status_code=502)
 
 
 def validate_embeddings(
@@ -74,8 +74,21 @@ class OpenAICompatibleEmbeddingProvider:
                 response.raise_for_status()
                 data = sorted(response.json()["data"], key=lambda item: item["index"])
                 embeddings.extend([item["embedding"] for item in data])
-        except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
-            raise _provider_error("Embedding 服务暂不可用。") from error
+        except httpx.TimeoutException as error:
+            raise _provider_error("Embedding 服务调用超时。", code="MODEL_TIMEOUT") from error
+        except httpx.HTTPStatusError as error:
+            code = (
+                "MODEL_SERVICE_UNAVAILABLE"
+                if error.response.status_code >= 500
+                else "EMBEDDING_PROVIDER_ERROR"
+            )
+            raise _provider_error("Embedding 服务暂不可用。", code=code) from error
+        except httpx.RequestError as error:
+            raise _provider_error(
+                "Embedding 服务暂不可用。", code="MODEL_SERVICE_UNAVAILABLE"
+            ) from error
+        except (KeyError, TypeError, ValueError) as error:
+            raise _provider_error("Embedding 返回结果无效。") from error
         validate_embeddings(texts, embeddings, dimensions=self._dimensions)
         return embeddings
 

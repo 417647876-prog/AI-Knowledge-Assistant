@@ -26,7 +26,10 @@ class VectorRetriever:
         statement = (
             select(DocumentChunk, Document.original_file_name, score)
             .join(Document, Document.id == DocumentChunk.document_id)
-            .where(DocumentChunk.knowledge_base_id == knowledge_base_id)
+            .where(
+                DocumentChunk.knowledge_base_id == knowledge_base_id,
+                Document.deleted_at.is_(None),
+            )
             .where(score >= score_threshold)
             .order_by(distance)
             .limit(top_k)

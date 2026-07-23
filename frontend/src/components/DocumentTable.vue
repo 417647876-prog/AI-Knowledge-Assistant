@@ -41,7 +41,7 @@ async function reprocess(document: DocumentTask) {
 async function remove(document: DocumentTask) {
   if (!startAction(document.document_id, 'delete')) return
   try {
-    await ElMessageBox.confirm(`确定删除“${document.file_name}”吗？删除后无法恢复。`, '删除文档', {
+    await ElMessageBox.confirm(`确定删除“${document.file_name}”吗？可在回收站恢复。`, '删除文档', {
       type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
     })
     await store.deleteDocument(document.document_id)
@@ -56,38 +56,29 @@ async function remove(document: DocumentTask) {
 </script>
 
 <template>
-  <el-table :data="store.activeDocuments" empty-text="当前知识库暂无文档">
-    <el-table-column prop="file_name" label="文件名" />
-    <el-table-column label="状态">
-      <template #default="scope">
-        {{ labels[scope.row.status as keyof typeof labels] }}
-      </template>
-    </el-table-column>
-    <el-table-column prop="error_code" label="错误代码" />
-    <el-table-column prop="error_message" label="错误信息" />
-    <el-table-column label="操作" width="180">
-      <template #default="scope">
-        <el-button
-          :data-test="`reprocess-${scope.row.document_id}`"
-          link
-          type="primary"
-          :loading="activeActions[scope.row.document_id] === 'reprocess'"
-          :disabled="isProcessing(scope.row.status) || Boolean(activeActions[scope.row.document_id])"
-          @click="reprocess(scope.row)"
-        >
-          重新处理
-        </el-button>
-        <el-button
-          :data-test="`delete-${scope.row.document_id}`"
-          link
-          type="danger"
-          :loading="activeActions[scope.row.document_id] === 'delete'"
-          :disabled="isProcessing(scope.row.status) || Boolean(activeActions[scope.row.document_id])"
-          @click="remove(scope.row)"
-        >
-          删除
-        </el-button>
-      </template>
-    </el-table-column>
-  </el-table>
+  <div class="document-table-desktop">
+    <el-table :data="store.activeDocuments" empty-text="当前知识库暂无文档">
+      <el-table-column prop="file_name" label="文件名" />
+      <el-table-column label="状态"><template #default="scope">{{ labels[scope.row.status as keyof typeof labels] }}</template></el-table-column>
+      <el-table-column prop="error_code" label="错误代码" />
+      <el-table-column prop="error_message" label="错误信息" />
+      <el-table-column label="操作" width="180"><template #default="scope">
+        <el-button :data-test="`reprocess-${scope.row.document_id}`" link type="primary" :loading="activeActions[scope.row.document_id] === 'reprocess'" :disabled="isProcessing(scope.row.status) || Boolean(activeActions[scope.row.document_id])" @click="reprocess(scope.row)">重新处理</el-button>
+        <el-button :data-test="`delete-${scope.row.document_id}`" link type="danger" :loading="activeActions[scope.row.document_id] === 'delete'" :disabled="isProcessing(scope.row.status) || Boolean(activeActions[scope.row.document_id])" @click="remove(scope.row)">删除</el-button>
+      </template></el-table-column>
+    </el-table>
+  </div>
+  <section class="document-list-mobile" aria-label="文档列表">
+    <p v-if="!store.activeDocuments.length">当前知识库暂无文档</p>
+    <article v-for="document in store.activeDocuments" :key="document.document_id" class="document-card">
+      <strong>{{ document.file_name }}</strong>
+      <span>状态：{{ labels[document.status] }}</span>
+      <span v-if="document.error_code">错误：{{ document.error_code }}</span>
+      <span v-if="document.error_message">说明：{{ document.error_message }}</span>
+      <div class="document-card-actions">
+        <el-button :data-test="`reprocess-mobile-${document.document_id}`" :disabled="isProcessing(document.status) || Boolean(activeActions[document.document_id])" :loading="activeActions[document.document_id] === 'reprocess'" @click="reprocess(document)">重新处理</el-button>
+        <el-button :data-test="`delete-mobile-${document.document_id}`" type="danger" :disabled="isProcessing(document.status) || Boolean(activeActions[document.document_id])" :loading="activeActions[document.document_id] === 'delete'" @click="remove(document)">删除</el-button>
+      </div>
+    </article>
+  </section>
 </template>

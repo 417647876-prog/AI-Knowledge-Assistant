@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, Request, Response, status
@@ -8,12 +9,26 @@ from app.auth.schemas import AuthSessionResponse, CurrentUserResponse, LoginRequ
 from app.auth.service import AuthService, IssuedSession
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError
+from app.core.rate_limit import SlidingWindowRateLimiter
 from app.db.models import User
 from app.db.session import get_session
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 REFRESH_COOKIE_NAME = "refresh_token"
 REFRESH_COOKIE_PATH = "/api/v1/auth"
+_login_limiter: SlidingWindowRateLimiter | None = None
+_login_limiter_config: tuple[int, int] | None = None
+
+
+def _get_login_limiter(settings: Settings) -> SlidingWindowRateLimiter:
+    global _login_limiter, _login_limiter_config
+    config = (settings.login_rate_limit_window_seconds, settings.login_rate_limit_max_failures)
+    if _login_limiter is None or _login_limiter_config != config:
+        _login_limiter = SlidingWindowRateLimiter(
+            window=timedelta(seconds=config[0]), limit=config[1]
+        )
+        _login_limiter_config = config
+    return _login_limiter
 
 
 def get_auth_service(
@@ -26,11 +41,19 @@ def get_auth_service(
 @router.post("/login", response_model=AuthSessionResponse)
 async def login(
     payload: LoginRequest,
+    request: Request,
     response: Response,
     service: Annotated[AuthService, Depends(get_auth_service)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> AuthSessionResponse:
+    username = payload.username.strip().casefold()
+    source = getattr(request.state, "request_source", "global")
+    key = f"{username}\x1f{source}"
+    limiter = _get_login_limiter(settings)
+    if not limiter.allow(key):
+        raise AppError(code="LOGIN_RATE_LIMITED", message="登录尝试过于频繁。", status_code=429)
     issued = await service.login(payload.username, payload.password)
+    limiter.clear(key)
     _set_refresh_cookie(response, issued, settings)
     return _to_auth_response(issued)
 

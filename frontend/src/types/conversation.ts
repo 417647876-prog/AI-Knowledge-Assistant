@@ -14,7 +14,15 @@ export interface StreamTimings {
   total_ms: number
 }
 
-export type AssistantStatus = 'streaming' | 'completed' | 'stopped' | 'failed'
+export type AssistantStatus =
+  | 'streaming'
+  | 'completed'
+  | 'stopped'
+  | 'interrupted'
+  | 'failed'
+
+export type StreamFailureKind = 'user_stopped' | 'network' | 'server'
+export type UsageStatus = 'known' | 'unknown'
 
 export interface UserMessage {
   id: string
@@ -38,6 +46,9 @@ export interface AssistantMessage {
   timings: StreamTimings | null
   errorCode: string | null
   requestId: string | null
+  failureKind?: StreamFailureKind | null
+  usageStatus?: UsageStatus
+  retryMode?: 'message' | 'question'
 }
 
 export interface DividerMessage {
@@ -61,5 +72,14 @@ export type QuestionStreamEvent =
   | { event: 'retrieval'; data: { retrieved_chunk_count: number; elapsed_ms: number } }
   | { event: 'token'; data: { delta: string } }
   | { event: 'citation'; data: Citation }
-  | { event: 'done'; data: { request_id: string; citations: Citation[]; retrieved_chunk_count: number; timings: StreamTimings } }
+  | {
+      event: 'done'
+      data: {
+        request_id: string
+        citations: Citation[]
+        retrieved_chunk_count: number
+        timings: StreamTimings
+        usage_complete?: boolean
+      }
+    }
   | { event: 'error'; data: { code: string; message: string; request_id: string } }

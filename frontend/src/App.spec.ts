@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App.vue'
 import { apiRequest } from './api/client'
 import AppHeader from './components/AppHeader.vue'
+import MobileNavigation from './components/MobileNavigation.vue'
 import { createAppRouter } from './router'
 import { useAuthStore } from './stores/auth'
 import { useWorkspaceStore } from './stores/workspace'
@@ -48,6 +49,24 @@ describe('App', () => {
 
     expect(wrapper.get('[data-test="auth-loading"]').text()).toContain('正在恢复登录状态')
     expect(wrapper.findComponent(LoginView).exists()).toBe(false)
+  })
+
+  it('已登录应用壳同时挂载桌面 Header 与手机导航，由响应式样式决定显示方式', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const auth = useAuthStore()
+    auth.initialized = true
+    auth.user = { id: 'u-1', username: 'alice', role: 'user', is_active: true }
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(App, {
+      global: { plugins: [pinia, router, ElementPlus] },
+    })
+
+    expect(wrapper.findComponent(AppHeader).exists()).toBe(true)
+    expect(wrapper.findComponent(MobileNavigation).exists()).toBe(true)
   })
 
   it('运行中刷新认证失败后清理工作区并跳转登录页', async () => {

@@ -1,6 +1,3 @@
-import logging
-from uuid import UUID
-
 import httpx
 
 from app.ai.contracts import EmbeddingProvider
@@ -9,18 +6,19 @@ from app.ai.embeddings import (
     OpenAICompatibleEmbeddingProvider,
     get_local_embedding_provider,
 )
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 from app.db.session import session_factory
+from app.jobs.contracts import JobLease
 from app.knowledge.chunking import RecursiveTextChunker
 from app.knowledge.ingestion_service import IngestionService
 from app.knowledge.parser_factory import create_parser_registry
 
-logger = logging.getLogger(__name__)
-
 
 async def _process_with_provider(
-    document_id: UUID, settings: Settings, provider: EmbeddingProvider
-) -> None:
+    lease: JobLease,
+    settings: Settings,
+    provider: EmbeddingProvider,
+) -> int:
     async with session_factory() as session:
         service = IngestionService(
             session=session,
@@ -33,38 +31,39 @@ async def _process_with_provider(
             embedding_provider=provider,
             embedding_dimensions=settings.embedding_dimensions,
         )
-        await service.process(document_id)
+        return await service.process(
+            document_id=lease.resource_id,
+            job_id=lease.job_id,
+            lease_token=lease.lease_token,
+        )
 
 
-async def run_ingestion(document_id: UUID) -> None:
-    settings = get_settings()
-    try:
-        if settings.embedding_provider == "fake":
-            provider: EmbeddingProvider = FakeEmbeddingProvider(
-                dimensions=settings.embedding_dimensions
-            )
-            await _process_with_provider(document_id, settings, provider)
-            return
+async def process_ingest_document(lease: JobLease, settings: Settings) -> int:
+    if lease.job_type != "ingest_document" or lease.resource_type != "document":
+        raise ValueError("process_ingest_document 仅处理 ingest_document 文档任务")
 
-        if settings.embedding_provider == "local":
-            provider = get_local_embedding_provider(
-                settings.embedding_model,
-                settings.embedding_dimensions,
-                settings.embedding_batch_size,
-                settings.embedding_device,
-            )
-            await _process_with_provider(document_id, settings, provider)
-            return
+    if settings.embedding_provider == "fake":
+        provider: EmbeddingProvider = FakeEmbeddingProvider(
+            dimensions=settings.embedding_dimensions
+        )
+        return await _process_with_provider(lease, settings, provider)
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            provider = OpenAICompatibleEmbeddingProvider(
-                client=client,
-                base_url=settings.embedding_base_url,
-                api_key=settings.embedding_api_key or "",
-                model=settings.embedding_model,
-                dimensions=settings.embedding_dimensions,
-                batch_size=settings.embedding_batch_size,
-            )
-            await _process_with_provider(document_id, settings, provider)
-    except Exception:
-        logger.exception("文档后台入库失败", extra={"document_id": str(document_id)})
+    if settings.embedding_provider == "local":
+        provider = get_local_embedding_provider(
+            settings.embedding_model,
+            settings.embedding_dimensions,
+            settings.embedding_batch_size,
+            settings.embedding_device,
+        )
+        return await _process_with_provider(lease, settings, provider)
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        provider = OpenAICompatibleEmbeddingProvider(
+            client=client,
+            base_url=settings.embedding_base_url,
+            api_key=settings.embedding_api_key or "",
+            model=settings.embedding_model,
+            dimensions=settings.embedding_dimensions,
+            batch_size=settings.embedding_batch_size,
+        )
+        return await _process_with_provider(lease, settings, provider)

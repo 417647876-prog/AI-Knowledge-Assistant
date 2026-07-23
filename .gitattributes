@@ -1,3 +1,4 @@
 backend/tests/fixtures/documents/*.pdf binary
 backend/tests/fixtures/documents/*.docx binary
 backend/tests/fixtures/documents/*.xlsx binary
+*.cmd text eol=crlf

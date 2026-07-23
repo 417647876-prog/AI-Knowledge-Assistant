@@ -12,11 +12,11 @@ from sqlalchemy import delete, select
 from app.ai.embeddings import FakeEmbeddingProvider
 from app.core.config import get_settings
 from app.core.security import create_access_token, hash_password
-from app.db.models import USER_ROLE, DocumentChunk, KnowledgeBase, User
+from app.db.models import USER_ROLE, DocumentChunk, DocumentJob, KnowledgeBase, User
 from app.db.models.document import Document
-from app.db.models.ingestion_job import IngestionJob
 from app.db.session import session_factory
 from app.main import create_app
+from tests.database_cleanup import delete_owned_knowledge_bases
 
 pytestmark = [
     pytest.mark.integration,
@@ -55,9 +55,7 @@ async def document_management_context() -> AsyncIterator[DocumentManagementConte
             yield DocumentManagementContext(user=user, client=client)
         finally:
             async with session_factory.begin() as session:
-                await session.execute(
-                    delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id)
-                )
+                await delete_owned_knowledge_bases(session, [user.id])
                 await session.execute(delete(User).where(User.id == user.id))
 
 
@@ -69,7 +67,7 @@ async def _create_document(
     reverse_job_ids: bool = False,
     active_job: bool = False,
     embedding: list[float] | None = None,
-) -> tuple[KnowledgeBase, Document, list[IngestionJob]]:
+) -> tuple[KnowledgeBase, Document, list[DocumentJob]]:
     stored_file_name = f"{uuid4()}.txt"
     (tmp_path / stored_file_name).write_text("员工入职满一年享受五天年假。", encoding="utf-8")
     async with session_factory() as session:
@@ -78,6 +76,7 @@ async def _create_document(
         await session.flush()
         document = Document(
             knowledge_base_id=knowledge_base.id,
+            uploaded_by_user_id=owner_id,
             original_file_name=file_name,
             stored_file_name=stored_file_name,
             content_type="text/plain",
@@ -93,17 +92,25 @@ async def _create_document(
         older_id = UUID("ffffffff-ffff-ffff-ffff-ffffffffffff") if reverse_job_ids else uuid4()
         newer_id = UUID("00000000-0000-0000-0000-000000000001") if reverse_job_ids else uuid4()
         jobs = [
-            IngestionJob(
+            DocumentJob(
                 id=older_id,
-                document_id=document.id,
+                job_type="ingest_document",
+                resource_type="document",
+                resource_id=document.id,
+                owner_user_id=owner_id,
+                knowledge_base_id=knowledge_base.id,
                 status="failed",
                 stage="parse",
                 created_at=datetime(2026, 7, 14, 8, 0, tzinfo=UTC),
             ),
-            IngestionJob(
+            DocumentJob(
                 id=newer_id,
-                document_id=document.id,
-                status="running" if active_job else "succeeded",
+                job_type="ingest_document",
+                resource_type="document",
+                resource_id=document.id,
+                owner_user_id=owner_id,
+                knowledge_base_id=knowledge_base.id,
+                status="processing" if active_job else "succeeded",
                 stage="store",
                 created_at=datetime(2026, 7, 14, 9, 0, tzinfo=UTC),
             ),
@@ -169,7 +176,7 @@ async def test_get_document_uses_latest_job_created_at(
 
 
 @pytest.mark.asyncio
-async def test_delete_document_removes_database_records_and_original_file(
+async def test_delete_document_soft_deletes_and_keeps_records_and_original_file(
     tmp_path, document_management_context: DocumentManagementContext
 ) -> None:
     _knowledge_base, document, jobs = await _create_document(
@@ -190,26 +197,30 @@ async def test_delete_document_removes_database_records_and_original_file(
         settings.upload_directory = previous_upload_directory
 
     assert response.status_code == 204
-    assert repeated_response.status_code == 404
-    assert repeated_response.json()["error"]["code"] == "DOCUMENT_NOT_FOUND"
-    assert not stored_file.exists()
+    assert repeated_response.status_code == 204
+    assert stored_file.exists()
     async with session_factory() as session:
-        assert await session.get(Document, document.id) is None
+        deleted_document = await session.get(Document, document.id)
+        assert deleted_document is not None and deleted_document.deleted_at is not None
         assert (
             await session.scalar(
                 select(DocumentChunk.id).where(DocumentChunk.document_id == document.id)
             )
-        ) is None
+        ) is not None
         assert (
             await session.scalar(
-                select(IngestionJob.id).where(IngestionJob.document_id == document.id)
+                select(DocumentJob.id).where(
+                    DocumentJob.job_type == "ingest_document",
+                    DocumentJob.resource_type == "document",
+                    DocumentJob.resource_id == document.id,
+                )
             )
-        ) is None
+        ) is not None
     assert len(jobs) == 2
 
 
 @pytest.mark.asyncio
-async def test_delete_document_rejects_active_ingestion_job(
+async def test_delete_document_cancels_active_ingestion_job(
     tmp_path, document_management_context: DocumentManagementContext
 ) -> None:
     _knowledge_base, document, _jobs = await _create_document(
@@ -228,15 +239,23 @@ async def test_delete_document_rejects_active_ingestion_job(
     finally:
         settings.upload_directory = previous_upload_directory
 
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "DOCUMENT_PROCESSING"
+    assert response.status_code == 204
     assert stored_file.exists()
     async with session_factory() as session:
-        assert await session.get(Document, document.id) is not None
+        deleted_document = await session.get(Document, document.id)
+        canceled_job = await session.scalar(
+            select(DocumentJob).where(
+                DocumentJob.resource_type == "document",
+                DocumentJob.resource_id == document.id,
+                DocumentJob.status == "canceled",
+            )
+        )
+    assert deleted_document is not None and deleted_document.deleted_at is not None
+    assert canceled_job is not None
 
 
 @pytest.mark.asyncio
-async def test_delete_document_rolls_back_when_file_unlink_fails(
+async def test_soft_delete_does_not_touch_the_original_file(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
     document_management_context: DocumentManagementContext,
@@ -259,11 +278,10 @@ async def test_delete_document_rolls_back_when_file_unlink_fails(
     finally:
         settings.upload_directory = previous_upload_directory
 
-    assert response.status_code == 500
-    assert response.json()["error"]["code"] == "DOCUMENT_DELETE_FAILED"
-    assert "AppData" not in response.text
+    assert response.status_code == 204
     async with session_factory() as session:
-        assert await session.get(Document, document.id) is not None
+        deleted_document = await session.get(Document, document.id)
+        assert deleted_document is not None and deleted_document.deleted_at is not None
         assert (
             await session.scalar(
                 select(DocumentChunk.id).where(DocumentChunk.document_id == document.id)

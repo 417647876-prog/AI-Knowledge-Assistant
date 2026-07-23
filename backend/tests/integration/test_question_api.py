@@ -18,6 +18,7 @@ from app.rag.hybrid_retriever import HybridRetriever
 from app.rag.retriever import VectorRetriever
 from app.rag.schemas import Citation, QuestionAnswer
 from app.rag.streaming import StreamEvent
+from tests.database_cleanup import delete_owned_knowledge_bases
 
 pytestmark = [
     pytest.mark.integration,
@@ -130,9 +131,7 @@ async def question_context() -> AsyncIterator[QuestionContext]:
             yield QuestionContext(client, knowledge_base.id, service)
         finally:
             async with session_factory.begin() as session:
-                await session.execute(
-                    delete(KnowledgeBase).where(KnowledgeBase.owner_id == user.id)
-                )
+                await delete_owned_knowledge_bases(session, [user.id])
                 await session.execute(
                     delete(RefreshSession).where(RefreshSession.user_id == user.id)
                 )

@@ -100,3 +100,40 @@ async def test_openai_compatible_provider_batches_and_orders_embeddings() -> Non
     assert embeddings == [[0.1, 0.1], [0.2, 0.2]]
     assert requests[0]["url"] == "https://embedding.example/v1/embeddings"
     assert '"input":["甲","乙"]' in str(requests[0]["body"])
+
+
+@pytest.mark.parametrize(
+    ("handler", "expected_code"),
+    [
+        (
+            lambda request: (_ for _ in ()).throw(httpx.ReadTimeout("timeout", request=request)),
+            "MODEL_TIMEOUT",
+        ),
+        (
+            lambda _request: httpx.Response(503, json={"error": "busy"}),
+            "MODEL_SERVICE_UNAVAILABLE",
+        ),
+        (
+            lambda _request: httpx.Response(400, json={"error": "bad input"}),
+            "EMBEDDING_PROVIDER_ERROR",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_openai_provider_classifies_retryable_and_permanent_http_failures(
+    handler,
+    expected_code: str,
+) -> None:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleEmbeddingProvider(
+            client=client,
+            base_url="https://embedding.example/v1",
+            api_key="secret",
+            model="embedding-model",
+            dimensions=2,
+            batch_size=2,
+        )
+        with pytest.raises(AppError) as captured:
+            await provider.embed_documents(["test"])
+
+    assert captured.value.code == expected_code

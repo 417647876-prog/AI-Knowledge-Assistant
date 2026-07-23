@@ -7,9 +7,20 @@ import {
   reprocessDocument as reprocessRequest,
   uploadDocument,
 } from '../api/documents'
-import { createKnowledgeBase as createRequest, listKnowledgeBases } from '../api/knowledgeBases'
+import {
+  createKnowledgeBase as createRequest,
+  deleteKnowledgeBase as deleteKnowledgeBaseRequest,
+  listKnowledgeBases,
+} from '../api/knowledgeBases'
 import type { CreateKnowledgeBaseInput } from '../api/knowledgeBases'
-import type { DocumentTask, KnowledgeBase } from '../types/api'
+import {
+  listTrash,
+  purgeTrashDocument,
+  purgeTrashKnowledgeBase,
+  restoreTrashDocument,
+  restoreTrashKnowledgeBase,
+} from '../api/trash'
+import type { DocumentTask, KnowledgeBase, PurgeJobResponse, TrashResponse } from '../types/api'
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   const knowledgeBases = ref<KnowledgeBase[]>([])
@@ -17,6 +28,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const documents = ref<Record<string, DocumentTask[]>>({})
   const loadingKnowledgeBases = ref(false)
   const loadingDocuments = ref(false)
+  const trash = ref<TrashResponse>({ knowledge_bases: [], documents: [] })
+  const loadingTrash = ref(false)
   const activeKnowledgeBase = computed(() =>
     knowledgeBases.value.find((item) => item.id === activeKnowledgeBaseId.value) ?? null)
   const activeDocuments = computed(() => activeKnowledgeBaseId.value
@@ -56,6 +69,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     documents.value = {}
     loadingKnowledgeBases.value = false
     loadingDocuments.value = false
+    trash.value = { knowledge_bases: [], documents: [] }
+    loadingTrash.value = false
     documentLoadSequence += 1
     pollingDocuments.clear()
   }
@@ -81,6 +96,50 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     knowledgeBases.value.push(created)
     activeKnowledgeBaseId.value = created.id
     return created
+  }
+
+  async function deleteKnowledgeBase(knowledgeBaseId: string) {
+    const operationGeneration = generation
+    await deleteKnowledgeBaseRequest(knowledgeBaseId)
+    if (operationGeneration !== generation) return
+    knowledgeBases.value = knowledgeBases.value.filter((item) => item.id !== knowledgeBaseId)
+    delete documents.value[knowledgeBaseId]
+    if (activeKnowledgeBaseId.value === knowledgeBaseId)
+      activeKnowledgeBaseId.value = knowledgeBases.value[0]?.id ?? null
+  }
+
+  async function loadTrash() {
+    const operationGeneration = generation
+    loadingTrash.value = true
+    try {
+      const loaded = await listTrash()
+      if (operationGeneration === generation) trash.value = loaded
+    } finally {
+      if (operationGeneration === generation) loadingTrash.value = false
+    }
+  }
+
+  async function restoreTrashKnowledgeBaseItem(knowledgeBaseId: string) {
+    await restoreTrashKnowledgeBase(knowledgeBaseId)
+    await Promise.all([loadKnowledgeBases(), loadTrash()])
+  }
+
+  async function restoreTrashDocumentItem(documentId: string) {
+    await restoreTrashDocument(documentId)
+    await loadTrash()
+    if (activeKnowledgeBaseId.value) await loadDocuments()
+  }
+
+  async function purgeTrashKnowledgeBaseItem(knowledgeBaseId: string): Promise<PurgeJobResponse> {
+    const job = await purgeTrashKnowledgeBase(knowledgeBaseId)
+    await loadTrash()
+    return job
+  }
+
+  async function purgeTrashDocumentItem(documentId: string): Promise<PurgeJobResponse> {
+    const job = await purgeTrashDocument(documentId)
+    await loadTrash()
+    return job
   }
 
   async function loadDocuments() {
@@ -149,6 +208,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     knowledgeBases, activeKnowledgeBaseId, documents, loadingKnowledgeBases, loadingDocuments,
     activeKnowledgeBase, activeDocuments, loadKnowledgeBases, createKnowledgeBase,
     selectKnowledgeBase, loadDocuments, uploadAndTrackDocument, reprocessDocument, deleteDocument,
+    deleteKnowledgeBase, trash, loadingTrash, loadTrash, restoreTrashKnowledgeBaseItem,
+    restoreTrashDocumentItem, purgeTrashKnowledgeBaseItem, purgeTrashDocumentItem,
     reset,
   }
 })

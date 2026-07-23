@@ -5,9 +5,11 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from app.audit.service import add_audit_event
 from app.core.config import Settings
 from app.core.exceptions import AppError
 from app.core.security import (
@@ -44,19 +46,51 @@ class AuthService:
 
     async def login(self, username: str, password: str) -> IssuedSession:
         normalized_username = username.strip().casefold()
-        async with self._session.begin():
-            user = await self._session.scalar(
-                select(User).where(User.username == normalized_username)
-            )
-            password_hash = user.password_hash if user is not None else _DUMMY_PASSWORD_HASH
-            password_matches = await run_in_threadpool(
-                verify_password,
-                password,
-                password_hash,
-            )
-            if user is None or not password_matches or not user.is_active:
-                raise _invalid_credentials()
-            return self._issue_session(user, self._now())
+        issued: IssuedSession | None = None
+        invalid_login = False
+        try:
+            async with self._session.begin():
+                user = await self._session.scalar(
+                    select(User).where(User.username == normalized_username)
+                )
+                password_hash = user.password_hash if user is not None else _DUMMY_PASSWORD_HASH
+                password_matches = await run_in_threadpool(
+                    verify_password,
+                    password,
+                    password_hash,
+                )
+                if user is None or not password_matches or not user.is_active:
+                    invalid_login = True
+                    add_audit_event(
+                        self._session,
+                        actor_user_id=user.id if user is not None else None,
+                        action="login.failure",
+                        resource_type="session",
+                        resource_id=None,
+                        result="denied",
+                        security_summary={"reason": "INVALID_CREDENTIALS"},
+                    )
+                    await self._session.flush()
+                else:
+                    add_audit_event(
+                        self._session,
+                        actor_user_id=user.id,
+                        action="login.success",
+                        resource_type="session",
+                        resource_id=None,
+                        result="success",
+                    )
+                    issued = self._issue_session(user, self._now())
+        except SQLAlchemyError as error:
+            raise AppError(
+                code="AUDIT_UNAVAILABLE",
+                message="登录服务暂不可用。",
+                status_code=503,
+            ) from error
+        if invalid_login:
+            raise _invalid_credentials()
+        assert issued is not None
+        return issued
 
     async def refresh(self, raw_refresh_token: str) -> IssuedSession:
         session_id, secret = _parse_refresh_token(raw_refresh_token)

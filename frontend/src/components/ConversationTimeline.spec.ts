@@ -1,6 +1,6 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import ConversationTimeline from './ConversationTimeline.vue'
 import type { ConversationMessage } from '../types/conversation'
 
@@ -17,6 +17,8 @@ const messages: ConversationMessage[] = [
 ]
 
 describe('ConversationTimeline', () => {
+  afterEach(() => document.body.replaceChildren())
+
   it('按消息顺序展示问答、检索详情和会话分隔线', async () => {
     const wrapper = mount(ConversationTimeline, {
       props: { messages }, global: { plugins: [ElementPlus] },
@@ -44,5 +46,30 @@ describe('ConversationTimeline', () => {
 
     await wrapper.get('[data-test="retry-answer"]').trigger('click')
     expect(wrapper.emitted('retry')).toEqual([['answer-1']])
+  })
+
+  it('通过底部抽屉查看当前回答绑定的引用快照', async () => {
+    const citedMessages = messages.map((message) => message.kind === 'assistant'
+      ? {
+          ...message,
+          citations: [{
+            citation_id: 2, document_id: 'doc-2', file_name: '研发规范.md',
+            content: '发布前必须完成代码审查。', relevance_score: 0.88,
+            page_number: null, sheet_name: null, row_start: null, section_title: '发布流程',
+          }],
+        }
+      : message)
+    const wrapper = mount(ConversationTimeline, {
+      attachTo: document.body,
+      props: { messages: citedMessages }, global: { plugins: [ElementPlus] },
+    })
+
+    expect(wrapper.find('[data-test="citations"]').exists()).toBe(false)
+    await wrapper.get('[data-test="open-citations-answer-1"]').trigger('click')
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('引用来源')
+    expect(document.body.textContent).toContain('研发规范.md')
+    expect(document.body.textContent).toContain('发布前必须完成代码审查。')
   })
 })

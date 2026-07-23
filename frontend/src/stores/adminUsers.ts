@@ -2,18 +2,22 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   createAdminUser,
+  getAdminUserQuota,
   listAdminUsers,
   resetAdminUserPassword,
+  updateAdminUserQuota,
   updateAdminUser,
   type AdminUserCreateInput,
   type AdminUserUpdateInput,
+  type AdminQuotaInput,
 } from '../api/adminUsers'
-import type { AdminUser } from '../types/api'
+import type { AdminQuota, AdminUser } from '../types/api'
 
 export const useAdminUsersStore = defineStore('admin-users', () => {
   const users = ref<AdminUser[]>([])
   const loading = ref(false)
   const error = ref<unknown>(null)
+  const quotas = ref<Record<string, AdminQuota>>({})
   let operationTail: Promise<void> = Promise.resolve()
   let queuedLoadCount = 0
 
@@ -73,5 +77,31 @@ export const useAdminUsersStore = defineStore('admin-users', () => {
     })
   }
 
-  return { users, loading, error, loadUsers, createUser, updateUser, resetPassword }
+  function loadQuota(userId: string): Promise<AdminQuota> {
+    return enqueue(async () => {
+      const quota = await getAdminUserQuota(userId)
+      quotas.value = { ...quotas.value, [userId]: quota }
+      return quota
+    })
+  }
+
+  function updateQuota(userId: string, input: AdminQuotaInput): Promise<AdminQuota> {
+    return enqueue(async () => {
+      const quota = await updateAdminUserQuota(userId, input)
+      quotas.value = { ...quotas.value, [userId]: quota }
+      return quota
+    })
+  }
+
+  function reset(): void {
+    users.value = []
+    quotas.value = {}
+    loading.value = false
+    error.value = null
+  }
+
+  return {
+    users, quotas, loading, error,
+    loadUsers, createUser, updateUser, resetPassword, loadQuota, updateQuota, reset,
+  }
 })

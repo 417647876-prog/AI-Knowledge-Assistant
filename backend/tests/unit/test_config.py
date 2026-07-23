@@ -1,3 +1,6 @@
+import socket
+from decimal import Decimal
+
 import pytest
 from pydantic import ValidationError
 
@@ -93,6 +96,32 @@ def test_settings_require_key_for_deepseek() -> None:
         Settings(_env_file=None, chat_provider="deepseek", chat_api_key=None)
 
 
+def test_chat_pricing_and_reservation_budgets_are_decimal_configuration() -> None:
+    settings = Settings(
+        _env_file=None,
+        chat_cache_hit_input_price_per_million="0.125",
+        chat_cache_miss_input_price_per_million="1.25",
+        chat_output_price_per_million="2.50",
+        chat_rewrite_input_token_reserve=2048,
+        chat_rewrite_max_output_tokens=256,
+        chat_answer_input_token_reserve=32768,
+        chat_answer_max_output_tokens=4096,
+    )
+
+    assert settings.chat_cache_hit_input_price_per_million == Decimal("0.125")
+    assert settings.chat_cache_miss_input_price_per_million == Decimal("1.25")
+    assert settings.chat_output_price_per_million == Decimal("2.50")
+    assert settings.chat_rewrite_input_token_reserve == 2048
+    assert settings.chat_rewrite_max_output_tokens == 256
+    assert settings.chat_answer_input_token_reserve == 32768
+    assert settings.chat_answer_max_output_tokens == 4096
+
+
+def test_deepseek_requires_explicit_positive_pricing() -> None:
+    with pytest.raises(ValidationError, match="价格"):
+        Settings(_env_file=None, chat_provider="deepseek", chat_api_key="secret")
+
+
 def test_settings_reject_default_top_k_above_maximum() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, rag_top_k_default=6, rag_top_k_max=5)
@@ -109,6 +138,43 @@ def test_settings_use_authentication_defaults() -> None:
     assert settings.access_token_expire_minutes == 15
     assert settings.refresh_token_expire_days == 7
     assert settings.refresh_cookie_secure is False
+
+
+def test_settings_use_strict_stage_4_quota_and_rate_limit_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.login_rate_limit_window_seconds == 60
+    assert settings.login_rate_limit_max_failures == 5
+    assert settings.question_rate_limit_window_seconds == 60
+    assert settings.question_rate_limit_max_requests == 10
+    assert settings.default_daily_question_limit == 50
+    assert settings.default_daily_upload_limit == 20
+    assert settings.default_storage_bytes_limit == 500 * 1024**2
+    assert settings.quota_timezone == "Asia/Shanghai"
+    assert settings.global_cost_limit == Decimal("20.00")
+
+
+def test_settings_reject_float_global_cost_and_gateway_without_secret() -> None:
+    with pytest.raises(ValidationError, match="float"):
+        Settings(_env_file=None, global_cost_limit=20.0)
+    with pytest.raises(ValidationError, match="共享密钥"):
+        Settings(_env_file=None, trusted_gateway_networks=("10.0.0.0/8",))
+
+
+def test_settings_use_worker_runtime_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.worker_poll_seconds == 2
+    assert settings.job_lease_seconds == 120
+    assert settings.worker_heartbeat_seconds == 15
+    assert settings.job_max_attempts == 3
+    assert settings.job_retry_backoff_seconds == (30, 120)
+
+
+def test_settings_default_worker_id_is_stable_for_the_host() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.worker_id == socket.gethostname()
 
 
 def test_production_settings_require_jwt_secret_key() -> None:

@@ -18,8 +18,14 @@
 - 阶段 3C：本地 BGE Reranker、接受门校准与生产安全回退；MRR 质量门由用户明确豁免。
 - 阶段 3D：选择性多轮问题改写、精确失败回退、SSE 展示与真实质量门验收。
 - 阶段 3E：同快照四模式综合验收、12 个质量门、原子 manifest 和脱敏中文报告。
+- 阶段 4A～4B：PostgreSQL 持久化任务、租约/心跳/重试、独立 Worker，以及重启后的任务恢复。
+- 阶段 4C～4D：严格所属人隔离、临时只读支持授权、回收站、服务端会话与用量、额度、限速、日志、指标、审计和脱敏运营接口。
+- 阶段 4E～4F：gateway 同源容器编排、持久卷与重启恢复，以及后端、前端、数据库和阶段 3 质量全量回归。
+- 阶段 5A～5C：响应式应用壳、手机知识库/文档/回收站、服务端会话问答/引用、“我的”用量反馈和脱敏管理员运营界面。
+- 阶段 5D：PostgreSQL 与 uploads 的显式备份恢复脚本，以及隔离 Compose 上的真实恢复冒烟。
+- 阶段 5E：Tailscale Funnel 显式启停脚本和脱敏验收手册已实现；首次登录授权与真实手机关闭 Wi-Fi 的公网验收仍是用户硬门，尚不能宣称阶段 5 全部验收完成。
 
-当前闭环为：管理员初始化账号 → 用户登录 → 创建自己的知识库 → 上传文档 → 解析和向量入库 → 检索问答 → 返回可追溯引用。系统不提供公开注册，普通用户只能访问自己的资源，管理员可以查看和操作全部知识库。
+当前闭环为：管理员初始化账号 → 用户登录 → 创建自己的知识库 → 上传文档 → 持久化任务入队与 Worker 处理 → 检索问答 → 返回可追溯引用 → 会话、用量和反馈留存。系统不提供公开注册；普通业务接口始终按当前用户隔离，管理员也不能绕过所属人读取他人内容，只能通过限知识库、限管理员、只读、可撤销且会过期的支持授权排障。
 
 ## 阶段 3A 纯向量评估
 
@@ -192,11 +198,76 @@ Write-Output "accept_stage3 exit code: $acceptanceExitCode"
 [阶段 3 验证与演示](docs/验收与演示/阶段3验证与演示.md)。manifest 最后写入，并记录五个公开产物的
 SHA-256，便于判断一组报告是否完整且同源。
 
+## 一键启动
+
+面向 Windows 本机 Docker 演示，最简单的方式是双击项目根目录的 `启动项目.cmd`。启动成功的唯一判断是 <http://127.0.0.1:8080/api/ready> 返回 HTTP 200；演示入口是 <http://127.0.0.1:8080>。这只是本机回环地址的演示入口，不代表已经配置远程访问；远程访问需另行配置。
+
+首次运行前，请在项目根目录手工创建并填写本地配置；启动器不会自动生成 `deploy/.env`，也不会创建、修改或重置管理员凭据：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Copy-Item deploy/.env.example deploy/.env
+notepad deploy/.env
+```
+
+本机 HTTP 演示需要按下方“阶段 4 完整容器演示”章节填写 `APP_ENV`、Cookie 和 Origin 的本机值。`deploy/.env` 已被 Git 忽略；不要提交真实密钥。启动成功后，使用与启动器相同的 Compose owner 手工创建管理员；将占位用户名替换为你自己的值，密码由命令在终端中安全提示，必须手工设置且不要写入命令或仓库：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml exec api python -m scripts.create_admin --username "YOUR_ADMIN_USERNAME"
+```
+
+配置完成后，PowerShell 的等价启动命令为：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+.\scripts\start-project.ps1
+```
+
+当代码或镜像定义变更、需要显式重建镜像时，使用：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+.\scripts\start-project.ps1 -Build
+```
+
+启动器默认固定使用 Compose owner `ai-knowledge-assistant`，不会继承终端中已有的 `COMPOSE_PROJECT_NAME`。日常双击和默认命令无需增加参数；仅在需要与其他本机演示隔离时，启动和停止使用相同的显式名称：
+
+```powershell
+.\scripts\start-project.ps1 -ProjectName stage5launcher
+.\scripts\stop-project.ps1 -ProjectName stage5launcher
+```
+
+启动器会先检查可用内存、Docker 和 `deploy/.env`，再启动完整 Compose，并最多等待 180 秒的 `/api/ready` HTTP 200。它不会把 `/health` 当作项目就绪，也不会替你配置 `.env` 或管理员。
+
+停止时双击 `停止项目.cmd`，或在项目根目录执行：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+.\scripts\stop-project.ps1
+```
+
+停止器只停止本项目的 Compose 容器，保留数据库、上传文件和 Hugging Face 模型缓存的数据卷。日常停止不要使用 `docker compose down -v`，否则会删除数据卷。
+
+常见故障与安全排查：
+
+- 可用物理内存低于 2 GiB 时，启动器会拒绝启动 Docker 重任务；关闭不相关的应用后重试。
+- Docker Desktop 未运行时，启动器会先尝试执行 `docker desktop start`；仅当该命令不受支持、执行失败或等待引擎就绪超时时，才手工打开 Docker Desktop，确认它显示为运行后再重试启动器。
+- 8080 端口冲突或 Compose 启动失败时，不要停止其他项目；在项目根目录运行下列命令，只查看当前项目的状态和最近日志：
+
+  ```powershell
+  Set-Location (git rev-parse --show-toplevel)
+  docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml ps
+  docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml logs --tail 100 gateway api worker postgres
+  ```
+
+- `/api/ready` 超时表示容器可能已启动但业务尚未就绪；使用上述命令查看状态和日志，不要仅因 `/health` 可访问就认定启动成功。
+
 ## 本地启动
 
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
-docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.dev.yml up -d
 Set-Location backend
 uv sync --dev
 $env:APP_ENV = "development"
@@ -232,7 +303,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
-docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.dev.yml up -d
 Set-Location backend
 uv run alembic upgrade head
 uv run python -m scripts.create_admin --username admin
@@ -281,9 +352,87 @@ Remove-Variable securePassword
 
 脚本先验证公开健康接口，再登录并验证 `/auth/me`，随后创建临时知识库、上传、轮询、问答，最后退出。账号密码只从当前进程环境读取；脚本不会输出密码、Access Token 或 Refresh Token。失败时返回非零退出码并显示脱敏的状态码、错误码和 request ID。
 
+## 阶段 4 完整容器演示
+
+开发模式只需要 PostgreSQL 时使用 `deploy/docker-compose.dev.yml`；它会把数据库端口暴露给本机后端。完整演示使用 `deploy/docker-compose.yml`，由 gateway 同源提供前端和 `/api`，API、Worker、PostgreSQL 与内部指标均不直接映射到宿主机。
+
+先复制本地配置并手工替换占位值，`deploy/.env` 已被 Git 忽略，禁止提交：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Copy-Item deploy/.env.example deploy/.env
+notepad deploy/.env
+docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml up -d --build
+docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml ps
+docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml exec api python -m scripts.create_admin --username "YOUR_ADMIN_USERNAME"
+```
+
+本机 HTTP 演示仅可在回环地址使用 `APP_ENV=development`、`REFRESH_COOKIE_SECURE=false` 和精确的 `TRUSTED_ORIGINS=["http://127.0.0.1:8080"]`。`JWT_SECRET_KEY` 与 `GATEWAY_SHARED_SECRET` 必须使用互不相同的随机高强度值；模型 Key 只放在本地环境文件。正式 HTTPS 环境必须改回 `APP_ENV=production`、`REFRESH_COOKIE_SECURE=true` 和实际 HTTPS Origin。
+
+完整演示只访问以下宿主入口：
+
+- 页面与 gateway 健康检查：<http://127.0.0.1:8080/>、<http://127.0.0.1:8080/health>
+- 经过 gateway 的后端就绪检查：<http://127.0.0.1:8080/api/ready>
+
+`create_admin` 会在容器终端中安全提示输入密码。验收凭据只通过当前 PowerShell 环境传入，脚本不会输出密码、Token、API Key、文档正文、问题全文或回答全文：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+Set-Location backend
+$env:STAGE4_VERIFY_USERNAME = "stage4-admin"
+$securePassword = Read-Host "阶段4测试账号密码" -AsSecureString
+$env:STAGE4_VERIFY_PASSWORD = [System.Net.NetworkCredential]::new("", $securePassword).Password
+uv run python -m scripts.verify_stage4_compose --base-url http://127.0.0.1:8080
+Remove-Item Env:STAGE4_VERIFY_PASSWORD
+Remove-Item Env:STAGE4_VERIFY_USERNAME
+Remove-Variable securePassword
+```
+
+普通测试不会启动、停止或重启容器。真实重启测试必须在完整 Compose 已健康且物理可用内存不少于 2 GiB 时，显式设置 `RUN_DOCKER_TESTS=1` 并单独串行执行；它会重启 Worker、API、PostgreSQL 和 gateway。
+
+```powershell
+$env:RUN_DOCKER_TESTS = "1"
+uv run pytest tests/docker/test_container_restart_recovery.py -q
+Remove-Item Env:RUN_DOCKER_TESTS
+```
+
+停止但保留数据卷使用：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml down
+docker volume ls
+```
+
+逻辑卷为 `knowledge_postgres_data`、`knowledge_uploads` 和 `knowledge_hf_cache`，Docker 实际名称会带 Compose 项目前缀。只有确认不再需要数据库、上传文件和模型缓存时才可执行 `down -v`；该命令会删除数据，不能作为普通停止命令。
+
+阶段 4 的完整命令、测试统计、隐私矩阵和恢复证据见[阶段 4 验证与演示](docs/验收与演示/阶段4验证与演示.md)。阶段 5 的手机界面、拆包和备份恢复代码已经交付；最新本地证据、Funnel 命令、十步手机验收和未完成硬门见[阶段 5 验证与演示](docs/验收与演示/阶段5验证与演示.md)。
+
+## 阶段 5 备份、恢复与 Funnel
+
+备份和恢复只针对完整 Compose 的 PostgreSQL 与 uploads，不包含 `.env`、模型 Key、镜像、日志或可重建的 Hugging Face 缓存。恢复默认拒绝，必须显式确认：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/backup.ps1 `
+  -DestinationRoot D:\AI-Knowledge-Backups -UseDocker
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/restore.ps1 `
+  -BackupDirectory D:\AI-Knowledge-Backups\stage5-backup-YYYYMMDD-HHMMSS `
+  -UseDocker -ConfirmRestore
+```
+
+Tailscale 安装、登录并完成首次 Funnel 授权后，只把回环 gateway `http://127.0.0.1:8080` 映射为公网 HTTPS。脚本会拒绝覆盖已有 Funnel 配置，并以本项目标记约束关闭范围：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/start-funnel.ps1 -ConfirmEnable
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/stop-funnel.ps1 -ConfirmDisable
+```
+
+不要使用 `tailscale funnel reset` 作为本项目停止命令；它会清空当前节点的 Funnel 配置，而不是只关闭本项目映射。
+
 ## 部署与手机访问边界
 
-本阶段只验证本机开发运行，不代表已经具备公网生产安全。生产部署必须使用随机高强度 `JWT_SECRET_KEY`、`REFRESH_COOKIE_SECURE=true`，由同一 HTTPS 域名提供前端和 `/api` 反向代理，并严格配置 `TRUSTED_ORIGINS`。PostgreSQL、Vite 和 Uvicorn 内部端口不能直接暴露公网。
+本项目的 Funnel 定位是本人和少量演示用户使用的临时公网入口，不等于生产部署。生产环境仍必须使用随机高强度 `JWT_SECRET_KEY`、`REFRESH_COOKIE_SECURE=true`，由同一 HTTPS 域名提供前端和 `/api` 反向代理，并严格配置 `TRUSTED_ORIGINS`。PostgreSQL、Vite、Uvicorn、Worker 和内部指标端点不能直接暴露公网。
 
 反向代理还必须提供两类入口保护：对登录接口按来源和账号维度做限速、限制并发连接；对文档上传设置真实请求体硬上限。例如 Nginx 的 `client_max_body_size` 应按“20 MB 文件 + multipart 编码开销”配置，不能只写 20 MB。应用内同时限制完整 multipart 请求体和文件内容大小，属于第二层防护；密码 128 字符上限和 Argon2 线程池隔离也不能替代代理层的抗 DoS、连接数与请求速率限制。
 
@@ -302,6 +451,7 @@ Remove-Variable securePassword
 ## 学习资料
 
 - [项目学习笔记](docs/学习记录/学习笔记.md)
+- [AI 知识库后端学习资源](docs/学习记录/AI知识库学习资源.md)
 - [RAG 后端总体设计](docs/设计/2026-07-10-RAG后端总体设计.md)
 - [阶段 1B 文档解析设计](docs/设计/2026-07-12-阶段1B文档解析设计.md)
 - [阶段 1C 向量入库设计](docs/设计/2026-07-13-阶段1C向量入库设计.md)

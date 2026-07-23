@@ -5,8 +5,6 @@ services:
       POSTGRES_DB: knowledge
       POSTGRES_USER: knowledge
       POSTGRES_PASSWORD: knowledge
-    ports:
-      - "5432:5432"
     volumes:
       - knowledge_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -15,5 +13,122 @@ services:
       timeout: 5s
       retries: 10
 
+  migrate:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    env_file: &backend_env_file
+      - path: .env
+        required: false
+    environment: &backend_environment
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: postgresql+psycopg://knowledge:knowledge@postgres:5432/knowledge
+      EMBEDDING_PROVIDER: fake
+      CHAT_PROVIDER: fake
+      EMBEDDING_DEVICE: cpu
+      UPLOAD_DIRECTORY: /app/uploads
+      HF_HOME: /home/app/.cache/huggingface
+      WORKER_ID: knowledge-worker
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      CHAT_API_KEY: ${CHAT_API_KEY:-}
+      REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-true}
+      TRUSTED_GATEWAY_NETWORKS: '${TRUSTED_GATEWAY_NETWORKS:-["172.28.0.10/32"]}'
+      TRUSTED_ORIGINS: '${TRUSTED_ORIGINS:-["https://knowledge.example.com"]}'
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  api:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    env_file: *backend_env_file
+    environment: *backend_environment
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - knowledge_uploads:/app/uploads
+      - knowledge_hf_cache:/home/app/.cache/huggingface
+    networks:
+      - default
+      - gateway_api
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    env_file: *backend_env_file
+    environment: *backend_environment
+    command: ["python", "-m", "app.worker.main"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - knowledge_uploads:/app/uploads
+      - knowledge_hf_cache:/home/app/.cache/huggingface
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.worker.health", "--max-age-seconds", "60"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:-}
+      NGINX_ENVSUBST_FILTER: GATEWAY_SHARED_SECRET
+    networks:
+      gateway_public:
+      gateway_api:
+        ipv4_address: 172.28.0.10
+    ports:
+      - "127.0.0.1:8080:80"
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d
+      - /var/cache/nginx
+      - /var/run
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health && wget -q -O /dev/null http://127.0.0.1/api/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
 volumes:
   knowledge_postgres_data:
+  knowledge_uploads:
+  knowledge_hf_cache:
+
+networks:
+  gateway_public:
+  gateway_api:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

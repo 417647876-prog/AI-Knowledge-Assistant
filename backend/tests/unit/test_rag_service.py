@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.ai.contracts import ConversationMessage
+from app.ai.contracts import ChatCompletion, ChatStreamChunk, ChatUsage, ConversationMessage
 from app.ai.embeddings import FakeEmbeddingProvider
 from app.core.exceptions import AppError
 from app.core.request_context import reset_request_id, set_request_id
@@ -16,6 +16,15 @@ class FakeSession:
 
     async def get(self, model, identifier):
         return self.knowledge_base
+
+
+class ScopedFakeSession:
+    def __init__(self) -> None:
+        self.statement = None
+
+    async def scalar(self, statement):
+        self.statement = statement
+        return None
 
 
 class StubRetriever:
@@ -51,9 +60,14 @@ class CountingChatProvider:
         self.answer = answer
         self.call_count = 0
 
-    async def generate(self, system_prompt: str, user_prompt: str) -> str:
+    async def generate(self, system_prompt: str, user_prompt: str) -> ChatCompletion:
         self.call_count += 1
-        return self.answer
+        return ChatCompletion(
+            content=self.answer,
+            usage=None,
+            finish_reason="stop",
+            provider_request_id="test-request",
+        )
 
 
 class RecordingRewriter:
@@ -79,15 +93,40 @@ class FailingRewriter:
 
 
 class StreamingCountingChatProvider(CountingChatProvider):
-    def __init__(self, answer: str, tokens: list[str]) -> None:
+    def __init__(
+        self,
+        answer: str,
+        tokens: list[str],
+        usage: ChatUsage | None = None,
+        *,
+        emit_done: bool = True,
+    ) -> None:
         super().__init__(answer)
         self.tokens = tokens
+        self.usage = usage
+        self.emit_done = emit_done
         self.stream_closed = False
+        self.max_output_tokens: int | None = None
 
-    async def stream(self, system_prompt: str, user_prompt: str):
+    async def stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+    ):
+        self.max_output_tokens = max_output_tokens
         try:
             for token in self.tokens:
-                yield token
+                yield ChatStreamChunk(kind="token", delta=token)
+            if self.usage is not None:
+                yield ChatStreamChunk(kind="usage", usage=self.usage)
+            if self.emit_done:
+                yield ChatStreamChunk(
+                    kind="done",
+                    finish_reason="stop",
+                    provider_request_id="test-request",
+                )
         finally:
             self.stream_closed = True
 
@@ -182,6 +221,31 @@ async def test_answer_rejects_missing_knowledge_base() -> None:
 
 
 @pytest.mark.asyncio
+async def test_api_scoped_rag_service_rechecks_owner_and_active_knowledge_base() -> None:
+    session = ScopedFakeSession()
+    retriever = StubRetriever([])
+    owner_user_id = uuid4()
+    service = RagService(
+        session=session,
+        owner_user_id=owner_user_id,
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=retriever,
+        chat_provider=CountingChatProvider("unused"),
+        question_rewriter=RecordingRewriter("unused"),
+        score_threshold=0.55,
+    )
+
+    with pytest.raises(AppError) as error:
+        await service.answer(uuid4(), "private question", 5)
+
+    assert error.value.code == "KNOWLEDGE_BASE_NOT_FOUND"
+    assert retriever.calls == []
+    statement = str(session.statement)
+    assert "knowledge_bases.owner_id" in statement
+    assert "knowledge_bases.deleted_at IS NULL" in statement
+
+
+@pytest.mark.asyncio
 async def test_stream_rewrites_retrieves_generates_citations_and_timings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -240,6 +304,81 @@ async def test_stream_rewrites_retrieves_generates_citations_and_timings(
     assert rewriter.calls == [(history, "它的缺点？")]
     assert retriever.calls[0]["query"] == "向量检索有什么缺点？"
     assert prompt_questions == ["它的缺点？"]
+
+
+@pytest.mark.asyncio
+async def test_stream_carries_usage_and_provider_done_as_private_persistence_metadata() -> None:
+    usage = ChatUsage(10, 20, 30, 5, 60, True)
+    chat = StreamingCountingChatProvider("unused", ["回答"], usage)
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever([_chunk()]),
+        chat_provider=chat,
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        answer_max_output_tokens=777,
+    )
+
+    class UsageRecorder:
+        rewrite_max_output_tokens = 100
+
+        def __init__(self) -> None:
+            self.answer_bounds: list[int] = []
+
+        async def before_answer_request(self, input_token_upper_bound: int) -> None:
+            self.answer_bounds.append(input_token_upper_bound)
+
+    recorder = UsageRecorder()
+
+    events = [
+        item
+        async for item in service.stream_answer(
+            uuid4(),
+            "完整问题是什么？",
+            5,
+            [],
+            usage_recorder=recorder,  # type: ignore[arg-type]
+        )
+    ]
+
+    generating = next(item for item in events if item.data.get("phase") == "generating")
+    assert generating.persistence == {"answer_request_started": True}
+    assert events[-1].event == "done"
+    assert events[-1].persistence == {
+        "usage": usage,
+        "finish_reason": "stop",
+        "provider_request_id": "test-request",
+        "refused": False,
+    }
+    assert "usage" not in events[-1].data
+    assert chat.max_output_tokens == 777
+    assert recorder.answer_bounds
+    assert recorder.answer_bounds[0] >= len("完整问题是什么？".encode())
+
+
+@pytest.mark.asyncio
+async def test_stream_eof_without_provider_done_never_emits_application_done() -> None:
+    usage = ChatUsage(1, 2, 3, 0, 6, True)
+    chat = StreamingCountingChatProvider("unused", ["部分"], usage, emit_done=False)
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever([_chunk()]),
+        chat_provider=chat,
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+    )
+
+    events = [item async for item in service.stream_answer(uuid4(), "完整问题是什么？", 5, [])]
+
+    assert [item.event for item in events if item.event == "done"] == []
+    assert [item.data.get("delta") for item in events if item.event == "token"] == ["部分"]
+    hidden_usage = [item for item in events if item.event == "usage"]
+    assert len(hidden_usage) == 1
+    assert hidden_usage[0].data == {}
+    assert hidden_usage[0].persistence == {"usage": usage}
+    assert hidden_usage[0].emit is False
 
 
 @pytest.mark.asyncio
@@ -654,6 +793,33 @@ async def test_stream_uses_enabled_reranker_order_and_top_k() -> None:
         str(chunks[2].document_id),
     ]
     assert events[-1].data["retrieved_chunk_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_exposes_sanitized_candidate_and_relevance_metrics_for_persistence() -> None:
+    chunks = [_chunk(), _chunk(), _chunk()]
+    service = RagService(
+        session=FakeSession(object()),
+        embedding_provider=FakeEmbeddingProvider(dimensions=512),
+        retriever=StubRetriever(chunks),
+        chat_provider=StreamingCountingChatProvider("unused", ["回答 [1]"]),
+        question_rewriter=RecordingRewriter("不应调用"),
+        score_threshold=0.55,
+        reranker=StubReranker(scores=[0.1, 0.9, 0.3]),
+        candidate_k=3,
+        reranker_allow_fallback=False,
+    )
+
+    events = [item async for item in service.stream_answer(uuid4(), "年假有几天？", 2, [])]
+    retrieval = next(item for item in events if item.event == "retrieval")
+
+    assert retrieval.persistence == {
+        "candidate_count": 3,
+        "accepted_scores": (0.9, 0.3),
+    }
+    serialized = repr(retrieval.persistence)
+    assert all(chunk.content not in serialized for chunk in chunks)
+    assert all(chunk.file_name not in serialized for chunk in chunks)
 
 
 @pytest.mark.asyncio

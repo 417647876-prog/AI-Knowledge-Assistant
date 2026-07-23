@@ -174,3 +174,61 @@ async def test_login_and_refresh_cookie_use_secure_setting(auth_user: User) -> N
         )
         assert refreshed.status_code == 200
         assert_session_cookie(refreshed.headers["set-cookie"], secure=True)
+
+
+@pytest.mark.asyncio
+async def test_login_rate_limit_hides_fifth_failure_and_success_clears_window(
+    auth_user: User,
+) -> None:
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    payload = {"username": auth_user.username, "password": "wrong password"}
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        for _ in range(5):
+            rejected = await client.post("/api/v1/auth/login", json=payload)
+            assert rejected.status_code == 401
+            assert rejected.json()["error"]["code"] == "INVALID_CREDENTIALS"
+        limited = await client.post("/api/v1/auth/login", json=payload)
+        assert limited.status_code == 429
+        assert limited.json()["error"]["code"] == "LOGIN_RATE_LIMITED"
+
+    second_app = create_app()
+    second_transport = httpx.ASGITransport(app=second_app)
+    username = f"{auth_user.username}_other"
+    other_user_id = uuid4()
+    # 同进程限速器跨 app 生效，因此用独立账号覆盖“成功清窗”契约。
+    async with session_factory.begin() as session:
+        session.add(
+            User(
+                id=other_user_id,
+                username=username,
+                password_hash=hash_password("correct horse battery"),
+                role=ADMIN_ROLE,
+                is_active=True,
+            )
+        )
+    try:
+        async with httpx.AsyncClient(transport=second_transport, base_url="http://test") as client:
+            for _ in range(4):
+                rejected = await client.post(
+                    "/api/v1/auth/login", json={**payload, "username": username}
+                )
+                assert rejected.status_code == 401
+            assert (
+                await client.post(
+                    "/api/v1/auth/login",
+                    json={"username": username, "password": "correct horse battery"},
+                )
+            ).status_code == 200
+            for _ in range(5):
+                rejected = await client.post(
+                    "/api/v1/auth/login", json={**payload, "username": username}
+                )
+                assert rejected.status_code == 401
+    finally:
+        async with session_factory.begin() as session:
+            await session.execute(
+                delete(RefreshSession).where(RefreshSession.user_id == other_user_id)
+            )
+            await session.execute(delete(User).where(User.id == other_user_id))

@@ -1,30 +1,56 @@
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from time import perf_counter
+from typing import Protocol
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.contracts import (
+    ChatCompletion,
     ConversationMessage,
     EmbeddingProvider,
     QuestionRewriter,
     RerankerProvider,
     StreamingChatProvider,
 )
-from app.ai.rewrite import should_rewrite
+from app.ai.rewrite import ChatQuestionRewriter, should_rewrite
 from app.core.exceptions import AppError
 from app.core.request_context import get_request_id
 from app.db.models.knowledge_base import KnowledgeBase
 from app.rag.citations import map_citations
 from app.rag.contracts import Retriever
-from app.rag.prompt import build_rag_prompt
+from app.rag.prompt import build_rag_prompt, serialized_chat_input_token_upper_bound
 from app.rag.reranking import accept_reranked_chunks, rerank_chunks
 from app.rag.schemas import QuestionAnswer, RetrievedChunk
 from app.rag.streaming import CitationTracker, StreamEvent, citation_payload
 
 NO_EVIDENCE_ANSWER = "未找到足够依据，无法根据当前知识库回答该问题。"
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RetrievalMetrics:
+    chunks: list[RetrievedChunk]
+    candidate_count: int
+
+    @property
+    def accepted_scores(self) -> tuple[float, ...]:
+        return tuple(chunk.relevance_score for chunk in self.chunks)
+
+
+class StreamUsageRecorder(Protocol):
+    rewrite_max_output_tokens: int
+
+    async def before_rewrite_request(self, input_token_upper_bound: int) -> None: ...
+
+    async def before_answer_request(self, input_token_upper_bound: int) -> None: ...
+
+    async def rewrite_completed(self, completion: ChatCompletion) -> None: ...
+
+    async def rewrite_failed(self, request_started: bool, error_code: str) -> None: ...
 
 
 def _elapsed_ms(started: float) -> int:
@@ -36,6 +62,7 @@ class RagService:
         self,
         *,
         session: AsyncSession,
+        owner_user_id: UUID | None = None,
         embedding_provider: EmbeddingProvider,
         retriever: Retriever,
         chat_provider: StreamingChatProvider,
@@ -45,8 +72,10 @@ class RagService:
         candidate_k: int = 20,
         reranker_allow_fallback: bool = True,
         reranker_min_score: float | None = None,
+        answer_max_output_tokens: int | None = None,
     ) -> None:
         self._session = session
+        self._owner_user_id = owner_user_id
         self._embedding_provider = embedding_provider
         self._retriever = retriever
         self._chat_provider = chat_provider
@@ -56,16 +85,33 @@ class RagService:
         self._candidate_k = candidate_k
         self._reranker_allow_fallback = reranker_allow_fallback
         self._reranker_min_score = reranker_min_score
+        self._answer_max_output_tokens = answer_max_output_tokens
 
     async def _ensure_knowledge_base(self, knowledge_base_id: UUID) -> None:
-        if await self._session.get(KnowledgeBase, knowledge_base_id) is None:
+        if self._owner_user_id is None:
+            knowledge_base = await self._session.get(KnowledgeBase, knowledge_base_id)
+            is_available = (
+                knowledge_base is not None and getattr(knowledge_base, "deleted_at", None) is None
+            )
+        else:
+            knowledge_base = await self._session.scalar(
+                select(KnowledgeBase).where(
+                    KnowledgeBase.id == knowledge_base_id,
+                    KnowledgeBase.owner_id == self._owner_user_id,
+                    KnowledgeBase.deleted_at.is_(None),
+                )
+            )
+            is_available = knowledge_base is not None
+        if not is_available:
             raise AppError(
                 code="KNOWLEDGE_BASE_NOT_FOUND",
                 message="知识库不存在。",
                 status_code=404,
             )
 
-    async def _retrieve(self, knowledge_base_id: UUID, question: str, top_k: int):
+    async def _retrieve_with_metrics(
+        self, knowledge_base_id: UUID, question: str, top_k: int
+    ) -> RetrievalMetrics:
         query_embedding = await self._embedding_provider.embed_query(question)
         retrieval_top_k = max(top_k, self._candidate_k) if self._reranker is not None else top_k
         chunks = await self._retriever.search(
@@ -75,8 +121,9 @@ class RagService:
             top_k=retrieval_top_k,
             score_threshold=self._score_threshold,
         )
+        candidate_count = len(chunks)
         if self._reranker is None or not chunks:
-            return chunks
+            return RetrievalMetrics(chunks=chunks, candidate_count=candidate_count)
 
         try:
             reranked_chunks = await rerank_chunks(
@@ -96,7 +143,10 @@ class RagService:
                     "request_id": get_request_id(),
                 },
             )
-            return chunks[:top_k]
+            return RetrievalMetrics(
+                chunks=chunks[:top_k],
+                candidate_count=candidate_count,
+            )
 
         accepted_chunks = accept_reranked_chunks(
             reranked_chunks,
@@ -114,7 +164,16 @@ class RagService:
                     "request_id": get_request_id(),
                 },
             )
-        return accepted_chunks
+        return RetrievalMetrics(
+            chunks=accepted_chunks,
+            candidate_count=candidate_count,
+        )
+
+    async def _retrieve(
+        self, knowledge_base_id: UUID, question: str, top_k: int
+    ) -> list[RetrievedChunk]:
+        result = await self._retrieve_with_metrics(knowledge_base_id, question, top_k)
+        return result.chunks
 
     async def _answer_from_chunks(
         self, question: str, chunks: list[RetrievedChunk]
@@ -126,7 +185,8 @@ class RagService:
                 retrieved_chunk_count=0,
             )
         system_prompt, user_prompt = build_rag_prompt(question, chunks)
-        answer = await self._chat_provider.generate(system_prompt, user_prompt)
+        completion = await self._chat_provider.generate(system_prompt, user_prompt)
+        answer = completion.content
         return QuestionAnswer(
             answer=answer,
             citations=map_citations(answer, chunks),
@@ -177,6 +237,8 @@ class RagService:
         question: str,
         top_k: int,
         history: list[ConversationMessage],
+        *,
+        usage_recorder: StreamUsageRecorder | None = None,
     ) -> AsyncIterator[StreamEvent]:
         total_started = perf_counter()
         await self._ensure_knowledge_base(knowledge_base_id)
@@ -185,15 +247,29 @@ class RagService:
         standalone_question = original_question
         used_fallback = False
         rewrite_ms = 0
+        rewrite_attempted = False
 
         if should_rewrite(original_question, history):
+            rewrite_attempted = True
             yield StreamEvent("status", {"phase": "rewriting"})
             rewrite_started = perf_counter()
             try:
-                standalone_question = await self._question_rewriter.rewrite(
-                    history,
-                    original_question,
-                )
+                if usage_recorder is not None and isinstance(
+                    self._question_rewriter, ChatQuestionRewriter
+                ):
+                    standalone_question = await self._question_rewriter.rewrite_tracked(
+                        history,
+                        original_question,
+                        max_output_tokens=usage_recorder.rewrite_max_output_tokens,
+                        before_request=usage_recorder.before_rewrite_request,
+                        on_completion=usage_recorder.rewrite_completed,
+                        on_failure=usage_recorder.rewrite_failed,
+                    )
+                else:
+                    standalone_question = await self._question_rewriter.rewrite(
+                        history,
+                        original_question,
+                    )
             except AppError as error:
                 if error.code != "QUESTION_REWRITE_ERROR":
                     raise
@@ -206,15 +282,24 @@ class RagService:
                 "elapsed_ms": rewrite_ms,
                 "used_fallback": used_fallback,
             },
+            persistence={
+                "was_rewritten": rewrite_attempted and not used_fallback,
+                "rewrite_fallback": used_fallback,
+            },
         )
 
         yield StreamEvent("status", {"phase": "retrieving"})
         retrieval_started = perf_counter()
-        chunks = await self._retrieve(knowledge_base_id, standalone_question, top_k)
+        retrieval = await self._retrieve_with_metrics(knowledge_base_id, standalone_question, top_k)
+        chunks = retrieval.chunks
         retrieval_ms = _elapsed_ms(retrieval_started)
         yield StreamEvent(
             "retrieval",
             {"retrieved_chunk_count": len(chunks), "elapsed_ms": retrieval_ms},
+            persistence={
+                "candidate_count": retrieval.candidate_count,
+                "accepted_scores": retrieval.accepted_scores,
+            },
         )
 
         if not chunks:
@@ -231,16 +316,52 @@ class RagService:
                         "total_ms": _elapsed_ms(total_started),
                     },
                 },
+                persistence={"refused": True},
             )
             return
 
-        yield StreamEvent("status", {"phase": "generating"})
         system_prompt, user_prompt = build_rag_prompt(original_question, chunks)
         tracker = CitationTracker(chunks)
         generation_started = perf_counter()
-        chat_stream = self._chat_provider.stream(system_prompt, user_prompt)
+        if usage_recorder is not None:
+            await usage_recorder.before_answer_request(
+                serialized_chat_input_token_upper_bound(system_prompt, user_prompt)
+            )
+        yield StreamEvent(
+            "status",
+            {"phase": "generating"},
+            persistence={"answer_request_started": True},
+        )
+        chat_stream = self._chat_provider.stream(
+            system_prompt,
+            user_prompt,
+            max_output_tokens=self._answer_max_output_tokens,
+        )
+        final_usage = None
+        finish_reason = None
+        provider_request_id = None
+        saw_provider_done = False
         try:
-            async for delta in chat_stream:
+            async for chunk in chat_stream:
+                if chunk.kind == "usage":
+                    final_usage = chunk.usage
+                    yield StreamEvent(
+                        "usage",
+                        {},
+                        persistence={"usage": final_usage},
+                        emit=False,
+                    )
+                    continue
+                if chunk.kind == "done":
+                    finish_reason = chunk.finish_reason
+                    provider_request_id = chunk.provider_request_id
+                    saw_provider_done = True
+                    break
+                if chunk.kind != "token":
+                    continue
+                delta = chunk.delta
+                if delta is None:
+                    continue
                 yield StreamEvent("token", {"delta": delta})
                 for citation in tracker.feed(delta):
                     yield StreamEvent("citation", citation_payload(citation))
@@ -248,6 +369,8 @@ class RagService:
             close = getattr(chat_stream, "aclose", None)
             if close is not None:
                 await close()
+        if not saw_provider_done:
+            return
         generation_ms = _elapsed_ms(generation_started)
         yield StreamEvent(
             "done",
@@ -260,5 +383,11 @@ class RagService:
                     "generation_ms": generation_ms,
                     "total_ms": _elapsed_ms(total_started),
                 },
+            },
+            persistence={
+                "usage": final_usage,
+                "finish_reason": finish_reason,
+                "provider_request_id": provider_request_id,
+                "refused": False,
             },
         )
