@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import math
 import shutil
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -16,6 +18,13 @@ from docx.shared import Cm, Pt, RGBColor
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+
+# ``python scripts/generate_demo_knowledge_files.py`` places only the scripts
+# directory on sys.path.  Add backend so the sibling ``scripts`` package can
+# be imported both from the documented CLI and from pytest.
+BACKEND_DIRECTORY = Path(__file__).resolve().parents[1]
+if str(BACKEND_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIRECTORY))
 
 from scripts.demo_knowledge_manifest import (
     KNOWLEDGE_DOCUMENTS,
@@ -276,13 +285,15 @@ def write_pdf(target: Path, spec: KnowledgeDocumentSpec) -> None:
             heading = "资料摘要" if page_number == 1 and index == 1 else f"详细说明 {page_number}-{index}"
             page.insert_text((52, y), heading, fontname="CN", fontsize=14, color=(0.18, 0.45, 0.71))
             y += 20
+            estimated_lines = max(1, math.ceil(len(text) / 42))
+            text_height = max(48, estimated_lines * 16 + 14)
             remainder = page.insert_textbox(
-                fitz.Rect(52, y, 543, y + 220), text, fontname="CN", fontsize=10.5,
+                fitz.Rect(52, y, 543, y + text_height), text, fontname="CN", fontsize=10.5,
                 lineheight=1.45, color=(0.08, 0.08, 0.08),
             )
             if remainder < 0:
                 raise ValueError(f"PDF 文本未能写入页面：{spec.filename}")
-            y += 250
+            y += text_height + 28
         page.insert_text((490, 806), f"第 {page_number} 页", fontname="CN", fontsize=9, color=(0.35, 0.35, 0.35))
     document.save(target, garbage=4, deflate=True)
     document.close()
