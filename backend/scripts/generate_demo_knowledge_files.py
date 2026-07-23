@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import math
 import shutil
 import sys
 from pathlib import Path
@@ -213,7 +212,7 @@ def _domain_rows(spec: KnowledgeDocumentSpec) -> list[tuple[str, str, str]]:
     return rows
 
 
-def _style_sheet(sheet: object) -> None:
+def _style_sheet(sheet: object, widths: tuple[int, int, int] = (18, 22, 36)) -> None:
     blue = PatternFill("solid", fgColor="1F4D78")
     alternate = PatternFill("solid", fgColor="F2F4F7")
     thin = Side(style="thin", color="D9E2F3")
@@ -231,7 +230,7 @@ def _style_sheet(sheet: object) -> None:
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
     sheet.sheet_view.showGridLines = False
-    for index, width in enumerate((18, 22, 36), start=1):
+    for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
 
 
@@ -244,14 +243,15 @@ def write_xlsx(target: Path, spec: KnowledgeDocumentSpec) -> None:
     description.append(("文档代号", spec.document_code, "每个资料唯一，回答引用时应保留"))
     description.append(("资料摘要", spec.summary, "全部为虚构教学数据，不含敏感信息"))
     description.append(("使用边界", "测试问题与预期答案不要上传知识库", "防止答案文本污染检索结果"))
-    description.append(("全文说明", _source_text(spec), "用于确保表格文件具备等价的信息密度"))
-    _style_sheet(description)
+    for index, section in enumerate(spec.sections, start=1):
+        description.append((f"正文第 {index} 部分", section, "保留完整正文，供知识库按段检索"))
+    _style_sheet(description, widths=(14, 36, 36))
 
     domain = workbook.create_sheet(spec.table_sheets[0] if spec.table_sheets else "资料明细")
     domain.append(("记录编号", "来源部分", "说明摘录"))
     for row in _domain_rows(spec):
         domain.append(row)
-    _style_sheet(domain)
+    _style_sheet(domain, widths=(26, 14, 36))
     workbook.save(target)
 
 
@@ -262,16 +262,29 @@ def _resolve_chinese_font() -> Path:
     raise FileNotFoundError("没有找到可嵌入 PDF 的中文字体：msyh.ttc、msyh.ttf 或 simhei.ttf")
 
 
-def _pdf_pages(spec: KnowledgeDocumentSpec) -> list[list[str]]:
-    content = [spec.summary, *spec.sections]
-    blocks: list[list[str]] = [content[:2], content[2:]]
-    return [block for block in blocks if block]
+def _split_pdf_text(text: str) -> tuple[str, str]:
+    """在中文句号处平衡切分两页，避免把整段文本固定堆到第二页。"""
+    target = len(text) // 2
+    split_at = text.find("。", target)
+    if split_at == -1:
+        split_at = text.rfind("。", 0, target)
+    if split_at == -1:
+        split_at = target
+    else:
+        split_at += 1
+    return text[:split_at], text[split_at:]
+
+
+def _pdf_pages(spec: KnowledgeDocumentSpec) -> tuple[tuple[str, str], tuple[str, str]]:
+    content = "\n".join((spec.summary, *spec.sections))
+    first_page, second_page = _split_pdf_text(content)
+    return (("资料摘要与详细说明", first_page), ("详细说明（续）", second_page))
 
 
 def write_pdf(target: Path, spec: KnowledgeDocumentSpec) -> None:
     font_path = _resolve_chinese_font()
     document = fitz.open()
-    for page_number, blocks in enumerate(_pdf_pages(spec), start=1):
+    for page_number, (heading, text) in enumerate(_pdf_pages(spec), start=1):
         page = document.new_page(width=595.28, height=841.89)
         page.insert_font(fontname="CN", fontfile=str(font_path))
         page.insert_text((52, 52), f"演示知识资料 | {spec.document_code}", fontname="CN", fontsize=9, color=(0.35, 0.35, 0.35))
@@ -281,19 +294,14 @@ def write_pdf(target: Path, spec: KnowledgeDocumentSpec) -> None:
             y += 34
             page.insert_text((52, y), f"资料代号：{spec.document_code}", fontname="CN", fontsize=10, color=(0.35, 0.35, 0.35))
             y += 34
-        for index, text in enumerate(blocks, start=1):
-            heading = "资料摘要" if page_number == 1 and index == 1 else f"详细说明 {page_number}-{index}"
-            page.insert_text((52, y), heading, fontname="CN", fontsize=14, color=(0.18, 0.45, 0.71))
-            y += 20
-            estimated_lines = max(1, math.ceil(len(text) / 42))
-            text_height = max(48, estimated_lines * 16 + 14)
-            remainder = page.insert_textbox(
-                fitz.Rect(52, y, 543, y + text_height), text, fontname="CN", fontsize=10.5,
-                lineheight=1.45, color=(0.08, 0.08, 0.08),
-            )
-            if remainder < 0:
-                raise ValueError(f"PDF 文本未能写入页面：{spec.filename}")
-            y += text_height + 28
+        page.insert_text((52, y), heading, fontname="CN", fontsize=14, color=(0.18, 0.45, 0.71))
+        y += 24
+        remainder = page.insert_textbox(
+            fitz.Rect(52, y, 543, 780), text, fontname="CN", fontsize=11.2,
+            lineheight=1.5, color=(0.08, 0.08, 0.08),
+        )
+        if remainder < 0:
+            raise ValueError(f"PDF 文本未能写入页面：{spec.filename}")
         page.insert_text((490, 806), f"第 {page_number} 页", fontname="CN", fontsize=9, color=(0.35, 0.35, 0.35))
     document.save(target, garbage=4, deflate=True)
     document.close()

@@ -2,7 +2,9 @@ from collections import Counter
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 
+import fitz
 import pytest
+from openpyxl import load_workbook
 
 from app.knowledge.parser_factory import create_parser_registry
 from scripts.demo_knowledge_manifest import (
@@ -11,7 +13,7 @@ from scripts.demo_knowledge_manifest import (
     KnowledgeDocumentSpec,
     QuestionSpec,
 )
-from scripts.generate_demo_knowledge_files import generate_demo_files
+from scripts.generate_demo_knowledge_files import _pdf_pages, generate_demo_files
 
 
 EXPECTED_DOCUMENTS = {
@@ -176,6 +178,7 @@ def test_manifest_contains_exact_retrieval_facts_and_no_sensitive_placeholders()
         assert fact in text
     for forbidden in ("sk-", "AKIA", "13800138000", "110101199001011234"):
         assert forbidden not in text
+    assert "。。" not in text
 
 
 def test_generator_creates_exact_tree_and_parseable_knowledge_files(tmp_path: Path) -> None:
@@ -200,6 +203,36 @@ def test_generator_creates_exact_tree_and_parseable_knowledge_files(tmp_path: Pa
         assert expected.document_code in parsed_text
         minimum_chars = 400 if path.suffix == ".xlsx" else 800
         assert len(parsed_text.strip()) >= minimum_chars
+
+
+def test_xlsx_keeps_each_source_section_on_its_own_row_with_readable_widths(tmp_path: Path) -> None:
+    knowledge_root, _ = generate_demo_files(tmp_path)
+    for spec in (item for item in KNOWLEDGE_DOCUMENTS if item.filename.endswith(".xlsx")):
+        workbook = load_workbook(knowledge_root / spec.folder / spec.filename)
+        description, domain = workbook.worksheets
+        assert [description.cell(row, 1).value for row in range(6, 9)] == [
+            "正文第 1 部分", "正文第 2 部分", "正文第 3 部分",
+        ]
+        assert [description.cell(row, 2).value for row in range(6, 9)] == list(spec.sections)
+        assert tuple(description.column_dimensions[column].width for column in "ABC") == (14, 36, 36)
+        assert tuple(domain.column_dimensions[column].width for column in "ABC") == (26, 14, 36)
+
+
+def test_pdf_uses_two_pages_and_preserves_complete_source_text(tmp_path: Path) -> None:
+    knowledge_root, _ = generate_demo_files(tmp_path)
+    for spec in (item for item in KNOWLEDGE_DOCUMENTS if item.filename.endswith(".pdf")):
+        document = fitz.open(knowledge_root / spec.folder / spec.filename)
+        page_texts = [page.get_text().strip() for page in document]
+        extracted = "".join("".join(page_texts).split())
+        assert len(page_texts) == 2
+        assert all(page_texts)
+        assert "资料摘要与详细说明" in page_texts[0]
+        assert "详细说明（续）" in page_texts[1]
+        source = "\n".join((spec.summary, *spec.sections))
+        page_source = "".join(text for _, text in _pdf_pages(spec))
+        assert page_source == source
+        for fact in EXPECTED_DOCUMENTS[spec.filename][2]:
+            assert "".join(fact.split()) in extracted
 
 
 def test_question_documents_are_marked_not_for_upload(tmp_path: Path) -> None:

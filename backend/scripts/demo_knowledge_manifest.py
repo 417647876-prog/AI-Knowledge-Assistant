@@ -29,6 +29,7 @@ OPS, LEARN, ENTERPRISE = "01-项目使用与故障排查", "02-CSharp转AI学习
 def _doc(folder: str, filename: str, code: str, title: str, facts: str, relation: str,
          sheets: tuple[str, ...] = ()) -> KnowledgeDocumentSpec:
     """为后续多格式生成器提供同一份中文、可检索的内容来源。"""
+    normalized_relation = relation.rstrip("。")
     sections = (
         f"一、资料用途与阅读边界。{title}的文档代号是 {code}，它是一份专为演示知识库准备的虚构中文资料。"
         f"资料面向学习者、演示人员和维护人员，目的不是替代真实业务制度，而是让提问者能够根据原文核对术语、"
@@ -40,7 +41,7 @@ def _doc(folder: str, filename: str, code: str, title: str, facts: str, relation
         f"可继续处理和需要排查两种结果。引用本资料时，应同时给出文件名与能定位规则的摘录，不能只留下脱离语境"
         f"的短句。演示人员可以先针对一个精确事实提问，再把本文件与关联文件组合提问，以观察检索、重排序和回答"
         f"是否保持一致。",
-        f"三、执行提示与关联资料。{relation}。当发现服务未就绪、资料处理失败或规则冲突时，应保留错误原因并"
+        f"三、执行提示与关联资料。{normalized_relation}。当发现服务未就绪、资料处理失败或规则冲突时，应保留错误原因并"
         f"按排查路径处理，而不是猜测成功结果。每次演示都应把测试问题与知识资料分开保存，测试问题及预期答案"
         f"不得上传到知识库，避免答案文本反向污染检索。此段同时提醒使用者：示例中的名称、价格、日期和时限仅为"
         f"教学用虚构数据；若问题超出本资料范围，正确的通过标准是明确承认缺少依据，并请提问者补充可检索的材料。"
