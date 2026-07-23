@@ -121,7 +121,7 @@ def write_markdown(target: Path, spec: KnowledgeDocumentSpec) -> None:
 
 
 def write_text(target: Path, spec: KnowledgeDocumentSpec) -> None:
-    lines = [spec.title, "=" * len(spec.title), f"文档代号：{spec.document_code}", "", spec.summary]
+    lines = [spec.title, "—— 文档正文 ——", f"文档代号：{spec.document_code}", "", spec.summary]
     for index, section in enumerate(spec.sections, start=1):
         lines.extend(("", f"第 {index} 部分", "-" * 12, section))
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")

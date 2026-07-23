@@ -1,6 +1,7 @@
 from collections import Counter
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
+import re
 
 import fitz
 import pytest
@@ -258,6 +259,14 @@ def test_question_documents_are_marked_not_for_upload(tmp_path: Path) -> None:
                 "实际回答：\n\n实际引用："
             )
             assert question_block in text
+
+
+def test_generated_text_files_do_not_contain_git_conflict_markers(tmp_path: Path) -> None:
+    knowledge_root, _ = generate_demo_files(tmp_path)
+    conflict_marker = re.compile(r"^(<<<<<<<|=======|>>>>>>>)")
+    for path in knowledge_root.rglob("*.txt"):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert not any(conflict_marker.match(line) for line in lines)
 
 
 def test_generator_rebuilds_only_its_two_output_directories(tmp_path: Path) -> None:

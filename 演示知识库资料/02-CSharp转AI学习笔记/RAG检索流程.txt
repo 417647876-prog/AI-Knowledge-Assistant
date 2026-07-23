@@ -1,5 +1,5 @@
 RAG检索流程
-=======
+—— 文档正文 ——
 文档代号：RAG-PIPELINE-06
 
 RAG检索流程的演示检索资料（RAG-PIPELINE-06）。
