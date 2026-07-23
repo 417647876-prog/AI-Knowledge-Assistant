@@ -66,6 +66,15 @@ def test_readme_documents_simple_project_launchers() -> None:
         assert required in content
 
 
+def test_readme_admin_command_uses_the_launcher_compose_owner() -> None:
+    content = _read(README)
+
+    assert (
+        "docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml "
+        "exec api uv run python -m scripts.create_admin"
+    ) in content
+
+
 def test_cmd_launchers_delegate_to_powershell_and_preserve_exit_code() -> None:
     expectations = [
         (START_CMD, r"scripts\start-project.ps1"),

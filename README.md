@@ -210,7 +210,12 @@ Copy-Item deploy/.env.example deploy/.env
 notepad deploy/.env
 ```
 
-本机 HTTP 演示需要按下方“阶段 4 完整容器演示”章节填写 `APP_ENV`、Cookie 和 Origin 的本机值。`deploy/.env` 已被 Git 忽略；不要提交真实密钥。管理员仍应按该章节的安全命令手工创建。
+本机 HTTP 演示需要按下方“阶段 4 完整容器演示”章节填写 `APP_ENV`、Cookie 和 Origin 的本机值。`deploy/.env` 已被 Git 忽略；不要提交真实密钥。启动成功后，使用与启动器相同的 Compose owner 手工创建管理员；将占位用户名替换为你自己的值，密码由命令在终端中安全提示，必须手工设置且不要写入命令或仓库：
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml exec api uv run python -m scripts.create_admin --username "YOUR_ADMIN_USERNAME"
+```
 
 配置完成后，PowerShell 的等价启动命令为：
 
@@ -357,9 +362,9 @@ Remove-Variable securePassword
 Set-Location (git rev-parse --show-toplevel)
 Copy-Item deploy/.env.example deploy/.env
 notepad deploy/.env
-docker compose -f deploy/docker-compose.yml up -d --build
-docker compose -f deploy/docker-compose.yml ps
-docker compose -f deploy/docker-compose.yml exec api python -m scripts.create_admin --username stage4-admin
+docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml up -d --build
+docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml ps
+docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml exec api uv run python -m scripts.create_admin --username "YOUR_ADMIN_USERNAME"
 ```
 
 本机 HTTP 演示仅可在回环地址使用 `APP_ENV=development`、`REFRESH_COOKIE_SECURE=false` 和精确的 `TRUSTED_ORIGINS=["http://127.0.0.1:8080"]`。`JWT_SECRET_KEY` 与 `GATEWAY_SHARED_SECRET` 必须使用互不相同的随机高强度值；模型 Key 只放在本地环境文件。正式 HTTPS 环境必须改回 `APP_ENV=production`、`REFRESH_COOKIE_SECURE=true` 和实际 HTTPS Origin。
@@ -395,7 +400,7 @@ Remove-Item Env:RUN_DOCKER_TESTS
 
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
-docker compose -f deploy/docker-compose.yml down
+docker compose -p ai-knowledge-assistant -f deploy/docker-compose.yml down
 docker volume ls
 ```
 
